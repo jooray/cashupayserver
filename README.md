@@ -144,7 +144,7 @@ After installation, configure WooCommerce to use CashuPayServer:
 
 The `data/` directory contains your SQLite database with ecash tokens (real Bitcoin value). It **must** be protected from HTTP access.
 
-**Apache**: The `.htaccess` file handles this automatically.
+**Apache**: The `.htaccess` file handles this automatically, if enabled and honored. Verify.
 
 **nginx**: Add `location /data/ { deny all; }` to your config.
 
@@ -345,7 +345,7 @@ https://yoursite.com/cashupayserver/router.php
 
 ### "Forbidden" when accessing setup
 
-Check that PHP files are executable and the web server can read them.
+Check that the web server can read PHP executables.
 
 ### Payments not detected
 
