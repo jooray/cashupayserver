@@ -1,0 +1,72 @@
+# CashuPayServer Apache Configuration
+
+# Enable rewrite engine
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # API Key Authorization - /api-keys/authorize -> api-keys/authorize.php
+    RewriteRule ^api-keys/authorize$ api-keys/authorize.php [L,QSA]
+
+    # API routing - route /api/v1/* to api.php (preserve full path)
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^api/v1/(.*)$ api.php/api/v1/$1 [L,QSA]
+
+    # Route /v1/* to api.php (BTCPay compatibility)
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+    RewriteRule ^v1/(.*)$ api.php/v1/$1 [L,QSA]
+</IfModule>
+
+# Security headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+    Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Protect sensitive files
+<FilesMatch "^\.">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order deny,allow
+        Deny from all
+    </IfModule>
+</FilesMatch>
+
+# Block access to sensitive directories
+# Note: <Directory> doesn't work in .htaccess, use RewriteRule instead
+<IfModule mod_rewrite.c>
+    # Block PHP/script directories that should never be web-accessible
+    RewriteRule ^includes/ - [F,L]
+    RewriteRule ^cashu-wallet-php/ - [F,L]
+    RewriteRule ^mint-discovery/ - [F,L]
+    RewriteRule ^btcpayserver-api-docs/ - [F,L]
+    RewriteRule ^scripts/ - [F,L]
+    RewriteRule ^docker/ - [F,L]
+    RewriteRule ^docs/ - [F,L]
+    RewriteRule ^\.claude/ - [F,L]
+</IfModule>
+
+# PHP settings (if allowed)
+<IfModule mod_php.c>
+    php_flag display_errors off
+    php_flag log_errors on
+</IfModule>
+
+# Compression
+<IfModule mod_deflate.c>
+    AddOutputFilterByType DEFLATE text/html text/plain text/css application/json application/javascript
+</IfModule>
+
+# Cache static assets
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType text/css "access plus 1 week"
+    ExpiresByType application/javascript "access plus 1 week"
+    ExpiresByType image/png "access plus 1 month"
+    ExpiresByType image/svg+xml "access plus 1 month"
+</IfModule>

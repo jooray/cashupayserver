@@ -1,0 +1,35 @@
+FROM wordpress:php8.2-apache
+
+# Install PHP extensions needed by CashuPayServer
+RUN apt-get update && apt-get install -y libgmp-dev libsqlite3-dev \
+    && docker-php-ext-install gmp pdo_sqlite \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Install WP-CLI
+RUN curl -o /usr/local/bin/wp https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar \
+    && chmod +x /usr/local/bin/wp
+
+# Download SQLite Database Integration plugin
+RUN mkdir -p /usr/src/sqlite-plugin \
+    && curl -L https://github.com/WordPress/sqlite-database-integration/archive/refs/heads/main.tar.gz \
+    | tar xz -C /usr/src/sqlite-plugin --strip-components=1
+
+# Copy CashuPayServer as WordPress plugin
+# WordPress plugin files go to plugin root
+COPY wordpress/*.php /usr/src/cashupay-plugin/
+COPY includes/ /usr/src/cashupay-plugin/includes/
+COPY templates/ /usr/src/cashupay-plugin/templates/
+COPY assets/ /usr/src/cashupay-plugin/assets/
+COPY api-keys/ /usr/src/cashupay-plugin/api-keys/
+COPY cashu-wallet-php/CashuWallet.php /usr/src/cashupay-plugin/cashu-wallet-php/CashuWallet.php
+COPY cashu-wallet-php/bip39-english.txt /usr/src/cashupay-plugin/cashu-wallet-php/bip39-english.txt
+COPY admin.php setup.php api.php payment.php receive.php cron.php /usr/src/cashupay-plugin/
+
+# Copy entrypoint
+COPY docker/entrypoint-wordpress.sh /usr/local/bin/cashupay-entrypoint.sh
+RUN chmod +x /usr/local/bin/cashupay-entrypoint.sh
+
+EXPOSE 80
+
+ENTRYPOINT ["/usr/local/bin/cashupay-entrypoint.sh"]
+CMD ["apache2-foreground"]

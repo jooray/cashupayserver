@@ -1,0 +1,14 @@
+SPECIFICATION.md
+CLAUDE.md
+AGENTS.md
+AUDIT.md
+TESTING.md
+data/**
+btcpayserver-api-docs/**
+PROTOCOL.md
+.claude/**
+**/.DS_Store
+*.db
+*.db-shm
+*.db-wal
+build/**

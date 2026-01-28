@@ -1,0 +1,8 @@
+# URL rewriting for BTCPay-compatible API keys endpoint
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /api-keys/
+
+    # /api-keys/authorize -> authorize.php
+    RewriteRule ^authorize$ authorize.php [L,QSA]
+</IfModule>

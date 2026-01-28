@@ -1,0 +1,6 @@
+[submodule "cashu-wallet-php"]
+	path = cashu-wallet-php
+	url = git@github.com:jooray/cashu-wallet-php
+[submodule "mint-discovery"]
+	path = mint-discovery
+	url = https://github.com/jooray/mint-discovery.git
