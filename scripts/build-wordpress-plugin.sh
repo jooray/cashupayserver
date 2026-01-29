@@ -27,6 +27,10 @@ cp -r api-keys/ "$BUILD_DIR/api-keys/"
 # Copy assets
 cp -r assets/ "$BUILD_DIR/assets/"
 
+# Copy favicon and images
+cp favicon.ico "$BUILD_DIR/"
+cp -r images/ "$BUILD_DIR/images/"
+
 # Copy cashu-wallet-php (excluding .git, tests, examples)
 mkdir -p "$BUILD_DIR/cashu-wallet-php"
 cp cashu-wallet-php/CashuWallet.php "$BUILD_DIR/cashu-wallet-php/"

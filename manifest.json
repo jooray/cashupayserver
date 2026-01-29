@@ -9,9 +9,9 @@
   "orientation": "portrait-primary",
   "icons": [
     {
-      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'><rect fill='%230f0f23' width='512' height='512' rx='100'/><text x='256' y='380' font-size='300' text-anchor='middle'>⚡</text></svg>",
-      "sizes": "512x512",
-      "type": "image/svg+xml",
+      "src": "images/cashupayserver-icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
       "purpose": "any maskable"
     }
   ],
