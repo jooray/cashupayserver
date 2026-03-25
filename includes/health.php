@@ -63,6 +63,22 @@ class SystemHealth {
     public static function collectWarnings(): array {
         $warnings = [];
 
+        if (!Config::isSetupComplete()) {
+            $warnings[] = [
+                'code' => 'setup_incomplete',
+                'severity' => 'critical',
+                'message' => 'Setup is not complete.',
+            ];
+        }
+
+        if (!Database::isInitialized()) {
+            $warnings[] = [
+                'code' => 'database_not_initialized',
+                'severity' => 'critical',
+                'message' => 'Database is not initialized.',
+            ];
+        }
+
         $missingExtensions = self::missingExtensions();
         if (!empty($missingExtensions)) {
             $warnings[] = [
@@ -132,13 +148,17 @@ class SystemHealth {
     public static function buildReport(): array {
         $warnings = self::collectWarnings();
         $missingExtensions = self::missingExtensions();
-        $isHealthy = empty(array_filter($warnings, fn($w) => ($w['severity'] ?? '') === 'critical'));
+        $setupComplete = Config::isSetupComplete();
+        $databaseInitialized = Database::isInitialized();
+        $isHealthy = empty(array_filter($warnings, fn($w) => ($w['severity'] ?? '') === 'critical'))
+            && $setupComplete
+            && $databaseInitialized;
 
         return [
             'ok' => $isHealthy,
             'timestamp' => time(),
-            'setupComplete' => Config::isSetupComplete(),
-            'databaseInitialized' => Database::isInitialized(),
+            'setupComplete' => $setupComplete,
+            'databaseInitialized' => $databaseInitialized,
             'phpVersion' => PHP_VERSION,
             'missingExtensions' => $missingExtensions,
             'writableChecks' => self::writableChecks(),

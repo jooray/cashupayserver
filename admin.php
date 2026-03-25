@@ -3379,6 +3379,13 @@ $isWp = Urls::isWordPress();
                     try {
                         data = JSON.parse(raw);
                     } catch (e) {
+                        if (response.ok) {
+                            const parseError = new Error('Invalid JSON in response');
+                            parseError.status = response.status;
+                            parseError.data = null;
+                            parseError.raw = raw;
+                            throw parseError;
+                        }
                         data = null;
                     }
                 }
