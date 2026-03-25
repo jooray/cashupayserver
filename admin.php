@@ -13,6 +13,7 @@ require_once __DIR__ . '/includes/lightning_address.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
+require_once __DIR__ . '/includes/health.php';
 
 use Cashu\ProofState;
 
@@ -161,6 +162,9 @@ if (isset($_GET['api'])) {
                 }
             }
 
+            $systemWarnings = SystemHealth::collectWarnings();
+            $hasCriticalWarnings = !empty(array_filter($systemWarnings, fn($w) => ($w['severity'] ?? '') === 'critical'));
+
             echo json_encode([
                 'storeId' => $storeId,
                 'storeName' => $store['name'] ?? 'Unknown',
@@ -174,6 +178,11 @@ if (isset($_GET['api'])) {
                 'invoices' => array_map([Invoice::class, 'formatForApi'], $recentInvoices),
                 'stores' => $stores,
                 'autoMelt' => $autoMelt,
+                'systemWarnings' => $systemWarnings,
+                'systemHealth' => [
+                    'ok' => !$hasCriticalWarnings,
+                    'healthUrl' => Urls::isWordPress() ? (Urls::siteBase() . '/cashupay/health') : (rtrim(Urls::siteBase(), '/') . '/health.php')
+                ],
             ]);
             break;
 
@@ -1553,6 +1562,21 @@ $isWp = Urls::isWordPress();
             border-color: var(--accent);
         }
 
+        .btn-spinner {
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255, 255, 255, 0.35);
+            border-top-color: #fff;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            display: none;
+            flex-shrink: 0;
+        }
+
+        .btn.loading .btn-spinner {
+            display: inline-block;
+        }
+
         /* App Shell */
         .app {
             display: none;
@@ -1617,18 +1641,38 @@ $isWp = Urls::isWordPress();
             flex: 1;
             min-width: 0;
             padding: 0.5rem 2rem 0.5rem 0.75rem;
-            background: var(--card-bg);
+            background: var(--bg-card);
             border: 1px solid var(--border);
             border-radius: 8px;
-            color: var(--text);
+            color: var(--text-primary);
             font-size: 0.875rem;
             font-weight: 500;
             cursor: pointer;
             appearance: none;
+            -webkit-appearance: none;
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239ca3af' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
             background-repeat: no-repeat;
             background-position: right 0.5rem center;
             text-overflow: ellipsis;
+        }
+
+        /* Chrome/Chromium dropdown popup readability */
+        #store-select option,
+        #store-select optgroup {
+            color: #111827;
+            background-color: #ffffff;
+        }
+
+        /* Make all select popups readable in Chrome/Chromium */
+        select option,
+        select optgroup {
+            color: #111827;
+            background-color: #ffffff;
+        }
+
+        /* Ensure selected control text stays readable on dark UI */
+        select {
+            color: var(--text-primary);
         }
 
         .header-store-selector select:focus {
@@ -1843,6 +1887,21 @@ $isWp = Urls::isWordPress();
             background: var(--bg-card-hover);
         }
 
+        .list-item.status-new { border-left: 3px solid var(--accent); }
+        .list-item.status-processing { border-left: 3px solid #63b3ed; }
+        .list-item.status-settled { border-left: 3px solid var(--success); }
+        .list-item.status-invalid,
+        .list-item.status-expired { border-left: 3px solid var(--error); }
+
+        .list-item.invoice-settled-highlight {
+            animation: settledPulse 1.3s ease-out;
+        }
+
+        @keyframes settledPulse {
+            0% { background: rgba(72, 187, 120, 0.35); }
+            100% { background: transparent; }
+        }
+
         .list-icon {
             width: 40px;
             height: 40px;
@@ -1853,9 +1912,11 @@ $isWp = Urls::isWordPress();
             font-size: 1.25rem;
         }
 
-        .list-icon.success { background: rgba(72, 187, 120, 0.2); }
-        .list-icon.pending { background: rgba(247, 147, 26, 0.2); }
-        .list-icon.expired { background: rgba(229, 62, 62, 0.2); }
+        .list-icon.status-new { background: rgba(247, 147, 26, 0.25); color: var(--accent); }
+        .list-icon.status-processing { background: rgba(99, 179, 237, 0.25); color: #63b3ed; }
+        .list-icon.status-settled { background: rgba(72, 187, 120, 0.25); color: var(--success); }
+        .list-icon.status-invalid,
+        .list-icon.status-expired { background: rgba(229, 62, 62, 0.25); color: var(--error); }
 
         .list-content {
             flex: 1;
@@ -1885,13 +1946,19 @@ $isWp = Urls::isWordPress();
         .list-amount-status {
             font-size: 0.75rem;
             padding: 0.25rem 0.5rem;
-            border-radius: 4px;
+            border-radius: 999px;
             display: inline-block;
+            font-weight: 700;
+            letter-spacing: 0.02em;
+            text-transform: uppercase;
+            border: 1px solid transparent;
         }
 
-        .list-amount-status.settled { background: rgba(72, 187, 120, 0.2); color: var(--success); }
-        .list-amount-status.new { background: rgba(247, 147, 26, 0.2); color: var(--accent); }
-        .list-amount-status.expired { background: rgba(229, 62, 62, 0.2); color: var(--error); }
+        .list-amount-status.status-settled { background: rgba(72, 187, 120, 0.2); color: var(--success); border-color: rgba(72, 187, 120, 0.45); }
+        .list-amount-status.status-new { background: rgba(247, 147, 26, 0.2); color: var(--accent); border-color: rgba(247, 147, 26, 0.45); }
+        .list-amount-status.status-processing { background: rgba(99, 179, 237, 0.2); color: #63b3ed; border-color: rgba(99, 179, 237, 0.45); }
+        .list-amount-status.status-invalid,
+        .list-amount-status.status-expired { background: rgba(229, 62, 62, 0.2); color: var(--error); border-color: rgba(229, 62, 62, 0.45); }
 
         /* Forms */
         .form-group {
@@ -1924,6 +1991,197 @@ $isWp = Urls::isWordPress();
             font-size: 0.875rem;
             color: var(--text-secondary);
             margin-top: 0.5rem;
+        }
+
+        .form-error {
+            font-size: 0.85rem;
+            color: #fca5a5;
+            margin-top: 0.5rem;
+            min-height: 1.1rem;
+        }
+
+        .quick-amounts {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            margin-top: 0.65rem;
+        }
+
+        .quick-amount-chip {
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-primary);
+            border-radius: 999px;
+            padding: 0.35rem 0.7rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .quick-amount-chip:hover {
+            background: rgba(247, 147, 26, 0.18);
+            border-color: rgba(247, 147, 26, 0.5);
+        }
+
+        .invoices-toolbar {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+            margin-bottom: 0.75rem;
+            padding: 0 1rem;
+        }
+
+        .invoices-filter-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .invoice-filter-btn {
+            border: 1px solid var(--border);
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-secondary);
+            border-radius: 999px;
+            padding: 0.35rem 0.75rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        .invoice-filter-btn.active {
+            border-color: rgba(247, 147, 26, 0.6);
+            color: var(--accent);
+            background: rgba(247, 147, 26, 0.14);
+        }
+
+        .invoices-search {
+            width: 100%;
+            background: rgba(0, 0, 0, 0.2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            color: var(--text-primary);
+            padding: 0.65rem 0.8rem;
+            font-size: 0.9rem;
+        }
+
+        .invoices-meta {
+            display: flex;
+            justify-content: space-between;
+            gap: 0.5rem;
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+        }
+
+        .system-warnings {
+            margin-bottom: 1rem;
+            border-radius: 14px;
+            border: 1px solid rgba(229, 62, 62, 0.4);
+            background: rgba(229, 62, 62, 0.12);
+            padding: 0.75rem;
+        }
+
+        .system-warnings.warning-only {
+            border-color: rgba(237, 137, 54, 0.4);
+            background: rgba(237, 137, 54, 0.1);
+        }
+
+        .system-warnings-title {
+            font-size: 0.82rem;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            margin-bottom: 0.4rem;
+            font-weight: 700;
+        }
+
+        .system-warnings ul {
+            margin: 0;
+            padding-left: 1rem;
+            color: var(--text-primary);
+            font-size: 0.84rem;
+        }
+
+        select.form-input,
+        .header-store-selector select,
+        #request-currency,
+        #price-provider-primary,
+        #price-provider-secondary,
+        #mint-discovery-unit-filter {
+            min-height: 42px;
+        }
+
+        select:focus-visible {
+            outline: 2px solid rgba(247, 147, 26, 0.7);
+            outline-offset: 1px;
+        }
+
+        /* Invoice detail state hero */
+        .invoice-state-hero {
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            padding: 0.9rem 1rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .invoice-state-hero-icon {
+            width: 34px;
+            height: 34px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1rem;
+            font-weight: 700;
+            background: rgba(160, 174, 192, 0.15);
+            color: var(--text-primary);
+        }
+
+        .invoice-state-hero-title {
+            font-size: 0.92rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .invoice-state-hero-subtitle {
+            font-size: 0.82rem;
+            color: var(--text-secondary);
+            margin-top: 0.15rem;
+            line-height: 1.3;
+        }
+
+        .invoice-state-hero.status-new,
+        .invoice-state-hero.status-processing {
+            background: rgba(247, 147, 26, 0.12);
+            border-color: rgba(247, 147, 26, 0.35);
+        }
+
+        .invoice-state-hero.status-new .invoice-state-hero-icon,
+        .invoice-state-hero.status-processing .invoice-state-hero-icon {
+            background: rgba(247, 147, 26, 0.25);
+            color: var(--accent);
+        }
+
+        .invoice-state-hero.status-settled {
+            background: rgba(72, 187, 120, 0.12);
+            border-color: rgba(72, 187, 120, 0.4);
+        }
+
+        .invoice-state-hero.status-settled .invoice-state-hero-icon {
+            background: rgba(72, 187, 120, 0.25);
+            color: var(--success);
+        }
+
+        .invoice-state-hero.status-invalid,
+        .invoice-state-hero.status-expired {
+            background: rgba(229, 62, 62, 0.12);
+            border-color: rgba(229, 62, 62, 0.4);
+        }
+
+        .invoice-state-hero.status-invalid .invoice-state-hero-icon,
+        .invoice-state-hero.status-expired .invoice-state-hero-icon {
+            background: rgba(229, 62, 62, 0.25);
+            color: var(--error);
         }
 
         /* Buttons */
@@ -2139,6 +2397,86 @@ $isWp = Urls::isWordPress();
             max-width: 60%;
         }
 
+        #modal-invoice .store-info-value {
+            word-break: normal;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 70%;
+        }
+
+        #modal-invoice .store-info-item.id-row {
+            display: grid;
+            grid-template-columns: 92px minmax(0, 1fr);
+            align-items: center;
+            column-gap: 0.5rem;
+            justify-content: initial;
+        }
+
+        #modal-invoice .store-info-item.id-row .store-info-value {
+            max-width: none;
+            overflow: visible;
+            text-overflow: clip;
+            white-space: nowrap;
+            text-align: right;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.82rem;
+        }
+
+        /* Invoice modal layout refinements */
+        .invoice-modal-layout {
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+            align-items: stretch;
+            width: 100%;
+        }
+
+        .invoice-modal-meta {
+            width: 100%;
+        }
+
+        .invoice-modal-meta-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            width: 100%;
+        }
+
+        .invoice-modal-side {
+            display: flex;
+            flex-direction: column;
+            gap: 0.65rem;
+        }
+
+        .invoice-image-actions {
+            display: flex;
+            justify-content: center;
+            gap: 0.6rem;
+            margin-top: 0.35rem;
+        }
+
+        .invoice-image-action-btn {
+            min-width: 108px;
+            height: 36px;
+            padding: 0 0.9rem;
+            border-radius: 10px;
+            font-size: 0.86rem;
+            font-weight: 600;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s, border-color 0.2s;
+        }
+
+        .invoice-image-action-btn:hover {
+            background: var(--bg-card-hover);
+            border-color: rgba(247, 147, 26, 0.45);
+        }
+
         /* Empty State */
         .empty-state {
             text-align: center;
@@ -2233,6 +2571,65 @@ $isWp = Urls::isWordPress();
                 margin: auto;
             }
         }
+
+        @media (min-width: 900px) {
+            #modal-invoice .invoice-modal {
+                width: min(760px, calc(100vw - 120px));
+                max-width: min(760px, calc(100vw - 120px));
+                max-height: 92vh;
+                padding: 1.1rem 1.25rem;
+            }
+
+            #modal-invoice .modal-title {
+                margin-bottom: 0.6rem;
+            }
+
+            #modal-invoice .invoice-state-hero {
+                margin-bottom: 0.75rem;
+                padding: 0.7rem 0.8rem;
+            }
+
+            #modal-invoice .invoice-modal-layout {
+                display: flex;
+                flex-direction: column;
+                gap: 0.9rem;
+                align-items: stretch;
+                width: 100%;
+            }
+
+            #modal-invoice .invoice-modal-meta-grid {
+                grid-template-columns: 1fr;
+                width: 100%;
+            }
+
+            #modal-invoice .invoice-modal-meta-grid .store-info-item {
+                padding: 0.5rem 0;
+            }
+
+            #modal-invoice .invoice-modal-meta-grid .store-info-item.id-row {
+                grid-column: 1 / -1;
+            }
+
+            #modal-invoice .store-info-item.id-row .store-info-value {
+                font-size: 0.88rem;
+            }
+
+            #modal-invoice .invoice-modal-side .form-group {
+                margin-bottom: 0.55rem;
+                width: 100%;
+            }
+
+            #modal-invoice .modal-qr {
+                margin: 0.2rem 0 0.4rem;
+                padding: 0.9rem;
+                min-height: 260px;
+                width: 100%;
+            }
+
+            #modal-invoice .invoice-modal-side {
+                width: 100%;
+            }
+        }
     </style>
 </head>
 <body>
@@ -2266,7 +2663,10 @@ $isWp = Urls::isWordPress();
 
         <div class="password-fallback" id="password-fallback">
             <input type="password" id="password-input" placeholder="Or enter password">
-            <button class="btn btn-full" id="password-submit">Unlock</button>
+            <button class="btn btn-full" id="password-submit">
+                <span class="btn-spinner" id="password-submit-spinner" aria-hidden="true"></span>
+                <span id="password-submit-text">Unlock</span>
+            </button>
         </div>
     </div>
 
@@ -2330,6 +2730,8 @@ $isWp = Urls::isWordPress();
                     </div>
                 </div>
 
+                <div id="system-warnings"></div>
+
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">Recent Invoices</div>
@@ -2345,6 +2747,20 @@ $isWp = Urls::isWordPress();
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">All Invoices</div>
+                    </div>
+                    <div class="invoices-toolbar">
+                        <div class="invoices-filter-row" id="invoice-filter-row">
+                            <button class="invoice-filter-btn active" data-filter="All">All</button>
+                            <button class="invoice-filter-btn" data-filter="New">New</button>
+                            <button class="invoice-filter-btn" data-filter="Processing">Processing</button>
+                            <button class="invoice-filter-btn" data-filter="Settled">Settled</button>
+                            <button class="invoice-filter-btn" data-filter="Failed">Failed</button>
+                        </div>
+                        <input type="text" id="invoice-search" class="invoices-search" placeholder="Search by invoice ID, amount, currency...">
+                        <div class="invoices-meta">
+                            <span id="invoice-results-count">0 results</span>
+                            <span id="invoices-last-updated">Last updated --</span>
+                        </div>
                     </div>
                     <div id="all-invoices">
                         <div class="loading"><div class="spinner"></div></div>
@@ -2682,9 +3098,22 @@ $isWp = Urls::isWordPress();
 
             <div id="request-form">
                 <div class="form-group">
+                    <label class="form-label">Currency</label>
+                    <select class="form-input" id="request-currency">
+                        <option value="SAT">SAT</option>
+                        <option value="EUR">EUR</option>
+                        <option value="USD">USD</option>
+                        <option value="GBP">GBP</option>
+                        <option value="BTC">BTC</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
                     <label class="form-label" id="request-amount-label">Amount</label>
                     <input type="number" class="form-input" id="request-amount"
                            placeholder="100" min="1" step="1">
+                    <div class="quick-amounts" id="request-quick-amounts"></div>
+                    <p class="form-error" id="request-amount-error"></p>
                 </div>
 
                 <div class="form-group">
@@ -2694,9 +3123,96 @@ $isWp = Urls::isWordPress();
                 </div>
 
                 <button class="btn btn-full" id="btn-generate-request">Go to Checkout</button>
+                <button class="btn btn-secondary btn-full" id="btn-create-request" style="margin-top: 0.5rem;">Create Invoice Only</button>
+                <button class="btn btn-secondary btn-full" id="btn-request-copied-link" style="margin-top: 0.5rem; display: none;">Copied checkout link</button>
             </div>
 
             <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;" onclick="closeModal('modal-request')">Cancel</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="modal-invoice">
+        <div class="modal invoice-modal">
+            <div class="modal-handle"></div>
+            <div class="modal-title">Invoice Details</div>
+
+            <div class="invoice-state-hero" id="invoice-state-hero">
+                <div class="invoice-state-hero-icon" id="invoice-state-hero-icon">?</div>
+                <div>
+                    <div class="invoice-state-hero-title" id="invoice-state-hero-title">Invoice</div>
+                    <div class="invoice-state-hero-subtitle" id="invoice-state-hero-subtitle">Status unknown</div>
+                </div>
+            </div>
+
+            <div class="invoice-modal-layout">
+                <div class="invoice-modal-meta">
+                    <div class="invoice-modal-meta-grid">
+                        <div class="store-info-item id-row">
+                            <span class="store-info-label">Invoice ID</span>
+                            <span class="store-info-value" id="invoice-modal-id">-</span>
+                        </div>
+
+                        <div class="store-info-item">
+                            <span class="store-info-label">Status</span>
+                            <span class="store-info-value" id="invoice-modal-status">-</span>
+                        </div>
+
+                        <div class="store-info-item">
+                            <span class="store-info-label">Amount</span>
+                            <span class="store-info-value" id="invoice-modal-amount">-</span>
+                        </div>
+
+                        <div class="store-info-item">
+                            <span class="store-info-label">Store Name</span>
+                            <span class="store-info-value" id="invoice-modal-store-name">-</span>
+                        </div>
+
+                        <div class="store-info-item id-row">
+                            <span class="store-info-label">Store ID</span>
+                            <span class="store-info-value" id="invoice-modal-store-id">-</span>
+                        </div>
+
+                        <div class="store-info-item">
+                            <span class="store-info-label">Created</span>
+                            <span class="store-info-value" id="invoice-modal-created">-</span>
+                        </div>
+
+                        <div class="store-info-item">
+                            <span class="store-info-label">Expires</span>
+                            <span class="store-info-value" id="invoice-modal-expires">-</span>
+                        </div>
+                    </div>
+
+                    <div class="form-group" id="invoice-modal-bolt11-group" style="display: none;">
+                        <label class="form-label">Lightning Invoice (BOLT11)</label>
+                        <input type="text" class="form-input" id="invoice-modal-bolt11" readonly>
+                        <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;" onclick="copyInvoiceField('invoice-modal-bolt11', 'Invoice copied!')">Copy Invoice</button>
+                    </div>
+
+                    <div class="form-group" id="invoice-modal-lnurl-group" style="display: none;">
+                        <label class="form-label">LNURL / LNURLp</label>
+                        <input type="text" class="form-input" id="invoice-modal-lnurl" readonly>
+                        <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;" onclick="copyInvoiceField('invoice-modal-lnurl', 'LNURL copied!')">Copy LNURL</button>
+                    </div>
+                </div>
+
+                <div class="invoice-modal-side">
+                    <div class="modal-qr" id="invoice-modal-qr" style="display: none;"></div>
+
+                    <div class="form-group" id="invoice-modal-image-actions" style="display: none;">
+                        <div class="invoice-image-actions">
+                            <button class="invoice-image-action-btn" type="button" title="Copy QR image" aria-label="Copy QR image" onclick="copyInvoiceQrImage()">Copy image</button>
+                            <button class="invoice-image-action-btn" type="button" title="Save QR image" aria-label="Save QR image" onclick="saveInvoiceQrImage()">Save image</button>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <button class="btn btn-full" id="invoice-modal-open-checkout" type="button">Open Checkout</button>
+                    </div>
+
+                    <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;" onclick="closeModal('modal-invoice')">Close</button>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -2807,6 +3323,17 @@ $isWp = Urls::isWordPress();
         let isAuthenticated = false;
         let pin = '';
         let dashboardData = null;
+        let invoiceMap = {};
+        let invoiceStatusHistory = {};
+        let allInvoicesRaw = [];
+        let invoiceFilterStatus = 'All';
+        let invoiceSearchQuery = '';
+        let lastInvoicesUpdatedAt = 0;
+        let dashboardRefreshInterval = null;
+        let dashboardRefreshInFlight = false;
+        let invoiceDetailPollInterval = null;
+        let currentInvoiceModalId = null;
+        let lastUpdatedTickerInterval = null;
 
         // Local Storage Keys
         const STORAGE_PIN = 'cashupay_pin';
@@ -2830,6 +3357,51 @@ $isWp = Urls::isWordPress();
                 },
                 body: body
             });
+        }
+
+        async function safeFetchJson(url, options = {}, config = {}) {
+            const timeoutMs = config.timeoutMs ?? 15000;
+            const fetchOptions = { ...options };
+            let timeoutId = null;
+
+            if (!fetchOptions.signal && timeoutMs > 0) {
+                const controller = new AbortController();
+                fetchOptions.signal = controller.signal;
+                timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            }
+
+            try {
+                const response = await fetch(url, fetchOptions);
+                const raw = await response.text();
+
+                let data = null;
+                if (raw) {
+                    try {
+                        data = JSON.parse(raw);
+                    } catch (e) {
+                        data = null;
+                    }
+                }
+
+                if (!response.ok) {
+                    const message = data?.error || data?.message || raw || `Request failed (${response.status})`;
+                    const err = new Error(message);
+                    err.status = response.status;
+                    err.data = data;
+                    throw err;
+                }
+
+                return { response, data, raw };
+            } catch (error) {
+                if (error && error.name === 'AbortError') {
+                    throw new Error('Request timed out');
+                }
+                throw error;
+            } finally {
+                if (timeoutId) {
+                    clearTimeout(timeoutId);
+                }
+            }
         }
 
         // Format amount for display based on unit (handles fiat decimals)
@@ -2866,12 +3438,17 @@ $isWp = Urls::isWordPress();
         document.addEventListener('DOMContentLoaded', () => {
             checkAuth();
             setupEventListeners();
+            startLastUpdatedTicker();
         });
 
         // Check authentication state
         function checkAuth() {
             if (isWordPressMode) {
-                showApp();
+                showApp().catch((e) => {
+                    console.error('Failed to initialize app:', e);
+                    showToast('Failed to open dashboard', 'error');
+                    showLockScreen();
+                });
                 return;
             }
 
@@ -2923,6 +3500,7 @@ $isWp = Urls::isWordPress();
             }
 
             await loadDashboard();
+            startDashboardRefresh();
 
             // Show success toast after dashboard loaded
             if (createdStoreId) {
@@ -2950,7 +3528,11 @@ $isWp = Urls::isWordPress();
             if (pin.length === 4) {
                 const storedPin = localStorage.getItem(STORAGE_PIN);
                 if (pin === storedPin) {
-                    showApp();
+                    showApp().catch((e) => {
+                        console.error('Failed to open app after PIN unlock:', e);
+                        showToast('Failed to open dashboard', 'error');
+                        showLockScreen();
+                    });
                 } else {
                     // Wrong PIN
                     dots.forEach(dot => dot.classList.add('error'));
@@ -2966,6 +3548,17 @@ $isWp = Urls::isWordPress();
 
         // Event Listeners
         function setupEventListeners() {
+            const passwordInput = document.getElementById('password-input');
+            const passwordSubmit = document.getElementById('password-submit');
+            const passwordSubmitText = document.getElementById('password-submit-text');
+
+            function setPasswordLoginLoading(isLoading) {
+                passwordInput.disabled = isLoading;
+                passwordSubmit.disabled = isLoading;
+                passwordSubmit.classList.toggle('loading', isLoading);
+                passwordSubmitText.textContent = isLoading ? 'Unlocking...' : 'Unlock';
+            }
+
             // PIN pad
             document.querySelectorAll('.pin-key').forEach(key => {
                 key.addEventListener('click', () => {
@@ -2975,38 +3568,48 @@ $isWp = Urls::isWordPress();
             });
 
             // Password login
-            document.getElementById('password-submit').addEventListener('click', async () => {
-                const password = document.getElementById('password-input').value;
+            passwordSubmit.addEventListener('click', async () => {
+                if (passwordSubmit.disabled) return;
+
+                const password = passwordInput.value;
+                if (!password) {
+                    showToast('Please enter password', 'error');
+                    return;
+                }
+
                 try {
-                    const response = await fetch(adminUrl, {
+                    setPasswordLoginLoading(true);
+
+                    const { data } = await safeFetchJson(adminUrl, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                         body: `action=login&password=${encodeURIComponent(password)}`
-                    });
+                    }, { timeoutMs: 15000 });
 
-                    if (response.ok) {
-                        const data = await response.json();
-
-                        // Update CSRF token after login
-                        if (data.csrfToken) {
-                            const metaTag = document.querySelector('meta[name="csrf-token"]');
-                            if (metaTag) {
-                                metaTag.content = data.csrfToken;
-                            }
+                    // Update CSRF token after login
+                    if (data && data.csrfToken) {
+                        const metaTag = document.querySelector('meta[name="csrf-token"]');
+                        if (metaTag) {
+                            metaTag.content = data.csrfToken;
                         }
-
-                        showApp();
-                    } else {
-                        showToast('Invalid password', 'error');
                     }
+
+                    await showApp();
                 } catch (e) {
-                    showToast('Login failed', 'error');
+                    if (e?.message === 'Request timed out') {
+                        showToast('Login timeout. Please try again.', 'error');
+                    } else {
+                        const message = e?.message || 'Login failed';
+                        showToast(message, 'error');
+                    }
+                } finally {
+                    setPasswordLoginLoading(false);
                 }
             });
 
-            document.getElementById('password-input').addEventListener('keypress', (e) => {
+            passwordInput.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
-                    document.getElementById('password-submit').click();
+                    passwordSubmit.click();
                 }
             });
 
@@ -3040,52 +3643,135 @@ $isWp = Urls::isWordPress();
 
             // Request modal
             document.getElementById('btn-generate-request').addEventListener('click', handleGenerateRequest);
+            document.getElementById('btn-create-request').addEventListener('click', () => handleGenerateRequest(false));
+            document.getElementById('request-currency').addEventListener('change', () => {
+                updateRequestAmountInputForCurrency(document.getElementById('request-currency').value);
+                renderRequestQuickAmounts();
+                validateRequestForm(true);
+            });
+            document.getElementById('request-amount').addEventListener('input', () => validateRequestForm(true));
+            document.getElementById('btn-request-copied-link').addEventListener('click', async () => {
+                const link = document.getElementById('btn-request-copied-link').dataset.checkout || '';
+                if (!link) return;
+
+                try {
+                    await navigator.clipboard.writeText(link);
+                    showToast('Checkout link copied', 'success');
+                } catch (e) {
+                    showToast('Failed to copy checkout link', 'error');
+                }
+            });
+
+            document.querySelectorAll('#invoice-filter-row .invoice-filter-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    setInvoiceFilter(btn.dataset.filter || 'All');
+                });
+            });
+
+            document.getElementById('invoice-search').addEventListener('input', (e) => {
+                invoiceSearchQuery = (e.target.value || '').trim().toLowerCase();
+                applyInvoiceFilters();
+            });
 
             // Settings
             document.getElementById('btn-save-auto-melt').addEventListener('click', saveAutoMelt);
             document.getElementById('btn-save-exchange-settings').addEventListener('click', saveExchangeSettings);
-            document.getElementById('btn-set-pin').addEventListener('click', () => openModal('modal-pin-setup'));
+            document.getElementById('btn-save-url-mode').addEventListener('click', saveUrlMode);
             document.getElementById('btn-save-pin').addEventListener('click', savePin);
-            document.getElementById('btn-logout').addEventListener('click', logout);
-
-            // URL Mode settings (standalone only)
-            if (document.getElementById('btn-detect-url-mode')) {
-                document.getElementById('btn-detect-url-mode').addEventListener('click', detectUrlMode);
-                document.getElementById('btn-save-url-mode').addEventListener('click', saveUrlMode);
-                // Set radio button to saved mode (no auto-detection, user clicks Recheck if needed)
-                initUrlModeSettings();
+            const detectUrlModeBtn = document.getElementById('btn-detect-url-mode');
+            if (detectUrlModeBtn) {
+                detectUrlModeBtn.addEventListener('click', detectUrlMode);
+            }
+            const setPinBtn = document.getElementById('btn-set-pin');
+            if (setPinBtn) {
+                setPinBtn.addEventListener('click', () => openModal('modal-pin-setup'));
+            }
+            const logoutBtn = document.getElementById('btn-logout');
+            if (logoutBtn) {
+                logoutBtn.addEventListener('click', logout);
             }
 
-            // Stores
-            document.getElementById('btn-create-store').addEventListener('click', () => {
-                window.location.href = setupUrl + '?mode=add_store';
+            // Store actions
+            document.getElementById('btn-delete-store').addEventListener('click', deleteCurrentStore);
+            const deleteStoreSettingsBtn = document.getElementById('btn-delete-store-settings');
+            if (deleteStoreSettingsBtn) {
+                deleteStoreSettingsBtn.addEventListener('click', deleteCurrentStore);
+            }
+            const deleteStoreSettingsBottomBtn = document.getElementById('btn-delete-store-settings-bottom');
+            if (deleteStoreSettingsBottomBtn) {
+                deleteStoreSettingsBottomBtn.addEventListener('click', deleteCurrentStore);
+            }
+            const editStoreBtn = document.getElementById('btn-edit-store');
+            if (editStoreBtn) {
+                editStoreBtn.addEventListener('click', openCurrentStoreDetails);
+            }
+            const createStoreBtn = document.getElementById('btn-create-store');
+            if (createStoreBtn) {
+                createStoreBtn.addEventListener('click', openCreateStoreModal);
+            }
+
+            // Add store modal
+            const confirmAddStoreBtn = document.getElementById('btn-confirm-add-store');
+            if (confirmAddStoreBtn) {
+                confirmAddStoreBtn.addEventListener('click', addStore);
+            }
+            const generateSeedBtn = document.getElementById('btn-generate-seed');
+            if (generateSeedBtn) {
+                generateSeedBtn.addEventListener('click', generateSeed);
+            }
+
+            // Setup URL mode radio buttons (if present)
+            document.querySelectorAll('input[name="url-mode"]').forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    const saveBtn = document.getElementById('btn-save-url-mode');
+                    if (saveBtn) saveBtn.disabled = false;
+                });
             });
 
-            // Store Settings
-            document.getElementById('btn-edit-store').addEventListener('click', () => {
-                if (currentStoreId) {
-                    const store = dashboardData?.stores?.find(s => s.id === currentStoreId);
-                    if (store) showStoreDetails(currentStoreId, store.name);
-                }
-            });
-            document.getElementById('btn-create-api-key').addEventListener('click', () => {
-                if (currentStoreId) {
-                    createApiKey(currentStoreId);
-                }
-            });
-            document.getElementById('btn-delete-store').addEventListener('click', () => {
-                if (currentStoreId) {
-                    deleteStore(currentStoreId);
-                }
-            });
+            // Invoice modal open checkout button is wired dynamically in showInvoiceDetails
+            const invoiceOpenBtn = document.getElementById('invoice-modal-open-checkout');
+            if (invoiceOpenBtn) {
+                invoiceOpenBtn.addEventListener('click', (e) => {
+                    // Default no-op; handler assigned in showInvoiceDetails
+                });
+            }
 
-            // Modal close on overlay click
+            // Backup mints
+            const addBackupMintBtn = document.getElementById('btn-add-backup-mint');
+            if (addBackupMintBtn) {
+                addBackupMintBtn.addEventListener('click', addBackupMint);
+            }
+
+            // Create API key from settings
+            const createApiKeyBtn = document.getElementById('btn-create-api-key');
+            if (createApiKeyBtn) {
+                createApiKeyBtn.addEventListener('click', () => {
+                    if (!currentStoreId) {
+                        showToast('No store selected', 'error');
+                        return;
+                    }
+                    openCreateApiKeyModal(currentStoreId);
+                });
+            }
+
+            // Close modals on backdrop click
             document.querySelectorAll('.modal-overlay').forEach(overlay => {
                 overlay.addEventListener('click', (e) => {
                     if (e.target === overlay) {
-                        overlay.classList.remove('visible');
+                        closeModal(overlay.id);
                     }
                 });
+            });
+
+            // Listen for visibility changes to pause expensive refresh behavior in background tab
+            document.addEventListener('visibilitychange', () => {
+                if (document.hidden) return;
+                if (document.getElementById('app').classList.contains('visible')) {
+                    loadDashboard();
+                    if (document.getElementById('view-invoices').classList.contains('active')) {
+                        loadInvoices();
+                    }
+                }
             });
         }
 
@@ -3094,8 +3780,10 @@ $isWp = Urls::isWordPress();
             document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
 
-            document.getElementById(`view-${view}`).classList.add('active');
-            document.querySelector(`[data-view="${view}"]`).classList.add('active');
+            const viewEl = document.getElementById(`view-${view}`);
+            const navEl = document.querySelector(`[data-view="${view}"]`);
+            if (viewEl) viewEl.classList.add('active');
+            if (navEl) navEl.classList.add('active');
 
             const titles = {
                 dashboard: 'Dashboard',
@@ -3103,14 +3791,16 @@ $isWp = Urls::isWordPress();
                 stores: 'Store Settings',
                 settings: 'Settings'
             };
-            document.getElementById('header-text').textContent = titles[view];
+            document.getElementById('header-text').textContent = titles[view] || 'Dashboard';
 
             // Show/hide store selector based on view (hide on global settings)
             const storeSelector = document.getElementById('header-store-selector');
-            if (view === 'settings') {
-                storeSelector.style.display = 'none';
-            } else {
-                storeSelector.style.display = 'flex';
+            if (storeSelector) {
+                if (view === 'settings') {
+                    storeSelector.style.display = 'none';
+                } else {
+                    storeSelector.style.display = 'flex';
+                }
             }
 
             if (view === 'invoices') loadInvoices();
@@ -3195,6 +3885,98 @@ $isWp = Urls::isWordPress();
             }
         }
 
+        function getApiCandidates(apiPath) {
+            const normalizedBase = API_BASE_URL.replace(/\/$/, '');
+            const baseWithoutRouter = normalizedBase.replace(/\/router\.php$/, '');
+
+            const candidates = [
+                normalizedBase + apiPath,
+                baseWithoutRouter + '/router.php' + apiPath,
+                baseWithoutRouter + '/api.php' + apiPath,
+                baseWithoutRouter + apiPath,
+            ].filter((url, index, arr) => arr.indexOf(url) === index);
+
+            if (window.__cashuPreferredApiRoot) {
+                const preferred = window.__cashuPreferredApiRoot.replace(/\/$/, '') + apiPath;
+                if (candidates.includes(preferred)) {
+                    return [preferred, ...candidates.filter(url => url !== preferred)];
+                }
+                return [preferred, ...candidates];
+            }
+
+            return candidates;
+        }
+
+        function rememberWorkingApiCandidate(apiUrl, apiPath) {
+            if (!apiUrl || !apiPath) return;
+            if (!apiUrl.endsWith(apiPath)) return;
+
+            const root = apiUrl.slice(0, -apiPath.length);
+            if (root) {
+                window.__cashuPreferredApiRoot = root.replace(/\/$/, '');
+            }
+        }
+
+        function getStoreInternalApiKey(storeId) {
+            return dashboardData?.stores?.find(s => s.id === storeId)?.internalApiKey || null;
+        }
+
+        async function fetchFreshInvoice(storeId, invoiceId) {
+            const apiKey = getStoreInternalApiKey(storeId);
+            if (!apiKey) return null;
+
+            const apiPath = '/api/v1/stores/' + encodeURIComponent(storeId) + '/invoices/' + encodeURIComponent(invoiceId);
+            const candidates = getApiCandidates(apiPath);
+
+            for (const apiUrl of candidates) {
+                try {
+                    const { data: result } = await safeFetchJson(apiUrl, {
+                        method: 'GET',
+                        headers: {
+                            'Authorization': 'token ' + apiKey
+                        }
+                    }, { timeoutMs: 12000 });
+
+                    if (result && result.id) {
+                        rememberWorkingApiCandidate(apiUrl, apiPath);
+                        return result;
+                    }
+                } catch (e) {
+                    // Try next candidate path.
+                }
+            }
+
+            return null;
+        }
+
+        function startDashboardRefresh() {
+            stopDashboardRefresh();
+
+            dashboardRefreshInterval = setInterval(async () => {
+                if (!document.getElementById('app').classList.contains('visible')) return;
+                if (document.hidden) return;
+                if (dashboardRefreshInFlight) return;
+
+                dashboardRefreshInFlight = true;
+                try {
+                    await loadDashboard();
+
+                    if (document.getElementById('view-invoices').classList.contains('active')) {
+                        await loadInvoices();
+                    }
+                } finally {
+                    dashboardRefreshInFlight = false;
+                }
+            }, 10000);
+        }
+
+        function stopDashboardRefresh() {
+            if (dashboardRefreshInterval) {
+                clearInterval(dashboardRefreshInterval);
+                dashboardRefreshInterval = null;
+            }
+        }
+
         // Data loading
         async function loadDashboard() {
             try {
@@ -3204,18 +3986,8 @@ $isWp = Urls::isWordPress();
                     url += `&store_id=${encodeURIComponent(currentStoreId)}`;
                 }
 
-                const response = await fetch(url);
-
-                // Handle stale store_id from localStorage (store deleted or new database)
-                if (response.status === 404 && currentStoreId) {
-                    currentStoreId = null;
-                    localStorage.removeItem('selectedStoreId');
-                    return loadDashboard(); // Retry without store_id
-                }
-
-                if (!response.ok) throw new Error('Failed to load');
-
-                dashboardData = await response.json();
+                const { data } = await safeFetchJson(url, {}, { timeoutMs: 15000 });
+                dashboardData = data;
 
                 // Update store selector with available stores
                 updateStoreSelector(dashboardData.stores);
@@ -3304,10 +4076,19 @@ $isWp = Urls::isWordPress();
 
                 // Render recent invoices
                 renderInvoices('recent-invoices', dashboardData.invoices || []);
+                renderSystemWarnings(dashboardData.systemWarnings || []);
+                markInvoicesUpdated();
 
             } catch (e) {
+                // Handle stale store_id from localStorage (store deleted or new database)
+                if (e?.status === 404 && currentStoreId) {
+                    currentStoreId = null;
+                    localStorage.removeItem('selectedStoreId');
+                    return loadDashboard(); // Retry without store_id
+                }
                 console.error(e);
-                showToast('Failed to load dashboard', 'error');
+                const message = e?.message || 'Failed to load dashboard';
+                showToast(message, 'error');
             }
         }
 
@@ -3317,11 +4098,51 @@ $isWp = Urls::isWordPress();
                 if (currentStoreId) {
                     url += `&store_id=${encodeURIComponent(currentStoreId)}`;
                 }
-                const response = await fetch(url);
-                const invoices = await response.json();
-                renderInvoices('all-invoices', invoices);
+
+                const { data: invoices } = await safeFetchJson(url, {}, { timeoutMs: 15000 });
+                allInvoicesRaw = invoices || [];
+                applyInvoiceFilters();
+                markInvoicesUpdated();
             } catch (e) {
-                showToast('Failed to load invoices', 'error');
+                const message = e?.message || 'Failed to load invoices';
+                showToast(message, 'error');
+            }
+        }
+
+        function setInvoiceFilter(status) {
+            invoiceFilterStatus = status || 'All';
+            document.querySelectorAll('#invoice-filter-row .invoice-filter-btn').forEach(btn => {
+                btn.classList.toggle('active', (btn.dataset.filter || 'All') === invoiceFilterStatus);
+            });
+            applyInvoiceFilters();
+        }
+
+        function filterInvoices(items) {
+            return (items || []).filter(inv => {
+                const status = (inv.status || '').toLowerCase();
+                if (invoiceFilterStatus === 'New' && status !== 'new') return false;
+                if (invoiceFilterStatus === 'Processing' && status !== 'processing') return false;
+                if (invoiceFilterStatus === 'Settled' && status !== 'settled') return false;
+                if (invoiceFilterStatus === 'Failed' && !['invalid', 'expired'].includes(status)) return false;
+
+                if (!invoiceSearchQuery) return true;
+                const haystack = [
+                    inv.id || '',
+                    String(inv.amount || ''),
+                    inv.currency || '',
+                    `${inv.amount || ''} ${inv.currency || ''}`
+                ].join(' ').toLowerCase();
+
+                return haystack.includes(invoiceSearchQuery);
+            });
+        }
+
+        function applyInvoiceFilters() {
+            const filtered = filterInvoices(allInvoicesRaw);
+            renderInvoices('all-invoices', filtered);
+            const resultsEl = document.getElementById('invoice-results-count');
+            if (resultsEl) {
+                resultsEl.textContent = `${filtered.length} result${filtered.length === 1 ? '' : 's'}`;
             }
         }
 
@@ -3340,8 +4161,7 @@ $isWp = Urls::isWordPress();
 
             try {
                 // Load store details
-                const response = await fetch(`${adminUrl}?api=stores`);
-                const stores = await response.json();
+                const { data: stores } = await safeFetchJson(`${adminUrl}?api=stores`, {}, { timeoutMs: 15000 });
                 const store = stores.find(s => s.id === currentStoreId);
 
                 if (!store) {
@@ -3401,8 +4221,7 @@ $isWp = Urls::isWordPress();
             }
 
             try {
-                const response = await fetch(`${adminUrl}?api=api_keys&store_id=${encodeURIComponent(currentStoreId)}`);
-                const keys = await response.json();
+                const { data: keys } = await safeFetchJson(`${adminUrl}?api=api_keys&store_id=${encodeURIComponent(currentStoreId)}`, {}, { timeoutMs: 15000 });
 
                 if (!keys || keys.length === 0) {
                     container.innerHTML = `
@@ -3443,27 +4262,438 @@ $isWp = Urls::isWordPress();
                 return;
             }
 
+            invoices.forEach(inv => {
+                invoiceMap[inv.id] = inv;
+            });
+
             container.innerHTML = invoices.map(inv => {
-                const statusClass = inv.status.toLowerCase();
-                const icon = inv.status === 'Settled' ? '✓' :
-                             inv.status === 'New' ? '⏳' : '✕';
+                const status = getInvoiceStatusMeta(inv.status);
+                const previousStatus = invoiceStatusHistory[inv.id];
+                const highlightClass = previousStatus === 'New' && inv.status === 'Settled'
+                    ? 'invoice-settled-highlight'
+                    : '';
                 const date = new Date(inv.createdTime * 1000).toLocaleDateString();
                 const description = inv.metadata?.itemDesc || '';
+                invoiceStatusHistory[inv.id] = inv.status;
 
                 return `
-                    <div class="list-item">
-                        <div class="list-icon ${statusClass}">${icon}</div>
+                    <div class="list-item ${status.className} ${highlightClass}" onclick="showInvoiceDetails('${inv.id}')">
+                        <div class="list-icon ${status.className}">${status.icon}</div>
                         <div class="list-content">
                             <div class="list-title">${description ? escapeHtml(description) : inv.id}</div>
                             <div class="list-subtitle">${date}${description ? ' · ' + inv.id : ''}</div>
                         </div>
                         <div class="list-amount">
-                            <div class="list-amount-value">${inv.amount} ${inv.currency}</div>
-                            <div class="list-amount-status ${statusClass}">${inv.status}</div>
+                            <div class="list-amount-value">${formatInvoiceAmountWithSats(inv)}</div>
+                            <div class="list-amount-status ${status.className}">${status.label}</div>
                         </div>
                     </div>
                 `;
             }).join('');
+        }
+
+        function getInvoicePaymentMethod(invoice) {
+            return invoice?.checkout?.paymentMethods?.['BTC-LightningNetwork'] || null;
+        }
+
+        function getInvoiceLnurl(invoice) {
+            const method = getInvoicePaymentMethod(invoice) || {};
+
+            if (typeof method.lnurl === 'string' && method.lnurl) {
+                return method.lnurl;
+            }
+            if (typeof invoice?.lnurl === 'string' && invoice.lnurl) {
+                return invoice.lnurl;
+            }
+            if (typeof invoice?.metadata?.lnurl === 'string' && invoice.metadata.lnurl) {
+                return invoice.metadata.lnurl;
+            }
+
+            const lnAddress = invoice?.metadata?.lightningAddress || invoice?.metadata?.lnaddress;
+            if (typeof lnAddress === 'string' && lnAddress.includes('@')) {
+                const parts = lnAddress.split('@');
+                if (parts.length === 2 && parts[0] && parts[1]) {
+                    return `https://${parts[1]}/.well-known/lnurlp/${parts[0]}`;
+                }
+            }
+
+            return '';
+        }
+
+        function formatInvoiceAmountWithSats(invoice) {
+            if (!invoice) return '-';
+
+            const amount = invoice.amount;
+            const currency = (invoice.currency || '').toUpperCase();
+            const mintUnit = (invoice.mintUnit || '').toLowerCase();
+            const isFiatInvoice = !['SAT', 'SATS', 'MSAT', 'BTC'].includes(currency);
+
+            const base = `${amount} ${currency}`.trim();
+            if (!isFiatInvoice) return base;
+
+            const mintAmount = Number(invoice.amountInMintUnit);
+            if (!Number.isFinite(mintAmount) || mintAmount <= 0) {
+                return base;
+            }
+
+            if (mintUnit === 'sat' || mintUnit === 'sats') {
+                return `${base} (${Math.floor(mintAmount).toLocaleString()} SAT)`;
+            }
+
+            if (mintUnit === 'msat') {
+                const sats = Math.ceil(mintAmount / 1000);
+                return `${base} (${sats.toLocaleString()} SAT)`;
+            }
+
+            // For non-sat mints we cannot reliably infer sats here.
+            return base;
+        }
+
+        function getInvoiceStatusMeta(status) {
+            const normalized = (status || '').toLowerCase();
+            if (normalized === 'settled') {
+                return {
+                    className: 'status-settled',
+                    icon: '✓',
+                    label: 'Settled',
+                    badgeText: 'SETTLED ✓',
+                    color: 'var(--success)',
+                    bg: 'rgba(72, 187, 120, 0.2)',
+                    border: 'rgba(72, 187, 120, 0.45)'
+                };
+            }
+            if (normalized === 'new') {
+                return {
+                    className: 'status-new',
+                    icon: '⏳',
+                    label: 'New',
+                    badgeText: 'NEW ⏳',
+                    color: 'var(--accent)',
+                    bg: 'rgba(247, 147, 26, 0.2)',
+                    border: 'rgba(247, 147, 26, 0.45)'
+                };
+            }
+            if (normalized === 'processing') {
+                return {
+                    className: 'status-processing',
+                    icon: '…',
+                    label: 'Processing',
+                    badgeText: 'PROCESSING',
+                    color: '#63b3ed',
+                    bg: 'rgba(99, 179, 237, 0.2)',
+                    border: 'rgba(99, 179, 237, 0.45)'
+                };
+            }
+            if (normalized === 'invalid' || normalized === 'expired') {
+                return {
+                    className: normalized === 'expired' ? 'status-expired' : 'status-invalid',
+                    icon: '✕',
+                    label: status || 'Invalid',
+                    badgeText: `${(status || 'Invalid').toUpperCase()} ✕`,
+                    color: 'var(--error)',
+                    bg: 'rgba(229, 62, 62, 0.2)',
+                    border: 'rgba(229, 62, 62, 0.45)'
+                };
+            }
+            return {
+                className: 'status-unknown',
+                icon: '?',
+                label: status || '-',
+                badgeText: (status || '-').toUpperCase(),
+                color: 'var(--text-primary)',
+                bg: 'rgba(160, 174, 192, 0.15)',
+                border: 'rgba(160, 174, 192, 0.35)'
+            };
+        }
+
+        function getInvoiceStateHero(status) {
+            const normalized = (status || '').toLowerCase();
+            if (normalized === 'settled') {
+                return {
+                    className: 'status-settled',
+                    icon: '✓',
+                    title: 'Payment Received',
+                    subtitle: 'This invoice is settled. Customer already paid.'
+                };
+            }
+            if (normalized === 'new') {
+                return {
+                    className: 'status-new',
+                    icon: '⏳',
+                    title: 'Waiting For Payment',
+                    subtitle: 'Share the QR or BOLT11 invoice with customer.'
+                };
+            }
+            if (normalized === 'processing') {
+                return {
+                    className: 'status-processing',
+                    icon: '…',
+                    title: 'Payment Processing',
+                    subtitle: 'Payment detected, waiting for final settlement.'
+                };
+            }
+            if (normalized === 'invalid' || normalized === 'expired') {
+                return {
+                    className: normalized === 'expired' ? 'status-expired' : 'status-invalid',
+                    icon: '✕',
+                    title: 'Invoice Not Payable',
+                    subtitle: 'This invoice is no longer valid for payment.'
+                };
+            }
+
+            return {
+                className: 'status-unknown',
+                icon: '?',
+                title: 'Invoice Status Unknown',
+                subtitle: 'Status could not be determined.'
+            };
+        }
+
+        function stopInvoiceDetailPolling() {
+            if (invoiceDetailPollInterval) {
+                clearInterval(invoiceDetailPollInterval);
+                invoiceDetailPollInterval = null;
+            }
+            currentInvoiceModalId = null;
+        }
+
+        function startInvoiceDetailPolling(invoice) {
+            stopInvoiceDetailPolling();
+
+            if (!invoice || !invoice.id) return;
+            if (!['New', 'Processing'].includes(invoice.status)) return;
+
+            currentInvoiceModalId = invoice.id;
+            invoiceDetailPollInterval = setInterval(async () => {
+                const current = invoiceMap[currentInvoiceModalId];
+                if (!current || !current.storeId) return;
+
+                const fresh = await fetchFreshInvoice(current.storeId, current.id);
+                if (!fresh) return;
+
+                const statusChanged = fresh.status !== current.status;
+                invoiceMap[fresh.id] = fresh;
+
+                // Keep modal in sync while it is open.
+                if (document.getElementById('modal-invoice').classList.contains('visible')) {
+                    showInvoiceDetails(fresh.id, false);
+                }
+
+                if (statusChanged) {
+                    await loadDashboard();
+                    if (document.getElementById('view-invoices').classList.contains('active')) {
+                        await loadInvoices();
+                    }
+                }
+
+                if (!['New', 'Processing'].includes(fresh.status)) {
+                    stopInvoiceDetailPolling();
+                }
+            }, 5000);
+        }
+
+        function showInvoiceDetails(invoiceId, open = true) {
+            const invoice = invoiceMap[invoiceId];
+            if (!invoice) {
+                showToast('Invoice details not found', 'error');
+                return;
+            }
+
+            const paymentMethod = getInvoicePaymentMethod(invoice);
+            const bolt11 = paymentMethod?.destination || '';
+            const lnurl = getInvoiceLnurl(invoice);
+            const normalizedStatus = (invoice.status || '').toLowerCase();
+            const isPayable = normalizedStatus === 'new' || normalizedStatus === 'processing';
+
+            const hero = getInvoiceStateHero(invoice.status);
+            const heroEl = document.getElementById('invoice-state-hero');
+            heroEl.className = `invoice-state-hero ${hero.className}`;
+            document.getElementById('invoice-state-hero-icon').textContent = hero.icon;
+            document.getElementById('invoice-state-hero-title').textContent = hero.title;
+            document.getElementById('invoice-state-hero-subtitle').textContent = hero.subtitle;
+
+            document.getElementById('invoice-modal-id').textContent = invoice.id || '-';
+            document.getElementById('invoice-modal-id').title = invoice.id || '';
+            const statusBadge = getInvoiceStatusMeta(invoice.status);
+            const statusEl = document.getElementById('invoice-modal-status');
+            statusEl.textContent = statusBadge.badgeText;
+            statusEl.style.color = statusBadge.color;
+            statusEl.style.background = statusBadge.bg;
+            statusEl.style.border = `1px solid ${statusBadge.border}`;
+            statusEl.style.borderRadius = '999px';
+            statusEl.style.padding = '0.25rem 0.6rem';
+            statusEl.style.fontWeight = '600';
+            document.getElementById('invoice-modal-amount').textContent = formatInvoiceAmountWithSats(invoice);
+            const invoiceStore = dashboardData?.stores?.find(s => s.id === invoice.storeId);
+            document.getElementById('invoice-modal-store-name').textContent = invoiceStore?.name || '-';
+            document.getElementById('invoice-modal-store-id').textContent = invoice.storeId || '-';
+            document.getElementById('invoice-modal-store-id').title = invoice.storeId || '';
+            document.getElementById('invoice-modal-created').textContent =
+                invoice.createdTime ? new Date(invoice.createdTime * 1000).toLocaleString() : '-';
+            document.getElementById('invoice-modal-expires').textContent =
+                invoice.expirationTime ? new Date(invoice.expirationTime * 1000).toLocaleString() : '-';
+
+            const checkoutBtn = document.getElementById('invoice-modal-open-checkout');
+            if (invoice.checkoutLink) {
+                checkoutBtn.style.display = 'block';
+                checkoutBtn.textContent = isPayable ? 'Open Checkout' : 'Open Invoice Page';
+                checkoutBtn.onclick = () => {
+                    window.open(invoice.checkoutLink, '_blank', 'noopener');
+                };
+            } else {
+                checkoutBtn.style.display = 'none';
+                checkoutBtn.onclick = null;
+            }
+
+            const bolt11Group = document.getElementById('invoice-modal-bolt11-group');
+            const bolt11Input = document.getElementById('invoice-modal-bolt11');
+            if (bolt11 && isPayable) {
+                bolt11Input.value = bolt11;
+                bolt11Group.style.display = 'block';
+            } else {
+                bolt11Input.value = '';
+                bolt11Group.style.display = 'none';
+            }
+
+            const lnurlGroup = document.getElementById('invoice-modal-lnurl-group');
+            const lnurlInput = document.getElementById('invoice-modal-lnurl');
+            if (lnurl) {
+                lnurlInput.value = lnurl;
+                lnurlGroup.style.display = 'block';
+            } else {
+                lnurlInput.value = '';
+                lnurlGroup.style.display = 'none';
+            }
+
+            const qrContainer = document.getElementById('invoice-modal-qr');
+            const qrActions = document.getElementById('invoice-modal-image-actions');
+            qrContainer.innerHTML = '';
+            qrActions.style.display = 'none';
+
+            if (bolt11 && isPayable) {
+                qrContainer.style.display = 'flex';
+                if (typeof QRious !== 'undefined') {
+                    const canvas = document.createElement('canvas');
+                    qrContainer.appendChild(canvas);
+                    const qrSize = Math.min(280, window.innerWidth - 80);
+                    new QRious({
+                        element: canvas,
+                        value: `lightning:${bolt11}`,
+                        size: qrSize,
+                        backgroundAlpha: 1,
+                        foreground: '#000000',
+                        background: '#ffffff',
+                        level: 'M'
+                    });
+                    qrActions.style.display = 'block';
+                } else {
+                    qrContainer.style.display = 'none';
+                    showToast('QR library not loaded', 'error');
+                }
+            } else {
+                qrContainer.style.display = 'none';
+                qrActions.style.display = 'none';
+            }
+
+            if (open) {
+                openModal('modal-invoice');
+            }
+
+            startInvoiceDetailPolling(invoice);
+
+            // Best-effort immediate refresh from backend (pollSingleQuote happens on this endpoint).
+            if (invoice.storeId) {
+                fetchFreshInvoice(invoice.storeId, invoice.id).then(fresh => {
+                    if (fresh && fresh.id) {
+                        invoiceMap[fresh.id] = fresh;
+                        if (fresh.status !== invoice.status) {
+                            showInvoiceDetails(fresh.id, false);
+                            loadDashboard();
+                            if (document.getElementById('view-invoices').classList.contains('active')) {
+                                loadInvoices();
+                            }
+                        }
+                    }
+                });
+            }
+        }
+
+        async function copyInvoiceField(elementId, successMessage) {
+            const el = document.getElementById(elementId);
+            if (!el || !el.value) {
+                showToast('Nothing to copy', 'error');
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(el.value);
+                showToast(successMessage, 'success');
+            } catch (e) {
+                showToast('Failed to copy', 'error');
+            }
+        }
+
+        function getInvoiceQrCanvas() {
+            const qrContainer = document.getElementById('invoice-modal-qr');
+            if (!qrContainer) return null;
+            return qrContainer.querySelector('canvas');
+        }
+
+        function canvasToBlob(canvas) {
+            return new Promise((resolve) => {
+                canvas.toBlob((blob) => resolve(blob), 'image/png');
+            });
+        }
+
+        async function copyInvoiceQrImage() {
+            const canvas = getInvoiceQrCanvas();
+            if (!canvas) {
+                showToast('No QR image available', 'error');
+                return;
+            }
+
+            try {
+                if (!navigator.clipboard || typeof window.ClipboardItem === 'undefined') {
+                    showToast('Image copy is not supported in this browser', 'error');
+                    return;
+                }
+
+                const blob = await canvasToBlob(canvas);
+                if (!blob) {
+                    showToast('Failed to prepare image', 'error');
+                    return;
+                }
+
+                await navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': blob })
+                ]);
+                showToast('QR image copied', 'success');
+            } catch (e) {
+                console.error('Failed to copy QR image:', e);
+                showToast('Failed to copy image', 'error');
+            }
+        }
+
+        function saveInvoiceQrImage() {
+            const canvas = getInvoiceQrCanvas();
+            if (!canvas) {
+                showToast('No QR image available', 'error');
+                return;
+            }
+
+            try {
+                const link = document.createElement('a');
+                const invoiceId = document.getElementById('invoice-modal-id')?.textContent || 'invoice';
+                link.download = `invoice-${invoiceId}-qr.png`;
+                link.href = canvas.toDataURL('image/png');
+                document.body.appendChild(link);
+                link.click();
+                link.remove();
+                showToast('QR image saved', 'success');
+            } catch (e) {
+                console.error('Failed to save QR image:', e);
+                showToast('Failed to save image', 'error');
+            }
         }
 
         function renderStores(stores) {
@@ -3829,12 +5059,11 @@ $isWp = Urls::isWordPress();
             }
 
             try {
-                const response = await fetch(adminUrl, {
+                const { data } = await safeFetchJson(adminUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                     body: `action=get_withdrawal_estimate&store_id=${encodeURIComponent(currentStoreId)}&destination=${encodeURIComponent(destination)}&amount_sats=${amountSats}`
-                });
-                const data = await response.json();
+                }, { timeoutMs: 12000 });
                 return data.success ? data : null;
             } catch (e) {
                 console.error('Failed to get withdrawal estimate:', e);
@@ -4090,29 +5319,117 @@ $isWp = Urls::isWordPress();
             });
         }
 
-        // Update amount input based on selected store's mint unit
-        function updateAmountInputForStore(mintUnit) {
+        // Update request amount input based on selected request currency
+        function updateRequestAmountInputForCurrency(currency) {
             const amountLabel = document.getElementById('request-amount-label');
             const amountInput = document.getElementById('request-amount');
-            const unit = (mintUnit || 'sat').toUpperCase();
+            const unit = (currency || 'SAT').toUpperCase();
 
             amountLabel.textContent = `Amount (${unit})`;
 
-            if (mintUnit === 'sat' || mintUnit === 'msat') {
+            if (unit === 'SAT' || unit === 'SATS' || unit === 'MSAT') {
                 amountInput.placeholder = '100';
                 amountInput.min = '1';
                 amountInput.step = '1';
+            } else if (unit === 'BTC') {
+                amountInput.placeholder = '0.001';
+                amountInput.min = '0.00000001';
+                amountInput.step = '0.00000001';
             } else {
                 amountInput.placeholder = '1.00';
                 amountInput.min = '0.01';
                 amountInput.step = '0.01';
             }
+
+            renderRequestQuickAmounts();
         }
 
-        async function handleGenerateRequest() {
-            const storeId = currentStoreId;
+        function getRequestQuickAmounts(currency) {
+            const unit = (currency || 'SAT').toUpperCase();
+            if (unit === 'SAT' || unit === 'SATS') return [10000, 50000, 100000];
+            if (unit === 'BTC') return [0.0001, 0.0005, 0.001];
+            if (unit === 'USD') return [1, 5, 10];
+            if (unit === 'GBP') return [1, 5, 10];
+            return [1, 5, 10];
+        }
+
+        function formatQuickAmount(value, currency) {
+            const unit = (currency || 'SAT').toUpperCase();
+            if (unit === 'SAT' || unit === 'SATS') {
+                return `${Number(value).toLocaleString()} SAT`;
+            }
+            if (unit === 'BTC') {
+                return `${value} BTC`;
+            }
+            return `${value} ${unit}`;
+        }
+
+        function renderRequestQuickAmounts() {
+            const currency = document.getElementById('request-currency').value || 'SAT';
+            const quickAmounts = getRequestQuickAmounts(currency);
+            const container = document.getElementById('request-quick-amounts');
+
+            container.innerHTML = quickAmounts.map(value =>
+                `<button type="button" class="quick-amount-chip" onclick="setRequestQuickAmount('${value}')">${formatQuickAmount(value, currency)}</button>`
+            ).join('');
+        }
+
+        function setRequestQuickAmount(value) {
+            const input = document.getElementById('request-amount');
+            input.value = value;
+            validateRequestForm(true);
+            input.focus();
+        }
+
+        function validateRequestForm(showInline = true) {
             const amount = parseFloat(document.getElementById('request-amount').value);
+            const requestCurrency = (document.getElementById('request-currency').value || 'SAT').toUpperCase();
+            const minAmount = (requestCurrency === 'SAT' || requestCurrency === 'SATS' || requestCurrency === 'MSAT')
+                ? 1
+                : (requestCurrency === 'BTC' ? 0.00000001 : 0.01);
+
+            let error = '';
+            if (!amount || Number.isNaN(amount)) {
+                error = 'Amount is required.';
+            } else if (amount < minAmount) {
+                error = `Amount must be at least ${minAmount} ${requestCurrency}.`;
+            }
+
+            if (showInline) {
+                document.getElementById('request-amount-error').textContent = error;
+            }
+
+            return { valid: !error, error };
+        }
+
+        function classifyInvoiceApiError(response, result, fallbackRawText = '') {
+            const status = response?.status || 0;
+            const apiCode = result?.code || result?.error || '';
+            const apiMessage = result?.message || result?.error || fallbackRawText || 'Unknown error';
+
+            if (status >= 500 || /timeout|network|connect|mint/i.test(apiMessage)) {
+                return `Network problem: ${apiMessage}`;
+            }
+
+            if (status === 0 || status === 408) {
+                return 'Network problem: request timed out.';
+            }
+
+            if (status === 400 || status === 401 || status === 403 || status === 404 || status === 422 || /validation/i.test(apiCode)) {
+                return `Validation problem: ${apiMessage}`;
+            }
+
+            return apiMessage;
+        }
+
+        async function handleGenerateRequest(openCheckout = true) {
+            const storeId = currentStoreId;
             const memo = document.getElementById('request-memo').value;
+            const requestCurrency = (document.getElementById('request-currency').value || 'SAT').toUpperCase();
+            const validation = validateRequestForm(true);
+            const copiedLinkBtn = document.getElementById('btn-request-copied-link');
+            copiedLinkBtn.style.display = 'none';
+            copiedLinkBtn.dataset.checkout = '';
 
             if (!storeId) {
                 showToast('Please select a store first', 'error');
@@ -4122,11 +5439,10 @@ $isWp = Urls::isWordPress();
             // Get store info from dashboardData
             const store = dashboardData?.stores?.find(s => s.id === storeId);
             const apiKey = store?.internalApiKey;
-            const mintUnit = store?.mint_unit || 'sat';
-            const minAmount = (mintUnit === 'sat' || mintUnit === 'msat') ? 1 : 0.01;
+            const amount = parseFloat(document.getElementById('request-amount').value);
 
-            if (!amount || amount < minAmount) {
-                showToast('Please enter an amount', 'error');
+            if (!validation.valid) {
+                showToast(validation.error, 'error');
                 return;
             }
 
@@ -4136,12 +5452,20 @@ $isWp = Urls::isWordPress();
             }
 
             try {
-                // Use Greenfield API to create invoice
-                const apiUrl = API_BASE_URL + '/api/v1/stores/' + encodeURIComponent(storeId) + '/invoices';
+                // Try both direct and router.php API paths for hosts without rewrite rules.
+                const apiPath = '/api/v1/stores/' + encodeURIComponent(storeId) + '/invoices';
+                const normalizedBase = API_BASE_URL.replace(/\/$/, '');
+                const baseWithoutRouter = normalizedBase.replace(/\/router\.php$/, '');
+                const candidates = [
+                    normalizedBase + apiPath,
+                    baseWithoutRouter + '/router.php' + apiPath,
+                    baseWithoutRouter + '/api.php' + apiPath,
+                    baseWithoutRouter + apiPath,
+                ].filter((url, index, arr) => arr.indexOf(url) === index);
 
                 const invoiceData = {
                     amount: amount,
-                    currency: mintUnit,
+                    currency: requestCurrency,
                     checkout: {
                         redirectURL: window.location.href.split('?')[0], // Return to admin
                         redirectAutomatically: true
@@ -4152,26 +5476,76 @@ $isWp = Urls::isWordPress();
                     invoiceData.metadata = { itemDesc: memo };
                 }
 
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'token ' + apiKey
-                    },
-                    body: JSON.stringify(invoiceData)
-                });
+                let successResult = null;
+                let lastError = 'Failed to create invoice';
 
-                const result = await response.json();
+                for (const apiUrl of candidates) {
+                    try {
+                        const { data: result } = await safeFetchJson(apiUrl, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': 'token ' + apiKey
+                            },
+                            body: JSON.stringify(invoiceData)
+                        }, { timeoutMs: 15000 });
 
-                if (response.ok && result.checkoutLink) {
-                    // Redirect to checkout page
-                    window.location.href = result.checkoutLink;
+                        if (result && result.checkoutLink) {
+                            rememberWorkingApiCandidate(apiUrl, apiPath);
+                            successResult = result;
+                            break;
+                        }
+                    } catch (fetchError) {
+                        if (fetchError?.status) {
+                            lastError = classifyInvoiceApiError(
+                                { status: fetchError.status },
+                                fetchError.data,
+                                fetchError.message
+                            );
+                        } else if (fetchError?.message === 'Request timed out') {
+                            lastError = 'Network problem: request timed out.';
+                        } else {
+                            lastError = 'Network problem: unable to reach API endpoint.';
+                        }
+                    }
+                }
+
+                if (successResult && successResult.checkoutLink) {
+                    if (successResult.id) {
+                        invoiceMap[successResult.id] = successResult;
+                    }
+
+                    if (openCheckout) {
+                        window.location.href = successResult.checkoutLink;
+                    } else {
+                        try {
+                            await navigator.clipboard.writeText(successResult.checkoutLink);
+                            copiedLinkBtn.style.display = 'block';
+                            copiedLinkBtn.dataset.checkout = successResult.checkoutLink;
+                            copiedLinkBtn.textContent = 'Copied checkout link';
+                        } catch (e) {
+                            copiedLinkBtn.style.display = 'block';
+                            copiedLinkBtn.dataset.checkout = successResult.checkoutLink;
+                            copiedLinkBtn.textContent = 'Copy checkout link';
+                        }
+
+                        if (successResult.id) {
+                            showInvoiceDetails(successResult.id);
+                        }
+                        loadDashboard();
+                        if (document.getElementById('view-invoices').classList.contains('active')) {
+                            loadInvoices();
+                        }
+                    }
                 } else {
-                    showToast(result.message || result.error || 'Failed to create invoice', 'error');
+                    showToast(lastError, 'error');
+                    document.getElementById('request-amount-error').textContent = lastError;
                 }
             } catch (e) {
                 console.error('Invoice creation failed:', e);
-                showToast('Failed to create invoice', 'error');
+                const networkError = 'Network problem: unable to create invoice.';
+                showToast(networkError, 'error');
+                document.getElementById('request-amount-error').textContent = networkError;
             }
         }
 
@@ -4288,8 +5662,8 @@ $isWp = Urls::isWordPress();
 
         async function testUrlEndpoint(url) {
             try {
-                const response = await fetch(url, { method: 'GET', mode: 'same-origin' });
-                return response.status === 200;
+                await safeFetchJson(url, { method: 'GET', mode: 'same-origin' }, { timeoutMs: 6000 });
+                return true;
             } catch (e) {
                 return false;
             }
@@ -4321,6 +5695,7 @@ $isWp = Urls::isWordPress();
                     // Update global URL variables so all components use new URL
                     serverUrl = result.serverUrl;
                     API_BASE_URL = result.serverUrl.replace(/\/$/, '');  // Ensure no trailing slash
+                    window.__cashuPreferredApiRoot = null;
 
                     showToast('URL mode saved!', 'success');
                 } else {
@@ -4359,6 +5734,7 @@ $isWp = Urls::isWordPress();
         }
 
         function lock() {
+            stopDashboardRefresh();
             document.getElementById('app').classList.remove('visible');
             document.getElementById('lock-screen').classList.remove('hidden');
             pin = '';
@@ -4555,12 +5931,12 @@ $isWp = Urls::isWordPress();
             document.getElementById('store-modal-title').textContent = storeName;
 
             // Load API keys and backup mints in parallel
-            const [keysRes, mintsRes] = await Promise.all([
-                fetch(`${adminUrl}?api=api_keys&store_id=${storeId}`),
-                fetch(`${adminUrl}?api=get_backup_mints&store_id=${storeId}`)
+            const [keysResult, mintsResult] = await Promise.all([
+                safeFetchJson(`${adminUrl}?api=api_keys&store_id=${encodeURIComponent(storeId)}`, {}, { timeoutMs: 15000 }),
+                safeFetchJson(`${adminUrl}?api=get_backup_mints&store_id=${encodeURIComponent(storeId)}`, {}, { timeoutMs: 15000 })
             ]);
-            const keys = await keysRes.json();
-            const backupMintsRes = await mintsRes.json();
+            const keys = keysResult.data;
+            const backupMintsRes = mintsResult.data;
             const backupMints = Array.isArray(backupMintsRes) ? backupMintsRes : [];
 
             // Get store info from dashboardData
@@ -4713,6 +6089,162 @@ $isWp = Urls::isWordPress();
             }
         }
 
+        function getCurrentStoreDisplayName() {
+            const store = dashboardData?.stores?.find(s => s.id === currentStoreId);
+            if (store && store.name) return store.name;
+
+            const nameEl = document.getElementById('store-settings-name');
+            const fallback = (nameEl?.textContent || '').trim();
+            return fallback && fallback !== '-' ? fallback : 'Store Details';
+        }
+
+        async function openCurrentStoreDetails() {
+            if (!currentStoreId) {
+                showToast('No store selected', 'error');
+                return;
+            }
+
+            try {
+                await showStoreDetails(currentStoreId, getCurrentStoreDisplayName());
+            } catch (e) {
+                showToast('Failed to load store details', 'error');
+            }
+        }
+
+        function openCreateStoreModal() {
+            document.getElementById('store-modal-title').textContent = 'Create Store';
+            document.getElementById('store-modal-content').innerHTML = `
+                <div class="card-body" style="max-height: 70vh; overflow-y: auto;">
+                    <div class="form-group">
+                        <label class="form-label">Store Name</label>
+                        <input type="text" class="form-input" id="store-name" placeholder="My Store">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Mint URL (optional)</label>
+                        <input type="url" class="form-input" id="store-mint-url" placeholder="https://mint.example.com">
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Unit</label>
+                        <select class="form-input" id="store-mint-unit">
+                            <option value="sat">SAT</option>
+                            <option value="usd">USD</option>
+                            <option value="eur">EUR</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Seed Phrase (optional)</label>
+                        <textarea class="form-input" id="store-seed-phrase" rows="3" placeholder="Leave empty to auto-generate when mint URL is set"></textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label class="form-label">Exchange Fee (%)</label>
+                        <input type="number" class="form-input" id="store-exchange-fee" min="0" max="10" step="0.1" value="0">
+                    </div>
+
+                    <div style="display: flex; gap: 0.5rem; margin-top: 1rem;">
+                        <button type="button" class="btn btn-secondary" id="btn-generate-seed" style="flex: 1;">Generate Seed</button>
+                        <button type="button" class="btn" id="btn-confirm-add-store" style="flex: 1;">Create Store</button>
+                    </div>
+                </div>
+            `;
+
+            const generateSeedBtn = document.getElementById('btn-generate-seed');
+            if (generateSeedBtn) {
+                generateSeedBtn.addEventListener('click', generateSeed);
+            }
+
+            const confirmAddStoreBtn = document.getElementById('btn-confirm-add-store');
+            if (confirmAddStoreBtn) {
+                confirmAddStoreBtn.addEventListener('click', addStore);
+            }
+
+            openModal('modal-store');
+            const storeNameInput = document.getElementById('store-name');
+            if (storeNameInput) storeNameInput.focus();
+        }
+
+        async function generateSeed() {
+            const seedInput = document.getElementById('store-seed-phrase');
+            if (!seedInput) return;
+
+            try {
+                const response = await postWithCsrf(adminUrl, 'action=generate_seed');
+                const result = await response.json();
+
+                if (response.ok && result.seedPhrase) {
+                    seedInput.value = result.seedPhrase;
+                    showToast('Seed phrase generated', 'success');
+                } else {
+                    showToast(result.error || 'Failed to generate seed', 'error');
+                }
+            } catch (e) {
+                showToast('Failed to generate seed', 'error');
+            }
+        }
+
+        async function addStore() {
+            const nameInput = document.getElementById('store-name');
+            const mintUrlInput = document.getElementById('store-mint-url');
+            const mintUnitInput = document.getElementById('store-mint-unit');
+            const seedPhraseInput = document.getElementById('store-seed-phrase');
+            const exchangeFeeInput = document.getElementById('store-exchange-fee');
+            const submitBtn = document.getElementById('btn-confirm-add-store');
+
+            if (!nameInput || !mintUrlInput || !mintUnitInput || !seedPhraseInput || !exchangeFeeInput || !submitBtn) {
+                showToast('Store form is not available', 'error');
+                return;
+            }
+
+            const name = nameInput.value.trim();
+            const mintUrl = mintUrlInput.value.trim();
+            const mintUnit = (mintUnitInput.value || 'sat').trim();
+            const seedPhrase = seedPhraseInput.value.trim();
+            const exchangeFee = exchangeFeeInput.value.trim() || '0';
+
+            if (!name) {
+                showToast('Store name is required', 'error');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            const originalText = submitBtn.textContent;
+            submitBtn.textContent = 'Creating...';
+
+            try {
+                const body = new URLSearchParams({
+                    action: 'create_store',
+                    name,
+                    mint_url: mintUrl,
+                    mint_unit: mintUnit,
+                    seed_phrase: seedPhrase,
+                    exchange_fee_percent: exchangeFee
+                });
+
+                const response = await postWithCsrf(adminUrl, body.toString());
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Failed to create store');
+                }
+
+                currentStoreId = result.id;
+                localStorage.setItem('selectedStoreId', currentStoreId);
+
+                closeModal('modal-store');
+                await loadDashboard();
+                await loadStoreSettings();
+                showToast('Store created successfully!', 'success');
+            } catch (e) {
+                showToast(e?.message || 'Failed to create store', 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
+            }
+        }
+
         function createApiKey(storeId) {
             document.getElementById('modal-apikey-title').textContent = 'Create API Key';
             document.getElementById('modal-apikey-content').innerHTML = `
@@ -4786,6 +6318,19 @@ $isWp = Urls::isWordPress();
 
             await postWithCsrf(adminUrl, `action=delete_api_key&key_id=${keyId}`);
             loadStoreApiKeys();
+        }
+
+        function openCreateApiKeyModal(storeId) {
+            createApiKey(storeId);
+        }
+
+        async function deleteCurrentStore() {
+            if (!currentStoreId) {
+                showToast('No store selected', 'error');
+                return;
+            }
+
+            await deleteStore(currentStoreId);
         }
 
         async function deleteStore(storeId) {
@@ -4930,10 +6475,21 @@ $isWp = Urls::isWordPress();
                 document.getElementById('request-amount').value = '';
                 document.getElementById('request-memo').value = '';
 
-                // Get current store's mint unit and update amount input
+                // Default request currency to the store mint unit when it is common.
                 const store = dashboardData?.stores?.find(s => s.id === currentStoreId);
                 const mintUnit = store?.mint_unit || 'sat';
-                updateAmountInputForStore(mintUnit);
+                const currencySelect = document.getElementById('request-currency');
+                const normalized = (mintUnit || 'sat').toUpperCase();
+                const defaultCurrency = ['SAT', 'EUR', 'USD', 'GBP', 'BTC'].includes(normalized)
+                    ? normalized
+                    : 'SAT';
+                currencySelect.value = defaultCurrency;
+                updateRequestAmountInputForCurrency(defaultCurrency);
+                renderRequestQuickAmounts();
+                document.getElementById('request-amount-error').textContent = '';
+                const copiedLinkBtn = document.getElementById('btn-request-copied-link');
+                copiedLinkBtn.style.display = 'none';
+                copiedLinkBtn.dataset.checkout = '';
             }
 
             document.getElementById(id).classList.add('visible');
@@ -4941,6 +6497,10 @@ $isWp = Urls::isWordPress();
 
         function closeModal(id) {
             document.getElementById(id).classList.remove('visible');
+
+            if (id === 'modal-invoice') {
+                stopInvoiceDetailPolling();
+            }
 
             // Cleanup and refresh when closing export modal
             if (id === 'modal-export') {
@@ -5045,6 +6605,58 @@ $isWp = Urls::isWordPress();
             toast.textContent = message;
             toast.className = `toast show ${type}`;
             setTimeout(() => toast.classList.remove('show'), 3000);
+        }
+
+        function renderSystemWarnings(warnings) {
+            const container = document.getElementById('system-warnings');
+            if (!container) return;
+
+            const filteredWarnings = (warnings || []).filter(w => {
+                const code = String(w.code || '').toLowerCase();
+                const message = String(w.message || '').toLowerCase();
+                if (code === 'data_dir_inside_webroot') return false;
+                if (message.includes('data directory is inside web root')) return false;
+                return true;
+            });
+
+            if (!filteredWarnings.length) {
+                container.innerHTML = '';
+                return;
+            }
+
+            const hasCritical = filteredWarnings.some(w => (w.severity || '').toLowerCase() === 'critical');
+            const cssClass = hasCritical ? 'system-warnings' : 'system-warnings warning-only';
+            const title = hasCritical ? 'Critical warnings' : 'Operational warnings';
+
+            container.innerHTML = `
+                <div class="${cssClass}">
+                    <div class="system-warnings-title">${title}</div>
+                    <ul>${filteredWarnings.map(w => `<li>${escapeHtml(w.message || '')}</li>`).join('')}</ul>
+                </div>
+            `;
+        }
+
+        function markInvoicesUpdated() {
+            lastInvoicesUpdatedAt = Date.now();
+            updateLastUpdatedLabel();
+        }
+
+        function formatRelativeSeconds(tsMs) {
+            if (!tsMs) return '--';
+            const sec = Math.max(0, Math.floor((Date.now() - tsMs) / 1000));
+            return `${sec}s ago`;
+        }
+
+        function updateLastUpdatedLabel() {
+            const label = document.getElementById('invoices-last-updated');
+            if (label) {
+                label.textContent = `Last updated ${formatRelativeSeconds(lastInvoicesUpdatedAt)}`;
+            }
+        }
+
+        function startLastUpdatedTicker() {
+            if (lastUpdatedTickerInterval) clearInterval(lastUpdatedTickerInterval);
+            lastUpdatedTickerInterval = setInterval(updateLastUpdatedLabel, 1000);
         }
     </script>
 </body>
