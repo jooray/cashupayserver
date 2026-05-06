@@ -188,6 +188,8 @@ HTACCESS;
             auto_melt_enabled INTEGER NOT NULL DEFAULT 0,
             auto_melt_address TEXT,
             auto_melt_threshold INTEGER NOT NULL DEFAULT 2000,
+            -- Default display/input currency for the merchant UI (sat or fiat code)
+            default_currency TEXT NOT NULL DEFAULT 'sat',
             -- Timestamps
             created_at INTEGER NOT NULL
         );
@@ -278,8 +280,23 @@ HTACCESS;
 
         $pdo->exec($schema);
 
+        // Backfill columns added after initial release (idempotent)
+        self::ensureColumn($pdo, 'stores', 'default_currency', "TEXT NOT NULL DEFAULT 'sat'");
+
         // Initialize wallet storage schema (for cashu-wallet-php library)
         WalletStorage::initializeSchema($pdo);
+    }
+
+    /**
+     * Add a column to a table if it does not yet exist. Used for schema
+     * migrations on existing installations.
+     */
+    private static function ensureColumn(PDO $pdo, string $table, string $column, string $definition): void {
+        $cols = $pdo->query("PRAGMA table_info(" . $table . ")")->fetchAll(PDO::FETCH_ASSOC);
+        foreach ($cols as $c) {
+            if (($c['name'] ?? null) === $column) return;
+        }
+        $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$definition}");
     }
 
     /**
