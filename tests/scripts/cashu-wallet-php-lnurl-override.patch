@@ -1,0 +1,23 @@
+diff --git a/CashuWallet.php b/CashuWallet.php
+index 12380a7..f598a7b 100644
+--- a/CashuWallet.php
++++ b/CashuWallet.php
+@@ -5178,8 +5178,16 @@ class LightningAddress
+ 
+         [$username, $domain] = explode('@', $address, 2);
+ 
+-        // Construct LNURL-pay well-known URL
+-        $url = "https://{$domain}/.well-known/lnurlp/{$username}";
++        // Construct LNURL-pay well-known URL. When CASHU_LNURL_URL_TEMPLATE is
++        // set, use it as a sprintf-style template — supports {user} and {domain}
++        // substitutions. This is for test environments that need to point the
++        // resolver at a non-https host or a non-443 port; no-op in production.
++        $template = getenv('CASHU_LNURL_URL_TEMPLATE');
++        if ($template !== false && $template !== '') {
++            $url = strtr($template, ['{user}' => $username, '{domain}' => $domain]);
++        } else {
++            $url = "https://{$domain}/.well-known/lnurlp/{$username}";
++        }
+ 
+         $ch = curl_init($url);
+         curl_setopt_array($ch, [

@@ -1,0 +1,81 @@
+name: Tests
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-and-ui:
+    name: E2E + UI
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+
+    steps:
+      - name: Use HTTPS for SSH-form submodule URLs
+        # The cashu-wallet-php submodule is checked in with a git@github.com URL;
+        # CI runners only have HTTPS credentials, so rewrite SSH -> HTTPS before
+        # actions/checkout pulls submodules.
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache binary downloads (bitcoind, lnd, static PHP)
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/bin
+          key: bins-${{ runner.os }}-${{ hashFiles('tests/fixtures/binaries.py') }}
+          restore-keys: |
+            bins-${{ runner.os }}-
+
+      - name: Cache nutshell venv
+        uses: actions/cache@v4
+        with:
+          path: tests/.venv-nutshell
+          key: nutshell-${{ runner.os }}-${{ hashFiles('tests/fixtures/nutshell.py') }}
+
+      - name: Cache test runner venv
+        uses: actions/cache@v4
+        with:
+          path: tests/.venv
+          key: venv-${{ runner.os }}-py3.11-${{ hashFiles('tests/requirements.txt') }}
+
+      - name: Install Playwright system dependencies
+        # `playwright install-deps chromium` needs root to apt-install the libs
+        # Chromium needs. The browser tarball itself is cached under tests/bin/.
+        run: |
+          python3 -m venv tests/.venv || true
+          source tests/.venv/bin/activate
+          pip install --quiet -r tests/requirements.txt
+          sudo $(which playwright) install-deps chromium
+
+      - name: Run test suite
+        run: |
+          ./tests/scripts/run-tests.sh -v
+        env:
+          PYTHONUNBUFFERED: "1"
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs
+          path: |
+            tests/.tmp/**/*.log
+            tests/.tmp/**/*.sqlite
+          retention-days: 7
+          if-no-files-found: ignore

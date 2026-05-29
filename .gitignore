@@ -12,3 +12,9 @@ PROTOCOL.md
 *.db-shm
 *.db-wal
 build/**
+tests/bin/**
+tests/.tmp/**
+tests/.venv/**
+tests/.venv-nutshell/**
+tests/.pytest_cache/**
+tests/**/__pycache__/**

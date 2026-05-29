@@ -188,6 +188,8 @@ HTACCESS;
             auto_melt_enabled INTEGER NOT NULL DEFAULT 0,
             auto_melt_address TEXT,
             auto_melt_threshold INTEGER NOT NULL DEFAULT 2000,
+            -- Default display/input currency for the merchant UI (sat or fiat code)
+            default_currency TEXT NOT NULL DEFAULT 'sat',
             -- Timestamps
             created_at INTEGER NOT NULL
         );
@@ -294,6 +296,9 @@ HTACCESS;
         }
         if (!self::columnExists($pdo, 'invoices', 'last_polled_at')) {
             $pdo->exec("ALTER TABLE invoices ADD COLUMN last_polled_at INTEGER DEFAULT NULL");
+        }
+        if (!self::columnExists($pdo, 'stores', 'default_currency')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN default_currency TEXT NOT NULL DEFAULT 'sat'");
         }
     }
 

@@ -229,6 +229,26 @@ class Config {
     }
 
     /**
+     * Get store's default display/input currency (sat or fiat code, e.g. USD).
+     * Falls back to the mint unit when the column is empty so behavior matches
+     * pre-migration installs.
+     */
+    public static function getStoreDefaultCurrency(string $storeId): string {
+        $store = self::getStore($storeId);
+        $value = $store['default_currency'] ?? null;
+        if (is_string($value) && $value !== '') return strtoupper($value) === 'SATS' ? 'sat' : $value;
+        return $store['mint_unit'] ?? 'sat';
+    }
+
+    /**
+     * Currencies that may be offered as a default display/input currency in
+     * addition to the mint's native unit.
+     */
+    public static function getSupportedDisplayCurrencies(): array {
+        return ['sat', 'USD', 'EUR', 'GBP', 'CAD', 'AUD', 'JPY', 'CHF'];
+    }
+
+    /**
      * Get store's price provider settings
      */
     public static function getStorePriceProviders(string $storeId): array {
@@ -255,7 +275,8 @@ class Config {
     public static function updateStore(string $storeId, array $data): void {
         $allowed = [
             'name', 'mint_url', 'mint_unit', 'seed_phrase',
-            'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary'
+            'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary',
+            'default_currency'
         ];
         $updateData = array_intersect_key($data, array_flip($allowed));
 

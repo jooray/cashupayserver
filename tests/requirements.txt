@@ -1,0 +1,12 @@
+pytest==8.3.4
+pytest-timeout==2.3.1
+pytest-xdist==3.6.1
+requests==2.32.3
+aiohttp==3.11.11
+grpcio==1.68.1
+grpcio-tools==1.68.1
+protobuf==5.29.1
+googleapis-common-protos==1.66.0
+cryptography==44.0.0
+playwright==1.49.1
+python-bitcoinrpc==1.0

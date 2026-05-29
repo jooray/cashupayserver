@@ -12,6 +12,7 @@ require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/urls.php';
+require_once __DIR__ . '/includes/rates.php';
 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
 
 use Cashu\Wallet;
@@ -116,12 +117,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  */
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $storeId = $_GET['store_id'] ?? null;
-    $amount = (int)($_GET['amount'] ?? 0);
+    $amountRaw = trim((string)($_GET['amount'] ?? ''));
+    $requestCurrency = trim((string)($_GET['currency'] ?? ''));
     $memo = $_GET['memo'] ?? null;
     $format = $_GET['format'] ?? 'html';
 
+    // Admin-only: GET generates payment requests and lists stores.
+    // POST stays public (NUT-18 token receipt) — handled above.
+    if (!Auth::isLoggedIn()) {
+        if ($format === 'json') {
+            http_response_code(401);
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Authentication required']);
+            exit;
+        }
+        Auth::requireLogin(); // redirects HTML clients to the admin login page
+    }
+
     // Get list of stores for selector
-    $stores = Database::fetchAll("SELECT id, name, mint_unit FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL ORDER BY created_at DESC");
+    $stores = Database::fetchAll("SELECT id, name, mint_unit, default_currency FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL ORDER BY created_at DESC");
+    $supportedCurrencies = Config::getSupportedDisplayCurrencies();
 
     // If no store_id provided, show store selector
     if (!$storeId) {
@@ -198,18 +213,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         <form method="GET" id="request-form">
             <div class="form-group">
                 <label>Store</label>
-                <select name="store_id" id="store-select" required onchange="updateAmountLabel()">
+                <select name="store_id" id="store-select" required onchange="onStoreChange()">
                     <option value="">Select a store...</option>
                     <?php foreach ($stores as $store): ?>
-                        <option value="<?= htmlspecialchars($store['id']) ?>" data-unit="<?= htmlspecialchars($store['mint_unit'] ?? 'sat') ?>">
+                        <option value="<?= htmlspecialchars($store['id']) ?>"
+                                data-unit="<?= htmlspecialchars($store['mint_unit'] ?? 'sat') ?>"
+                                data-default-currency="<?= htmlspecialchars($store['default_currency'] ?? ($store['mint_unit'] ?? 'sat')) ?>">
                             <?= htmlspecialchars($store['name']) ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
             </div>
             <div class="form-group">
-                <label id="amount-label">Amount</label>
-                <input type="number" name="amount" id="amount-input" placeholder="100" min="1" required>
+                <label>Amount</label>
+                <div style="display:flex; gap:0.5rem;">
+                    <input type="number" name="amount" id="amount-input" placeholder="100" min="1" step="1" required style="flex:1;">
+                    <select name="currency" id="currency-select" onchange="updateAmountConstraints()" style="width:auto; padding:0.75rem 1rem; border:1px solid rgba(255,255,255,0.1); background:rgba(0,0,0,0.2); border-radius:12px; color:inherit;">
+                        <!-- populated by JS based on selected store -->
+                    </select>
+                </div>
             </div>
             <div class="form-group">
                 <label>Memo (optional)</label>
@@ -218,23 +240,57 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             <button type="submit" class="btn">Generate Request</button>
         </form>
         <script>
-            function updateAmountLabel() {
-                const select = document.getElementById('store-select');
-                const selectedOption = select.options[select.selectedIndex];
-                const unit = selectedOption?.dataset?.unit || 'sat';
-                document.getElementById('amount-label').textContent = 'Amount (' + unit.toUpperCase() + ')';
+            const SUPPORTED_CURRENCIES = <?= json_encode($supportedCurrencies) ?>;
 
+            function isFiat(code) {
+                const c = (code || '').toUpperCase();
+                return !['SAT', 'SATS', 'MSAT', 'BTC'].includes(c);
+            }
+
+            function rebuildCurrencyOptions(mintUnit, defaultCurrency) {
+                const sel = document.getElementById('currency-select');
+                sel.innerHTML = '';
+                const seen = new Set();
+                const add = (code) => {
+                    const norm = code.toLowerCase() === 'sats' ? 'sat' : code;
+                    const key = norm.toLowerCase();
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    const opt = document.createElement('option');
+                    opt.value = norm;
+                    opt.textContent = norm.toUpperCase();
+                    sel.appendChild(opt);
+                };
+                add(mintUnit || 'sat');
+                SUPPORTED_CURRENCIES.forEach(add);
+                sel.value = defaultCurrency || mintUnit || 'sat';
+            }
+
+            function onStoreChange() {
+                const select = document.getElementById('store-select');
+                const opt = select.options[select.selectedIndex];
+                const unit = opt?.dataset?.unit || 'sat';
+                const def = opt?.dataset?.defaultCurrency || unit;
+                rebuildCurrencyOptions(unit, def);
+                updateAmountConstraints();
+            }
+
+            function updateAmountConstraints() {
+                const cur = document.getElementById('currency-select').value;
                 const amountInput = document.getElementById('amount-input');
-                if (unit === 'sat' || unit === 'msat') {
-                    amountInput.placeholder = '100';
-                    amountInput.min = '1';
-                    amountInput.step = '1';
-                } else {
+                if (isFiat(cur)) {
                     amountInput.placeholder = '1.00';
                     amountInput.min = '0.01';
                     amountInput.step = '0.01';
+                } else {
+                    amountInput.placeholder = '100';
+                    amountInput.min = '1';
+                    amountInput.step = '1';
                 }
             }
+
+            // Initialize empty (no store selected yet)
+            rebuildCurrencyOptions('sat', 'sat');
         </script>
         <?php endif; ?>
     </div>
@@ -260,6 +316,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     // Get store config
     $mintUrl = Config::getStoreMintUrl($storeId);
     $unit = Config::getStoreMintUnit($storeId);
+    $storeDefaultCurrency = Config::getStoreDefaultCurrency($storeId);
+
+    // Resolve `amount` (in mint smallest unit) from the user-supplied amount and currency.
+    // Three cases:
+    //   1. New form: ?currency=X&amount=Y (Y is in natural denomination, e.g. "10.00 USD")
+    //   2. Legacy callers: ?amount=Y with no currency (Y is already in mint smallest unit)
+    //   3. Form that left amount blank: $amountRaw is empty, fall through to show form
+    $amount = 0;
+    $conversionError = null;
+    if ($amountRaw !== '' && (float)$amountRaw > 0) {
+        try {
+            if ($requestCurrency !== '') {
+                $providers = Config::getStorePriceProviders($storeId);
+                $exchangeFee = Config::getStoreExchangeFee($storeId);
+                $amount = ExchangeRates::convertToMintUnit(
+                    $amountRaw,
+                    $requestCurrency,
+                    $unit,
+                    $exchangeFee,
+                    $providers['primary'],
+                    $providers['secondary']
+                );
+            } else {
+                // Legacy: treat as already in mint smallest unit
+                $amount = (int)$amountRaw;
+            }
+        } catch (Exception $e) {
+            $conversionError = $e->getMessage();
+            $amount = 0;
+        }
+    }
 
     if ($amount <= 0) {
         // Show form if no amount specified
@@ -329,15 +416,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 <body>
     <div class="card">
         <h1>Request Payment</h1>
+        <?php if ($conversionError): ?>
+        <div style="background: rgba(239,68,68,0.15); border:1px solid rgba(239,68,68,0.4); border-radius:8px; padding:0.75rem; margin-bottom:1rem; font-size:0.85rem; color:#fca5a5;">
+            Could not convert amount: <?= htmlspecialchars($conversionError) ?>
+        </div>
+        <?php endif; ?>
         <form method="GET">
             <input type="hidden" name="store_id" value="<?= htmlspecialchars($storeId) ?>">
+            <?php
+                // Build the currency option list: mint unit first, then any
+                // supported fiats not already represented.
+                $currencyOptions = [];
+                $seen = [];
+                $pushCur = function(string $code) use (&$currencyOptions, &$seen) {
+                    $norm = strtolower($code) === 'sats' ? 'sat' : $code;
+                    $key = strtolower($norm);
+                    if (isset($seen[$key])) return;
+                    $seen[$key] = true;
+                    $currencyOptions[] = $norm;
+                };
+                $pushCur($unit);
+                foreach ($supportedCurrencies as $c) $pushCur($c);
+                $selectedCurrency = $storeDefaultCurrency;
+                $isFiatSelected = !in_array(strtoupper($selectedCurrency), ['SAT', 'SATS', 'MSAT', 'BTC'], true);
+            ?>
             <div class="form-group">
-                <label>Amount (<?= htmlspecialchars(strtoupper($unit)) ?>)</label>
-                <input type="number" name="amount"
-                       placeholder="<?= $unit === 'sat' || $unit === 'msat' ? '100' : '1.00' ?>"
-                       min="<?= $unit === 'sat' || $unit === 'msat' ? '1' : '0.01' ?>"
-                       step="<?= $unit === 'sat' || $unit === 'msat' ? '1' : '0.01' ?>"
-                       required>
+                <label>Amount</label>
+                <div style="display:flex; gap:0.5rem;">
+                    <input type="number" name="amount" id="amount-input"
+                           placeholder="<?= $isFiatSelected ? '1.00' : '100' ?>"
+                           min="<?= $isFiatSelected ? '0.01' : '1' ?>"
+                           step="<?= $isFiatSelected ? '0.01' : '1' ?>"
+                           required style="flex:1;">
+                    <select name="currency" id="currency-select" onchange="updateAmountConstraints()" style="width:auto; padding:0.75rem 1rem; border:1px solid rgba(255,255,255,0.1); background:rgba(0,0,0,0.2); border-radius:12px; color:inherit;">
+                        <?php foreach ($currencyOptions as $cur): ?>
+                            <option value="<?= htmlspecialchars($cur) ?>" <?= strtolower($cur) === strtolower($selectedCurrency) ? 'selected' : '' ?>>
+                                <?= htmlspecialchars(strtoupper($cur)) ?>
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
             </div>
             <div class="form-group">
                 <label>Memo (optional)</label>
@@ -345,6 +463,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             </div>
             <button type="submit" class="btn">Generate Request</button>
         </form>
+        <script>
+            function updateAmountConstraints() {
+                const cur = document.getElementById('currency-select').value.toUpperCase();
+                const isFiat = !['SAT','SATS','MSAT','BTC'].includes(cur);
+                const a = document.getElementById('amount-input');
+                if (isFiat) { a.placeholder = '1.00'; a.min = '0.01'; a.step = '0.01'; }
+                else { a.placeholder = '100'; a.min = '1'; a.step = '1'; }
+            }
+        </script>
     </div>
 </body>
 </html>

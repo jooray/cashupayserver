@@ -161,12 +161,37 @@ if (isset($_GET['api'])) {
                 }
             }
 
+            // Convert balance to the store's default display currency (if fiat
+            // and different from the mint unit) so the dashboard can show a
+            // secondary line.
+            $defaultCurrency = Config::getStoreDefaultCurrency($storeId);
+            $balanceFiat = null;
+            $balanceFiatCurrency = null;
+            $defaultCurrencyUpper = strtoupper($defaultCurrency);
+            $mintUnitUpper = strtoupper($mintUnit);
+            $isDefaultFiat = !in_array($defaultCurrencyUpper, ['SAT', 'SATS', 'MSAT', 'BTC'], true);
+            if ($storeConfigured && $isDefaultFiat && $defaultCurrencyUpper !== $mintUnitUpper && $balanceInSats !== null) {
+                require_once __DIR__ . '/includes/rates.php';
+                try {
+                    $fiat = ExchangeRates::satsToFiat($balanceInSats, $defaultCurrency);
+                    if ($fiat !== null) {
+                        $balanceFiat = $fiat;
+                        $balanceFiatCurrency = $defaultCurrencyUpper;
+                    }
+                } catch (Exception $e) {
+                    error_log("Failed to convert balance to fiat: " . $e->getMessage());
+                }
+            }
+
             echo json_encode([
                 'storeId' => $storeId,
                 'storeName' => $store['name'] ?? 'Unknown',
                 'storeConfigured' => $storeConfigured,
                 'balance' => $balance,
                 'balanceInSats' => $balanceInSats,
+                'balanceFiat' => $balanceFiat,
+                'balanceFiatCurrency' => $balanceFiatCurrency,
+                'defaultCurrency' => $defaultCurrency,
                 'swapFee' => $swapFee,
                 'exportAvailable' => $exportAvailable,
                 'mintUnit' => $mintUnit,
@@ -506,6 +531,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 if (isset($_POST['price_provider_secondary'])) {
                     $updates['price_provider_secondary'] = $_POST['price_provider_secondary'];
+                }
+                if (isset($_POST['default_currency'])) {
+                    $supported = Config::getSupportedDisplayCurrencies();
+                    $value = $_POST['default_currency'];
+                    // Normalize: 'sat' lowercase, fiats uppercase
+                    $normalized = (strtolower($value) === 'sat' || strtolower($value) === 'sats')
+                        ? 'sat' : strtoupper($value);
+                    if (!in_array($normalized, $supported, true)) {
+                        // Allow the mint's own unit too (e.g. a USD-denominated mint)
+                        $store = Config::getStore($storeId);
+                        $mintUnit = strtolower($store['mint_unit'] ?? 'sat');
+                        if (strtolower($normalized) !== $mintUnit) {
+                            throw new Exception('Unsupported default currency');
+                        }
+                    }
+                    $updates['default_currency'] = $normalized;
                 }
 
                 Config::updateStore($storeId, $updates);
@@ -2308,6 +2349,7 @@ $isWp = Urls::isWordPress();
                     <div class="balance-label">Total Balance</div>
                     <div class="balance-amount" id="balance-amount">---</div>
                     <div class="balance-unit" id="balance-unit">sats</div>
+                    <div class="balance-fiat" id="balance-fiat" style="display:none; margin-top:0.5rem; color:#000; font-size:1rem;"></div>
                     <div class="balance-actions">
                         <button class="balance-btn" id="btn-withdraw">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2431,6 +2473,15 @@ $isWp = Urls::isWordPress();
                             <div class="card-title">Exchange Rate Settings</div>
                         </div>
                         <div class="card-body">
+                            <div class="form-group">
+                                <label class="form-label">Default Currency</label>
+                                <select class="form-input" id="default-currency">
+                                    <?php foreach (Config::getSupportedDisplayCurrencies() as $cur): ?>
+                                        <option value="<?= htmlspecialchars($cur) ?>"><?= htmlspecialchars(strtoupper($cur)) ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="form-help">Default unit for the Request page and dashboard balance. The mint still settles in its native unit (<span class="unit-label">SAT</span>); fiat amounts are converted at quote time.</p>
+                            </div>
                             <div class="form-group">
                                 <label class="form-label">Primary Rate Provider</label>
                                 <select class="form-input" id="price-provider-primary">
@@ -2683,8 +2734,13 @@ $isWp = Urls::isWordPress();
             <div id="request-form">
                 <div class="form-group">
                     <label class="form-label" id="request-amount-label">Amount</label>
-                    <input type="number" class="form-input" id="request-amount"
-                           placeholder="100" min="1" step="1">
+                    <div style="display:flex; gap:0.5rem;">
+                        <input type="number" class="form-input" id="request-amount"
+                               placeholder="100" min="1" step="1" style="flex:1;">
+                        <select class="form-input" id="request-currency"
+                                onchange="updateRequestAmountConstraints()"
+                                style="width:auto; flex:0;"></select>
+                    </div>
                 </div>
 
                 <div class="form-group">
@@ -3253,6 +3309,15 @@ $isWp = Urls::isWordPress();
                     formatAmount(dashboardData.balance ?? 0, mintUnit);
                 document.getElementById('balance-unit').textContent = unitLabel;
 
+                // Secondary fiat line (when default currency != mint unit and not sat)
+                const fiatEl = document.getElementById('balance-fiat');
+                if (dashboardData.balanceFiat && dashboardData.balanceFiatCurrency) {
+                    fiatEl.textContent = '≈ ' + dashboardData.balanceFiat + ' ' + dashboardData.balanceFiatCurrency;
+                    fiatEl.style.display = 'block';
+                } else {
+                    fiatEl.style.display = 'none';
+                }
+
                 // Show mint status warning if unreachable
                 const balanceLabel = document.querySelector('.balance-label');
                 if (dashboardData.mintUnreachable) {
@@ -3383,6 +3448,18 @@ $isWp = Urls::isWordPress();
                 document.getElementById('price-provider-primary').value = store.price_provider_primary || 'coingecko';
                 document.getElementById('price-provider-secondary').value = store.price_provider_secondary || 'binance';
                 document.getElementById('exchange-fee-percent').value = store.exchange_fee_percent || 0;
+
+                // Load default currency. If the store's mint_unit isn't in the
+                // standard list, inject it as an extra option so it stays selectable.
+                const defaultCurrencySelect = document.getElementById('default-currency');
+                const storeMintUnit = (store.mint_unit || 'sat');
+                if (![...defaultCurrencySelect.options].some(o => o.value.toLowerCase() === storeMintUnit.toLowerCase())) {
+                    const opt = document.createElement('option');
+                    opt.value = storeMintUnit;
+                    opt.textContent = storeMintUnit.toUpperCase();
+                    defaultCurrencySelect.appendChild(opt);
+                }
+                defaultCurrencySelect.value = store.default_currency || storeMintUnit || 'sat';
 
                 // Load API keys
                 loadStoreApiKeys();
@@ -3570,6 +3647,7 @@ $isWp = Urls::isWordPress();
 
         // API base URL for Greenfield API calls
         let API_BASE_URL = <?= json_encode(Urls::api()) ?>;
+        const SUPPORTED_CURRENCIES = <?= json_encode(Config::getSupportedDisplayCurrencies()) ?>;
 
         // Lightning routing fee buffer (same as auto-melt uses)
         const LN_FEE_BUFFER_PERCENT = 2; // 2%
@@ -4090,29 +4168,50 @@ $isWp = Urls::isWordPress();
             });
         }
 
-        // Update amount input based on selected store's mint unit
-        function updateAmountInputForStore(mintUnit) {
-            const amountLabel = document.getElementById('request-amount-label');
-            const amountInput = document.getElementById('request-amount');
-            const unit = (mintUnit || 'sat').toUpperCase();
+        // Rebuild the Request modal's currency <select> for a given store.
+        // Mint unit is always offered (so the merchant can request in the
+        // store's native unit), plus all supported display currencies.
+        function rebuildRequestCurrencyOptions(mintUnit, defaultCurrency) {
+            const sel = document.getElementById('request-currency');
+            sel.innerHTML = '';
+            const seen = new Set();
+            const add = (code) => {
+                const norm = code.toLowerCase() === 'sats' ? 'sat' : code;
+                const key = norm.toLowerCase();
+                if (seen.has(key)) return;
+                seen.add(key);
+                const opt = document.createElement('option');
+                opt.value = norm;
+                opt.textContent = norm.toUpperCase();
+                sel.appendChild(opt);
+            };
+            add(mintUnit || 'sat');
+            SUPPORTED_CURRENCIES.forEach(add);
+            sel.value = defaultCurrency || mintUnit || 'sat';
+        }
 
-            amountLabel.textContent = `Amount (${unit})`;
+        function updateRequestAmountConstraints() {
+            const cur = document.getElementById('request-currency').value || 'sat';
+            const isFiat = !['SAT', 'SATS', 'MSAT', 'BTC'].includes(cur.toUpperCase());
+            const a = document.getElementById('request-amount');
+            if (isFiat) { a.placeholder = '1.00'; a.min = '0.01'; a.step = '0.01'; }
+            else        { a.placeholder = '100';  a.min = '1';    a.step = '1';    }
+        }
 
-            if (mintUnit === 'sat' || mintUnit === 'msat') {
-                amountInput.placeholder = '100';
-                amountInput.min = '1';
-                amountInput.step = '1';
-            } else {
-                amountInput.placeholder = '1.00';
-                amountInput.min = '0.01';
-                amountInput.step = '0.01';
-            }
+        // Configure the Request modal for the currently-selected store.
+        function updateAmountInputForStore(store) {
+            const mintUnit = (typeof store === 'string') ? store : (store?.mint_unit || 'sat');
+            const defaultCurrency = (typeof store === 'string') ? mintUnit : (store?.default_currency || mintUnit);
+            document.getElementById('request-amount-label').textContent = 'Amount';
+            rebuildRequestCurrencyOptions(mintUnit, defaultCurrency);
+            updateRequestAmountConstraints();
         }
 
         async function handleGenerateRequest() {
             const storeId = currentStoreId;
             const amount = parseFloat(document.getElementById('request-amount').value);
             const memo = document.getElementById('request-memo').value;
+            const currency = document.getElementById('request-currency').value || 'sat';
 
             if (!storeId) {
                 showToast('Please select a store first', 'error');
@@ -4122,8 +4221,8 @@ $isWp = Urls::isWordPress();
             // Get store info from dashboardData
             const store = dashboardData?.stores?.find(s => s.id === storeId);
             const apiKey = store?.internalApiKey;
-            const mintUnit = store?.mint_unit || 'sat';
-            const minAmount = (mintUnit === 'sat' || mintUnit === 'msat') ? 1 : 0.01;
+            const isFiatRequest = !['SAT', 'SATS', 'MSAT', 'BTC'].includes(currency.toUpperCase());
+            const minAmount = isFiatRequest ? 0.01 : 1;
 
             if (!amount || amount < minAmount) {
                 showToast('Please enter an amount', 'error');
@@ -4136,12 +4235,13 @@ $isWp = Urls::isWordPress();
             }
 
             try {
-                // Use Greenfield API to create invoice
+                // Use Greenfield API to create invoice. The server converts the
+                // requested currency to the mint's unit at quote time.
                 const apiUrl = API_BASE_URL + '/api/v1/stores/' + encodeURIComponent(storeId) + '/invoices';
 
                 const invoiceData = {
                     amount: amount,
-                    currency: mintUnit,
+                    currency: currency,
                     checkout: {
                         redirectURL: window.location.href.split('?')[0], // Return to admin
                         redirectAutomatically: true
@@ -4212,10 +4312,11 @@ $isWp = Urls::isWordPress();
             const primaryProvider = document.getElementById('price-provider-primary').value;
             const secondaryProvider = document.getElementById('price-provider-secondary').value;
             const exchangeFee = document.getElementById('exchange-fee-percent').value;
+            const defaultCurrency = document.getElementById('default-currency').value;
 
             try {
                 const response = await postWithCsrf(adminUrl,
-                    `action=update_store&store_id=${encodeURIComponent(currentStoreId)}&price_provider_primary=${encodeURIComponent(primaryProvider)}&price_provider_secondary=${encodeURIComponent(secondaryProvider)}&exchange_fee_percent=${encodeURIComponent(exchangeFee)}`
+                    `action=update_store&store_id=${encodeURIComponent(currentStoreId)}&price_provider_primary=${encodeURIComponent(primaryProvider)}&price_provider_secondary=${encodeURIComponent(secondaryProvider)}&exchange_fee_percent=${encodeURIComponent(exchangeFee)}&default_currency=${encodeURIComponent(defaultCurrency)}`
                 );
 
                 const result = await response.json();
@@ -4930,10 +5031,10 @@ $isWp = Urls::isWordPress();
                 document.getElementById('request-amount').value = '';
                 document.getElementById('request-memo').value = '';
 
-                // Get current store's mint unit and update amount input
+                // Configure currency selector + amount constraints from the
+                // store's default currency (falls back to mint unit).
                 const store = dashboardData?.stores?.find(s => s.id === currentStoreId);
-                const mintUnit = store?.mint_unit || 'sat';
-                updateAmountInputForStore(mintUnit);
+                updateAmountInputForStore(store);
             }
 
             document.getElementById(id).classList.add('visible');
