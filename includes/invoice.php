@@ -12,6 +12,7 @@ require_once __DIR__ . '/rates.php';
 require_once __DIR__ . '/webhook_sender.php';
 require_once __DIR__ . '/urls.php';
 require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
+require_once __DIR__ . '/onchain/payments.php';
 
 use Cashu\Wallet;
 use Cashu\WalletStorage;
@@ -36,66 +37,79 @@ class Invoice {
             throw new Exception('Store not found');
         }
 
-        if (!Config::isStoreConfigured($storeId)) {
-            throw new Exception('Store not configured - mint and seed phrase required');
+        $cashuConfigured = Config::isStoreConfigured($storeId);
+        $onchainConfigured = !empty($store['onchain_xpub']);
+        if (!$cashuConfigured && !$onchainConfigured) {
+            throw new Exception(
+                'Store has no payment methods configured. Add a Cashu mint or an on-chain xpub.'
+            );
         }
 
-        $mintUrl = $store['mint_url'];
-        $mintUnit = $store['mint_unit'];
         $exchangeFee = (float)($store['exchange_fee_percent'] ?? 0);
         $primaryProvider = $store['price_provider_primary'] ?? 'coingecko';
         $secondaryProvider = $store['price_provider_secondary'] ?? 'binance';
 
-        // Convert amount to mint unit using bidirectional conversion
-        $amountInMintUnit = ExchangeRates::convertToMintUnit(
-            $amount,
-            $currency,
-            $mintUnit,
-            $exchangeFee,
-            $primaryProvider,
-            $secondaryProvider
-        );
-
-        // Get exchange rate for fiat currencies
+        // Get exchange rate for fiat currencies (used by both payment methods).
         $exchangeRate = null;
         if (!in_array(strtoupper($currency), ['SAT', 'SATS', 'BTC'])) {
             $exchangeRate = ExchangeRates::getBtcPrice($currency, $primaryProvider, $secondaryProvider);
         }
 
-        // Try primary mint first, then backup mints
-        $allMints = Config::getStoreAllMintUrls($storeId);
-        $lastError = null;
+        // ---- Cashu / Lightning path: try mint quote(s) if a mint is configured ----
         $quote = null;
         $usedMintUrl = null;
-
-        foreach ($allMints as $tryMintUrl) {
-            try {
-                $wallet = self::getWalletForStore($storeId, $tryMintUrl);
-                $quote = $wallet->requestMintQuote($amountInMintUnit);
-                $usedMintUrl = $tryMintUrl;
-                break; // Success!
-            } catch (Exception $e) {
-                $lastError = $e;
-                error_log("Mint quote failed for $tryMintUrl: " . $e->getMessage());
-                continue; // Try next mint
+        $amountInMintUnit = null;
+        if ($cashuConfigured) {
+            $mintUnit = $store['mint_unit'];
+            $amountInMintUnit = ExchangeRates::convertToMintUnit(
+                $amount, $currency, $mintUnit, $exchangeFee, $primaryProvider, $secondaryProvider
+            );
+            $allMints = Config::getStoreAllMintUrls($storeId);
+            $lastError = null;
+            foreach ($allMints as $tryMintUrl) {
+                try {
+                    $wallet = self::getWalletForStore($storeId, $tryMintUrl);
+                    $quote = $wallet->requestMintQuote($amountInMintUnit);
+                    $usedMintUrl = $tryMintUrl;
+                    break;
+                } catch (Exception $e) {
+                    $lastError = $e;
+                    error_log("Mint quote failed for $tryMintUrl: " . $e->getMessage());
+                    continue;
+                }
+            }
+            if ($quote === null && !$onchainConfigured) {
+                throw new Exception(
+                    'Failed to get mint quote from all configured mints. '
+                    . 'Last error: ' . ($lastError ? $lastError->getMessage() : 'Unknown')
+                );
             }
         }
 
-        if ($quote === null) {
-            throw new Exception(
-                'Failed to get mint quote from all configured mints. ' .
-                'Last error: ' . ($lastError ? $lastError->getMessage() : 'Unknown')
-            );
+        // ---- On-chain path: allocate a fresh address from the store's xpub ----
+        $onchainAddress = null;
+        $onchainIndex = null;
+        $onchainAmountSat = null;
+        $onchainCreatedTipHeight = null;
+        if ($onchainConfigured) {
+            $allocation = OnchainPayments::allocateAddress($storeId);
+            if ($allocation !== null) {
+                $onchainAddress = $allocation['address'];
+                $onchainIndex = $allocation['index'];
+                $onchainCreatedTipHeight = $allocation['tip_height'] ?? null;
+                $onchainAmountSat = ExchangeRates::convertToSats((string)$amount, $currency, 'sat');
+            }
         }
 
         // Calculate expiration
-        $expiration = $quote->expiry ?? (time() + Config::getInvoiceExpiration());
+        $expiration = ($quote && isset($quote->expiry))
+            ? $quote->expiry
+            : (time() + Config::getInvoiceExpiration());
 
         // Generate invoice ID
         $invoiceId = Database::generateId('inv');
         $now = Database::timestamp();
 
-        // Store invoice with mint URL used
         Database::insert('invoices', [
             'id' => $invoiceId,
             'store_id' => $storeId,
@@ -103,11 +117,15 @@ class Invoice {
             'additional_status' => 'None',
             'amount' => $amount,
             'currency' => $currency,
-            'amount_sats' => $amountInMintUnit, // Actually amount in mint's smallest unit
+            'amount_sats' => $amountInMintUnit,
             'exchange_rate' => $exchangeRate,
-            'quote_id' => $quote->quote,
-            'bolt11' => $quote->request,
+            'quote_id' => $quote ? $quote->quote : null,
+            'bolt11' => $quote ? $quote->request : null,
             'mint_url' => $usedMintUrl,
+            'onchain_address' => $onchainAddress,
+            'onchain_address_index' => $onchainIndex,
+            'onchain_amount_sat' => $onchainAmountSat,
+            'onchain_created_tip_height' => $onchainCreatedTipHeight,
             'metadata' => $metadata ? json_encode($metadata) : null,
             'checkout_config' => $checkout ? json_encode($checkout) : null,
             'created_at' => $now,
@@ -303,16 +321,20 @@ class Invoice {
             'checkoutLink' => Urls::payment($invoice['id']),
         ];
 
-        // Add Lightning payment info if available
+        // Aggregate payment methods (Lightning + on-chain, both optional).
+        $methods = [];
         if ($invoice['bolt11']) {
-            $result['checkout'] = [
-                'paymentMethods' => [
-                    'BTC-LightningNetwork' => [
-                        'paymentLink' => 'lightning:' . $invoice['bolt11'],
-                        'destination' => $invoice['bolt11'],
-                    ],
-                ],
+            $methods['BTC-LightningNetwork'] = [
+                'paymentLink' => 'lightning:' . $invoice['bolt11'],
+                'destination' => $invoice['bolt11'],
             ];
+        }
+        $onchain = OnchainPayments::formatPaymentMethod($invoice);
+        if ($onchain !== null) {
+            $methods['BTC-OnChain'] = $onchain;
+        }
+        if (!empty($methods)) {
+            $result['checkout'] = ['paymentMethods' => $methods];
         }
 
         // Include converted amount in mint unit
@@ -426,7 +448,7 @@ class Invoice {
      */
     public static function pollSingleQuote(string $invoiceId): void {
         $invoice = self::getById($invoiceId);
-        if (!$invoice || !$invoice['quote_id']) {
+        if (!$invoice) {
             return;
         }
 
@@ -435,7 +457,30 @@ class Invoice {
             return;
         }
 
-        // Check expiration (only for New invoices)
+        // Best-effort on-chain poll first — if the invoice has an on-chain
+        // address, this can transition state independent of any Cashu quote.
+        if (!empty($invoice['onchain_address'])) {
+            try {
+                OnchainPayments::pollInvoice($invoiceId);
+                $invoice = self::getById($invoiceId);
+                if (!$invoice || !in_array($invoice['status'], ['New', 'Processing'])) {
+                    return;
+                }
+            } catch (Throwable $e) {
+                error_log("on-chain poll failed for {$invoiceId}: " . $e->getMessage());
+            }
+        }
+
+        // No Cashu quote means nothing more to do here.
+        if (empty($invoice['quote_id'])) {
+            // Check expiration on on-chain-only invoices.
+            if ($invoice['status'] === 'New' && $invoice['expiration_time'] < time()) {
+                self::updateStatus($invoice['id'], 'Expired');
+            }
+            return;
+        }
+
+        // Check expiration (only for New invoices) for the Cashu side.
         if ($invoice['status'] === 'New' && $invoice['expiration_time'] < time()) {
             self::updateStatus($invoice['id'], 'Expired');
             return;

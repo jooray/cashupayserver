@@ -295,6 +295,81 @@ HTACCESS;
         if (!self::columnExists($pdo, 'invoices', 'last_polled_at')) {
             $pdo->exec("ALTER TABLE invoices ADD COLUMN last_polled_at INTEGER DEFAULT NULL");
         }
+        // On-chain Bitcoin payment support (per-store xpub + lifecycle state).
+        if (!self::columnExists($pdo, 'stores', 'onchain_xpub')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_xpub TEXT DEFAULT NULL");
+        }
+        if (!self::columnExists($pdo, 'stores', 'onchain_network')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_network TEXT NOT NULL DEFAULT 'mainnet'");
+        }
+        if (!self::columnExists($pdo, 'stores', 'onchain_address_type')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_address_type TEXT NOT NULL DEFAULT 'P2WPKH'");
+        }
+        if (!self::columnExists($pdo, 'stores', 'onchain_next_index')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_next_index INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!self::columnExists($pdo, 'stores', 'onchain_min_confs')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_min_confs INTEGER NOT NULL DEFAULT 1");
+        }
+        if (!self::columnExists($pdo, 'stores', 'onchain_confirm_timeout_sec')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_confirm_timeout_sec INTEGER NOT NULL DEFAULT 86400");
+        }
+        if (!self::columnExists($pdo, 'stores', 'onchain_provider')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_provider TEXT NOT NULL DEFAULT 'esplora'");
+        }
+        if (!self::columnExists($pdo, 'stores', 'onchain_provider_url')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_provider_url TEXT DEFAULT NULL");
+        }
+
+        if (!self::columnExists($pdo, 'invoices', 'onchain_address')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN onchain_address TEXT DEFAULT NULL");
+        }
+        if (!self::columnExists($pdo, 'invoices', 'onchain_address_index')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN onchain_address_index INTEGER DEFAULT NULL");
+        }
+        if (!self::columnExists($pdo, 'invoices', 'onchain_amount_sat')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN onchain_amount_sat INTEGER DEFAULT NULL");
+        }
+        if (!self::columnExists($pdo, 'invoices', 'onchain_first_seen_at')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN onchain_first_seen_at INTEGER DEFAULT NULL");
+        }
+        // Chain tip height at invoice creation. Used by the poller to discard
+        // historical UTXOs on a re-used address (txs confirmed BEFORE the
+        // invoice existed). NULL on legacy rows → no filtering applied.
+        if (!self::columnExists($pdo, 'invoices', 'onchain_created_tip_height')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN onchain_created_tip_height INTEGER DEFAULT NULL");
+        }
+
+        if (!self::tableExists($pdo, 'onchain_xpub_state')) {
+            $pdo->exec("
+                CREATE TABLE onchain_xpub_state (
+                    xpub_hash TEXT PRIMARY KEY,
+                    next_index INTEGER NOT NULL DEFAULT 0,
+                    updated_at INTEGER NOT NULL DEFAULT 0
+                );
+            ");
+        }
+
+        if (!self::tableExists($pdo, 'onchain_payments')) {
+            $pdo->exec("
+                CREATE TABLE onchain_payments (
+                    id TEXT PRIMARY KEY,
+                    invoice_id TEXT NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
+                    txid TEXT NOT NULL,
+                    vout INTEGER NOT NULL,
+                    amount_sat INTEGER NOT NULL,
+                    confirmations INTEGER NOT NULL DEFAULT 0,
+                    block_height INTEGER,
+                    first_seen_at INTEGER NOT NULL,
+                    last_seen_at INTEGER NOT NULL,
+                    UNIQUE(txid, vout)
+                );
+            ");
+            $pdo->exec("CREATE INDEX idx_onchain_payments_invoice ON onchain_payments(invoice_id);");
+        }
+        if (!self::indexExists($pdo, 'idx_invoices_onchain_address')) {
+            $pdo->exec("CREATE INDEX idx_invoices_onchain_address ON invoices(onchain_address) WHERE onchain_address IS NOT NULL;");
+        }
     }
 
     private static function columnExists(\PDO $pdo, string $table, string $column): bool {
@@ -305,6 +380,22 @@ HTACCESS;
             }
         }
         return false;
+    }
+
+    private static function tableExists(\PDO $pdo, string $table): bool {
+        $stmt = $pdo->prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?"
+        );
+        $stmt->execute([$table]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    private static function indexExists(\PDO $pdo, string $name): bool {
+        $stmt = $pdo->prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?"
+        );
+        $stmt->execute([$name]);
+        return $stmt->fetchColumn() !== false;
     }
 
     /**

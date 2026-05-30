@@ -255,7 +255,11 @@ class Config {
     public static function updateStore(string $storeId, array $data): void {
         $allowed = [
             'name', 'mint_url', 'mint_unit', 'seed_phrase',
-            'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary'
+            'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary',
+            // On-chain Bitcoin payment settings
+            'onchain_xpub', 'onchain_network', 'onchain_address_type',
+            'onchain_next_index', 'onchain_min_confs', 'onchain_confirm_timeout_sec',
+            'onchain_provider', 'onchain_provider_url',
         ];
         $updateData = array_intersect_key($data, array_flip($allowed));
 

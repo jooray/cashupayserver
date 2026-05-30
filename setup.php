@@ -58,6 +58,34 @@ $error = null;
 $success = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Handle AJAX action for on-chain xpub validation + preview.
+    if (isset($_POST['action']) && $_POST['action'] === 'validate_xpub') {
+        require_once __DIR__ . '/includes/onchain/wallet.php';
+        header('Content-Type: application/json');
+        $xpub = trim($_POST['xpub'] ?? '');
+        $network = $_POST['network'] ?? 'mainnet';
+        $type = $_POST['address_type'] ?? 'P2WPKH';
+        $check = OnchainWallet::validateXpub($xpub, $network, $type);
+        $preview = [];
+        if ($check['valid']) {
+            try {
+                $preview = OnchainWallet::deriveFirstN($xpub, $type, $network, 3);
+            } catch (Throwable $e) {
+                $check['valid'] = false;
+                $check['error'] = $e->getMessage();
+            }
+        }
+        echo json_encode([
+            'valid' => $check['valid'],
+            'error' => $check['error'],
+            'warnings' => $check['warnings'],
+            'inferredType' => $check['inferredType'],
+            'inferredNetwork' => $check['inferredNetwork'],
+            'preview' => $preview,
+        ]);
+        exit;
+    }
+
     // Handle AJAX action for expiry testing
     if (isset($_POST['action']) && $_POST['action'] === 'test_mint_expiry') {
         header('Content-Type: application/json');
@@ -263,17 +291,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     unset($_SESSION['temp_seed']);
 
-                    // For add_store mode, redirect back to admin with success
-                    if ($mode === 'add_store') {
-                        $createdStoreId = $storeId;
-                        unset($_SESSION['setup_store_id']);
-                        header('Location: ' . Urls::admin() . '?store_created=' . urlencode($createdStoreId));
-                        exit;
-                    }
-
-                    Config::set('setup_complete', true);
-                    $step = 7;
+                    // After confirming the Cashu seed, offer the optional
+                    // on-chain Bitcoin payment configuration before finishing.
+                    $step = 8;
                 }
+                break;
+
+            case 8: // Optional: configure on-chain Bitcoin payments
+                $storeId = $_SESSION['setup_store_id'] ?? null;
+                if (!$storeId) {
+                    throw new Exception('Store not found. Please restart setup.');
+                }
+                $onchainAction = $_POST['onchain_action'] ?? '';
+                if ($onchainAction === 'skip') {
+                    // user chose to add it later from admin
+                } elseif ($onchainAction === 'save') {
+                    $xpub = trim($_POST['onchain_xpub'] ?? '');
+                    $network = $_POST['onchain_network'] ?? 'mainnet';
+                    $type = $_POST['onchain_address_type'] ?? 'P2WPKH';
+                    $minConfs = max(0, (int)($_POST['onchain_min_confs'] ?? 1));
+                    $providerUrl = trim($_POST['onchain_provider_url'] ?? '');
+
+                    require_once __DIR__ . '/includes/onchain/wallet.php';
+                    $check = OnchainWallet::validateXpub($xpub, $network, $type);
+                    if (!$check['valid']) {
+                        throw new Exception($check['error'] ?: 'Invalid xpub');
+                    }
+                    Config::updateStore($storeId, [
+                        'onchain_xpub' => $xpub,
+                        'onchain_network' => $network,
+                        'onchain_address_type' => $type,
+                        'onchain_min_confs' => $minConfs,
+                        'onchain_provider_url' => $providerUrl ?: null,
+                    ]);
+                } else {
+                    // GET landing on step 8 — fall through to render the form.
+                    break;
+                }
+
+                // Either save+skip from here funnels to completion/add_store handler.
+                if ($mode === 'add_store') {
+                    $createdStoreId = $storeId;
+                    unset($_SESSION['setup_store_id']);
+                    header('Location: ' . Urls::admin() . '?store_created=' . urlencode($createdStoreId));
+                    exit;
+                }
+                Config::set('setup_complete', true);
+                $step = 7;
                 break;
         }
     } catch (Exception $e) {
@@ -1275,6 +1339,123 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         </form>
                     </details>
                 <?php endif; ?>
+
+            <?php elseif ($step === 8): ?>
+                <!-- Step 8: Optional on-chain Bitcoin payments -->
+                <h2 style="margin-bottom: 0.5rem;">On-chain Bitcoin payments (optional)</h2>
+                <p style="color: #a0aec0; margin-bottom: 1.25rem; font-size: 0.9rem;">
+                    Accept direct Bitcoin transactions in addition to Lightning.
+                    You can skip this step now and configure it later from Admin.
+                    Provide an extended public key (xpub / zpub / vpub / etc.) from your wallet
+                    &mdash; the server will derive a fresh receive address per invoice.
+                    The key will be automatically validated for the chosen network and address type.
+                </p>
+
+                <form id="onchain-form" method="POST" action="<?= htmlspecialchars(Urls::setup()) ?>">
+                    <input type="hidden" name="step" value="8">
+                    <input type="hidden" name="onchain_action" value="save">
+
+                    <div class="form-group">
+                        <label for="onchain_xpub">Extended public key (xpub):</label>
+                        <textarea id="onchain_xpub" name="onchain_xpub" rows="2"
+                                  style="width: 100%; font-family: monospace; font-size: 0.85rem;"
+                                  placeholder="xpub6CUGRUonZ... or zpub6rFR7y4Q2... or vpub5SLqN2bL...">
+                        </textarea>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="onchain_network">Network:</label>
+                        <select id="onchain_network" name="onchain_network">
+                            <option value="mainnet">mainnet</option>
+                            <option value="testnet">testnet</option>
+                            <option value="signet">signet</option>
+                            <option value="regtest">regtest</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="onchain_address_type">Address type:</label>
+                        <select id="onchain_address_type" name="onchain_address_type">
+                            <option value="P2WPKH">P2WPKH (native segwit, recommended)</option>
+                            <option value="P2SH-P2WPKH">P2SH-P2WPKH (wrapped segwit, legacy compat)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="onchain_min_confs">Required confirmations (0 = accept zero-conf):</label>
+                        <input type="number" id="onchain_min_confs" name="onchain_min_confs" min="0" max="100" value="1">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="onchain_provider_url">Provider URL (optional &mdash; leave blank for default mempool.space):</label>
+                        <input type="text" id="onchain_provider_url" name="onchain_provider_url"
+                               placeholder="https://mempool.space/api">
+                    </div>
+
+                    <div id="onchain-validation" style="display:none; margin: 1rem 0; padding: 0.75rem; border-radius: 6px;"></div>
+
+                    <button type="button" class="btn btn-secondary" id="onchain-validate-btn"
+                            style="width: 100%; margin-bottom: 0.5rem;">
+                        Validate xpub &amp; preview first 3 addresses
+                    </button>
+
+                    <button type="submit" class="btn" id="onchain-save-btn" style="width: 100%;" disabled>
+                        Save and continue
+                    </button>
+                </form>
+
+                <form method="POST" action="<?= htmlspecialchars(Urls::setup()) ?>" style="margin-top: 0.75rem;">
+                    <input type="hidden" name="step" value="8">
+                    <input type="hidden" name="onchain_action" value="skip">
+                    <button type="submit" class="btn btn-secondary" style="width: 100%;">
+                        Skip for now (configure later in Admin)
+                    </button>
+                </form>
+
+                <script>
+                (function () {
+                    const validateBtn = document.getElementById('onchain-validate-btn');
+                    const saveBtn = document.getElementById('onchain-save-btn');
+                    const box = document.getElementById('onchain-validation');
+                    validateBtn.addEventListener('click', async () => {
+                        const xpub = document.getElementById('onchain_xpub').value.trim();
+                        const network = document.getElementById('onchain_network').value;
+                        const type = document.getElementById('onchain_address_type').value;
+                        if (!xpub) {
+                            box.style.display = 'block';
+                            box.style.background = 'rgba(245, 101, 101, 0.15)';
+                            box.style.border = '1px solid rgba(245, 101, 101, 0.3)';
+                            box.textContent = 'Paste an xpub first.';
+                            saveBtn.disabled = true;
+                            return;
+                        }
+                        const body = new FormData();
+                        body.append('action', 'validate_xpub');
+                        body.append('xpub', xpub);
+                        body.append('network', network);
+                        body.append('address_type', type);
+                        const resp = await fetch(<?= json_encode(Urls::setup()) ?>, { method: 'POST', body });
+                        const data = await resp.json();
+                        box.style.display = 'block';
+                        if (!data.valid) {
+                            box.style.background = 'rgba(245, 101, 101, 0.15)';
+                            box.style.border = '1px solid rgba(245, 101, 101, 0.3)';
+                            box.innerHTML = '<strong>Invalid:</strong> ' + (data.error || 'unknown error');
+                            saveBtn.disabled = true;
+                            return;
+                        }
+                        let html = '<strong>Valid.</strong> Verify these match your wallet\'s first 3 receive addresses:<br>';
+                        html += '<pre style="margin:0.5rem 0 0; font-size:0.85rem;">' + data.preview.map((a, i) => 'm/0/' + i + ' = ' + a).join('\n') + '</pre>';
+                        (data.warnings || []).forEach(w => {
+                            html += '<div style="margin-top:0.5rem; color:#f6ad55;">&#9888; ' + w + '</div>';
+                        });
+                        box.style.background = 'rgba(72, 187, 120, 0.1)';
+                        box.style.border = '1px solid rgba(72, 187, 120, 0.3)';
+                        box.innerHTML = html;
+                        saveBtn.disabled = false;
+                    });
+                })();
+                </script>
 
             <?php elseif ($step === 7): ?>
                 <!-- Step 7: Complete -->

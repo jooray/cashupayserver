@@ -18,6 +18,7 @@ require_once __DIR__ . '/includes/invoice.php';
 require_once __DIR__ . '/includes/lightning_address.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/background.php';
+require_once __DIR__ . '/includes/onchain/payments.php';
 
 // Check if setup is complete
 if (!Database::isInitialized() || !Config::isSetupComplete()) {
@@ -96,6 +97,24 @@ try {
     $results['tasks']['expire_invoices'] = "expired {$expired} invoices";
 } catch (Exception $e) {
     $results['tasks']['expire_invoices'] = 'error: ' . $e->getMessage();
+}
+
+// Task 4b: Poll on-chain payments for any invoices with onchain_address set.
+// Same batched + rate-limited pattern as the Cashu quote poller. Provider
+// failures (network, rate-limit) are caught per-invoice; the overall task
+// only fails if pollPending() itself throws.
+try {
+    $onchainResults = OnchainPayments::pollPending(60, 20);
+    $polled = count($onchainResults);
+    $errored = 0;
+    foreach ($onchainResults as $r) {
+        if (isset($r['error'])) {
+            $errored++;
+        }
+    }
+    $results['tasks']['poll_onchain'] = "polled {$polled} invoice(s)" . ($errored ? ", {$errored} errored" : '');
+} catch (Exception $e) {
+    $results['tasks']['poll_onchain'] = 'error: ' . $e->getMessage();
 }
 
 // Task 5: C1 - Sync proof states with mint (if not synced recently)

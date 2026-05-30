@@ -253,6 +253,39 @@ $baseUrl = Config::getBaseUrl();
             word-break: break-all;
         }
 
+        /* Lightning <-> on-chain method tabs (shown only when both methods are
+           configured for the invoice). */
+        .method-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin: 0 0 1rem 0;
+            background: rgba(0, 0, 0, 0.25);
+            border-radius: 12px;
+            padding: 0.25rem;
+        }
+        .method-tab {
+            flex: 1;
+            background: transparent;
+            color: var(--text-secondary);
+            border: none;
+            padding: 0.6rem 0.75rem;
+            border-radius: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.15s, color 0.15s;
+        }
+        .method-tab.active {
+            background: var(--accent);
+            color: var(--text-primary);
+        }
+        .method-tab:hover:not(.active) {
+            color: var(--text-primary);
+        }
+        .method-block.hidden {
+            display: none !important;
+        }
+
         .invoice-input:hover {
             border-color: var(--accent);
         }
@@ -383,6 +416,21 @@ $baseUrl = Config::getBaseUrl();
             <div class="logo">&#9889;</div>
             <div class="merchant-name"><?= htmlspecialchars($storeName) ?></div>
 
+            <?php
+            $hasLightning = !empty($invoice['bolt11']);
+            $hasOnchain = !empty($invoice['onchain_address']);
+            $onchainSat = (int)($invoice['onchain_amount_sat'] ?? 0);
+            $onchainBtc = $onchainSat > 0
+                ? rtrim(rtrim(bcdiv((string)$onchainSat, '100000000', 8), '0'), '.')
+                : '0';
+            if ($onchainBtc === '') { $onchainBtc = '0'; }
+            $bip21 = $hasOnchain
+                ? 'bitcoin:' . $invoice['onchain_address'] . '?amount=' . $onchainBtc
+                : '';
+            $shortOnchainAddr = $hasOnchain
+                ? htmlspecialchars($invoice['onchain_address'])
+                : '';
+            ?>
             <div id="payment-pending" class="<?= $invoice['status'] !== 'New' ? 'hidden' : '' ?>">
                 <div class="amount"><?= htmlspecialchars($displayAmount) ?></div>
 
@@ -391,26 +439,60 @@ $baseUrl = Config::getBaseUrl();
                     Waiting for payment
                 </div>
 
-                <div class="qr-container" id="qr-code"></div>
-
-                <div class="invoice-input" id="invoice-text" onclick="copyInvoice()">
-                    <?= htmlspecialchars(substr($invoice['bolt11'], 0, 40) . '...' . substr($invoice['bolt11'], -10)) ?>
+                <?php if ($hasLightning && $hasOnchain): ?>
+                <div class="method-tabs" role="tablist">
+                    <button type="button" class="method-tab active" data-method="lightning" role="tab">Lightning</button>
+                    <button type="button" class="method-tab" data-method="onchain" role="tab">On-chain</button>
                 </div>
+                <?php endif; ?>
 
-                <a href="lightning:<?= htmlspecialchars($invoice['bolt11']) ?>" class="btn">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
-                    </svg>
-                    Open in Wallet
-                </a>
+                <?php if ($hasLightning): ?>
+                <div class="method-block" data-method-block="lightning">
+                    <div class="qr-container" id="qr-lightning"></div>
+                    <div class="invoice-input" data-copy="<?= htmlspecialchars($invoice['bolt11']) ?>">
+                        <?= htmlspecialchars(substr($invoice['bolt11'], 0, 40) . '...' . substr($invoice['bolt11'], -10)) ?>
+                    </div>
+                    <a href="lightning:<?= htmlspecialchars($invoice['bolt11']) ?>" class="btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                        </svg>
+                        Open in Wallet
+                    </a>
+                    <button type="button" class="btn btn-secondary" data-copy="<?= htmlspecialchars($invoice['bolt11']) ?>">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        Copy Invoice
+                    </button>
+                </div>
+                <?php endif; ?>
 
-                <button class="btn btn-secondary" onclick="copyInvoice()">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                    Copy Invoice
-                </button>
+                <?php if ($hasOnchain): ?>
+                <div class="method-block <?= $hasLightning ? 'hidden' : '' ?>" data-method-block="onchain">
+                    <div class="qr-container" id="qr-onchain"></div>
+                    <div class="invoice-input" data-copy="<?= htmlspecialchars($invoice['onchain_address']) ?>">
+                        <?= $shortOnchainAddr ?>
+                        <div style="margin-top:.35rem;font-size:.85rem;color:var(--text-secondary)">
+                            <?= number_format($onchainSat) ?> sat
+                        </div>
+                    </div>
+                    <a href="<?= htmlspecialchars($bip21) ?>" class="btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="12" r="10"></circle>
+                            <path d="M9.5 8h4a2.5 2.5 0 0 1 0 5h-4v-5zm0 5h4.5a2.5 2.5 0 0 1 0 5h-4.5v-5z"></path>
+                        </svg>
+                        Open in Wallet
+                    </a>
+                    <button type="button" class="btn btn-secondary" data-copy="<?= htmlspecialchars($invoice['onchain_address']) ?>">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        Copy Address
+                    </button>
+                </div>
+                <?php endif; ?>
 
                 <div class="timer" id="timer"></div>
             </div>
@@ -467,41 +549,78 @@ $baseUrl = Config::getBaseUrl();
     <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
     <script>
         const invoice = <?= json_encode($invoice['bolt11']) ?>;
+        const onchainAddress = <?= json_encode($invoice['onchain_address'] ?? null) ?>;
+        const onchainBip21 = <?= json_encode($bip21 ?? '') ?>;
         const invoiceId = <?= json_encode($invoiceId) ?>;
         const expirationTime = <?= (int)$invoice['expiration_time'] ?>;
         const redirectUrl = <?= json_encode($redirectUrl) ?>;
         const redirectAuto = <?= json_encode($redirectAuto) ?>;
         let currentStatus = <?= json_encode($invoice['status']) ?>;
 
-        // Generate QR code with lightning: prefix
-        if (invoice && currentStatus === 'New') {
-            const qrData = 'lightning:' + invoice.toUpperCase();
-            if (typeof QRious !== 'undefined') {
-                const canvas = document.createElement('canvas');
-                document.getElementById('qr-code').appendChild(canvas);
-                new QRious({
-                    element: canvas,
-                    value: qrData,
-                    size: 220,
-                    backgroundAlpha: 1,
-                    foreground: '#000000',
-                    background: '#ffffff',
-                    level: 'M'
-                });
-            } else {
-                console.error('QRious library not loaded');
-                document.getElementById('qr-code').innerHTML = '<p style="color:#666;padding:2rem;">QR code failed to load</p>';
+        function renderQR(targetId, data) {
+            const target = document.getElementById(targetId);
+            if (!target) return;
+            target.innerHTML = '';
+            if (typeof QRious === 'undefined') {
+                target.innerHTML = '<p style="color:#666;padding:2rem;">QR code failed to load</p>';
+                return;
             }
+            const canvas = document.createElement('canvas');
+            target.appendChild(canvas);
+            new QRious({
+                element: canvas, value: data, size: 220,
+                backgroundAlpha: 1, foreground: '#000000', background: '#ffffff', level: 'M',
+            });
         }
 
-        // Copy invoice to clipboard
-        function copyInvoice() {
-            navigator.clipboard.writeText(invoice).then(() => {
+        if (currentStatus === 'New') {
+            if (invoice) renderQR('qr-lightning', 'lightning:' + invoice.toUpperCase());
+            if (onchainBip21) renderQR('qr-onchain', onchainBip21);
+        }
+
+        // Tab switching between Lightning and on-chain payment methods.
+        document.querySelectorAll('.method-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                const method = tab.dataset.method;
+                document.querySelectorAll('.method-tab').forEach(t => t.classList.toggle('active', t === tab));
+                document.querySelectorAll('[data-method-block]').forEach(block => {
+                    block.classList.toggle('hidden', block.dataset.methodBlock !== method);
+                });
+            });
+        });
+
+        // Copy any string to clipboard. Falls back to a hidden textarea + execCommand
+        // if the page isn't a secure context (clipboard API requires HTTPS or localhost).
+        function copyText(value) {
+            if (!value) return;
+            const showToast = () => {
                 const toast = document.getElementById('copy-toast');
                 toast.classList.add('show');
                 setTimeout(() => toast.classList.remove('show'), 2000);
-            });
+            };
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(value).then(showToast).catch(() => fallback(value));
+            } else {
+                fallback(value);
+            }
+            function fallback(text) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.position = 'fixed'; ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                try { document.execCommand('copy'); showToast(); }
+                catch (e) { console.error('copy failed', e); }
+                document.body.removeChild(ta);
+            }
         }
+        // Attach copy handlers to any element with data-copy="...".
+        document.querySelectorAll('[data-copy]').forEach(el => {
+            el.addEventListener('click', () => copyText(el.dataset.copy));
+            el.style.cursor = 'pointer';
+        });
+        // Backwards-compat alias for any handlers that still reference copyInvoice.
+        function copyInvoice() { copyText(invoice); }
 
         // Update timer
         function updateTimer() {
