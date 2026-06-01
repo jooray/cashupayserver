@@ -58,6 +58,9 @@ $results = [
     'tasks' => [],
 ];
 
+// Keep an operational heartbeat for admin warnings and health checks.
+Config::set('last_cron_run', $results['timestamp']);
+
 // Task 1: Poll pending quotes
 try {
     Invoice::pollPendingQuotes();
