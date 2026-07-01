@@ -140,6 +140,16 @@ try {
     $results['tasks']['recover_orphaned'] = 'error: ' . $e->getMessage();
 }
 
+// Task 6b: Recover invoices marked Expired locally but actually paid at the mint
+// (late payment / cron down at expiry), within the grace window. Prevents fund loss.
+try {
+    $recoveredExpired = Invoice::recoverExpiredPaidInvoices();
+    $count = count($recoveredExpired);
+    $results['tasks']['recover_expired_paid'] = $count > 0 ? "recovered {$count}" : 'none';
+} catch (Exception $e) {
+    $results['tasks']['recover_expired_paid'] = 'error: ' . $e->getMessage();
+}
+
 // Task 7: H3 - Auto-expire very old invoices (older than 30 days)
 try {
     $veryOld = Database::query(

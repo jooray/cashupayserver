@@ -20,6 +20,58 @@ use Cashu\ProofState;
 
 class Invoice {
     /**
+     * Seconds after an invoice's expiry during which we keep re-checking the mint for a
+     * late payment (a quote paid in the last seconds, or while cron was down). A quote
+     * paid within this window is still minted and settled instead of being lost.
+     */
+    const EXPIRY_RECOVERY_GRACE = 259200; // 72h
+
+    /** Cooldown before a stuck 'Processing' invoice may be re-claimed for minting. */
+    const MINT_RETRY_COOLDOWN = 120; // 2 min
+
+    /**
+     * Atomically claim an invoice for minting so that concurrent pollers (payment page,
+     * API GET, cron) cannot both call mint() for the same quote. Returns true only for the
+     * single caller that wins the claim. See FABLE-CASHUPAYSERVER-AUDIT (C3).
+     */
+    private static function claimForMinting(string $invoiceId): bool {
+        $now = time();
+        // Claim a fresh (New) or recovered (Expired-but-paid) invoice.
+        $claimed = Database::update(
+            'invoices',
+            ['status' => 'Processing', 'processing_since' => $now],
+            "id = ? AND status IN ('New', 'Expired')",
+            [$invoiceId]
+        );
+        if ($claimed === 1) {
+            return true;
+        }
+        // Re-claim a Processing invoice whose previous attempt appears to have died.
+        $claimed = Database::update(
+            'invoices',
+            ['processing_since' => $now],
+            "id = ? AND status = 'Processing' AND (processing_since IS NULL OR processing_since < ?)",
+            [$invoiceId, $now - self::MINT_RETRY_COOLDOWN]
+        );
+        return $claimed === 1;
+    }
+
+    /**
+     * Atomically transition an invoice to Settled exactly once. Returns true only if this
+     * call performed the transition (so the caller fires the webhook once, avoiding
+     * duplicate InvoiceSettled events under races).
+     */
+    private static function markSettledOnce(string $invoiceId): bool {
+        $changed = Database::update(
+            'invoices',
+            ['status' => 'Settled'],
+            "id = ? AND status != 'Settled'",
+            [$invoiceId]
+        );
+        return $changed === 1;
+    }
+
+    /**
      * Create a new invoice
      *
      * Uses per-store mint configuration and supports multi-mint fallback.
@@ -211,11 +263,15 @@ class Invoice {
         // - Not recently polled (respects minInterval)
         // - Ordered by last_polled_at (NULL first = never polled)
         // - Limited batch size to avoid hammering mint
+        // Poll New invoices that aren't expired, PLUS any invoice stuck in Processing
+        // (its mint() may have failed transiently and needs to be re-driven). Without the
+        // Processing arm, a paid-but-unminted invoice could sit forever waiting for a page
+        // load. See FABLE-CASHUPAYSERVER-AUDIT (C5).
         $pendingInvoices = Database::fetchAll(
             "SELECT * FROM invoices
-             WHERE status = 'New'
+             WHERE status IN ('New', 'Processing')
              AND quote_id IS NOT NULL
-             AND expiration_time > ?
+             AND (status = 'Processing' OR expiration_time > ?)
              AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
              ORDER BY
                  CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
@@ -256,12 +312,17 @@ class Invoice {
      * Mint tokens and store proofs
      */
     private static function mintAndStoreTokens(array $invoice, Wallet $wallet): void {
+        // Atomic claim: only one worker mints a given quote. Prevents double-mint and the
+        // pending-op corruption it can cause. See FABLE-CASHUPAYSERVER-AUDIT (C3).
+        if (!self::claimForMinting($invoice['id'])) {
+            return; // another worker owns this mint (or it's not claimable)
+        }
+
         self::clearWebhookQueue();
 
-        // Mark as Processing BEFORE minting
-        Database::update('invoices', ['status' => 'Processing'], 'id = ?', [$invoice['id']]);
-
-        // Mint tokens - library stores proofs in cashu_proofs with quote_id
+        // Mint tokens - library stores proofs in cashu_proofs with quote_id.
+        // Proofs are persisted by the library BEFORE this returns; a crash here is
+        // recovered by recoverOrphanedInvoices() on the next cron tick.
         $proofs = $wallet->mint($invoice['quote_id'], $invoice['amount_sats']);
 
         // Update invoice status in a transaction
@@ -270,13 +331,17 @@ class Invoice {
         try {
             self::queueWebhook($invoice['store_id'], 'InvoiceReceivedPayment', $invoice);
 
-            Database::update('invoices', ['status' => 'Settled'], 'id = ?', [$invoice['id']]);
-            $updatedInvoice = self::getById($invoice['id']);
-            self::queueWebhook($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
+            $settled = self::markSettledOnce($invoice['id']);
 
             Database::commit();
 
-            self::flushWebhookQueue();
+            if ($settled) {
+                $updatedInvoice = self::getById($invoice['id']);
+                self::queueWebhook($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
+                self::flushWebhookQueue();
+            } else {
+                self::clearWebhookQueue();
+            }
         } catch (Exception $e) {
             Database::rollback();
             self::clearWebhookQueue();
@@ -470,22 +535,25 @@ class Invoice {
         if ($wallet->hasStorage()) {
             $proofs = $wallet->getStorage()->getProofsByQuoteId($invoice['quote_id']);
             if (!empty($proofs)) {
-                Database::beginTransaction();
-                try {
-                    Database::update('invoices', ['status' => 'Settled'], 'id = ?', [$invoice['id']]);
-                    Database::commit();
-
+                // Proofs already exist for this quote — just settle (once).
+                if (self::markSettledOnce($invoice['id'])) {
                     $updatedInvoice = self::getById($invoice['id']);
                     WebhookSender::fireEvent($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
-                    return;
-                } catch (Exception $e) {
-                    Database::rollback();
-                    throw $e;
                 }
+                return;
             }
         }
 
-        error_log("CashuPayServer: ISSUED quote {$invoice['quote_id']} has no proofs in storage - invoice {$invoice['id']}");
+        // ISSUED at the mint but no proofs locally: the mint() call was interrupted after
+        // the mint signed but before proofs were stored. Retry mint() — the library's
+        // pending-op journal re-sends identical outputs and recovers the signatures (NUT-09
+        // restore inside mint retry). See FABLE-CASHUPAYSERVER-AUDIT (C-REC-1).
+        error_log("CashuPayServer: ISSUED quote {$invoice['quote_id']} has no proofs - retrying mint for invoice {$invoice['id']}");
+        try {
+            self::mintAndStoreTokens($invoice, $wallet);
+        } catch (Exception $e) {
+            error_log("CashuPayServer: mint retry for ISSUED quote {$invoice['quote_id']} failed: " . $e->getMessage());
+        }
     }
 
     // =========================================================================
@@ -493,7 +561,11 @@ class Invoice {
     // =========================================================================
 
     /**
-     * Recover orphaned invoices stuck in Processing state
+     * Recover orphaned invoices stuck in Processing state.
+     *
+     * If proofs already exist for the quote, settle. Otherwise ask the mint: if the quote
+     * is PAID/ISSUED, re-drive mint() (recovers a mint interrupted after the mint signed).
+     * See FABLE-CASHUPAYSERVER-AUDIT (C5, C-REC-1).
      */
     public static function recoverOrphanedInvoices(): array {
         $recovered = [];
@@ -505,21 +577,87 @@ class Invoice {
 
         foreach ($stuck as $invoice) {
             try {
+                if (!$invoice['quote_id']) {
+                    continue;
+                }
                 $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null);
-                if ($wallet->hasStorage() && $invoice['quote_id']) {
-                    $proofs = $wallet->getStorage()->getProofsByQuoteId($invoice['quote_id']);
-                    if (!empty($proofs)) {
-                        Database::update('invoices', ['status' => 'Settled'], 'id = ?', [$invoice['id']]);
-                        $recovered[] = $invoice['id'];
+                if (!$wallet->hasStorage()) {
+                    continue;
+                }
 
+                $proofs = $wallet->getStorage()->getProofsByQuoteId($invoice['quote_id']);
+                if (!empty($proofs)) {
+                    if (self::markSettledOnce($invoice['id'])) {
+                        $recovered[] = $invoice['id'];
                         $updatedInvoice = self::getById($invoice['id']);
                         WebhookSender::fireEvent($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
-
                         error_log("CashuPayServer: Recovered orphaned invoice {$invoice['id']}");
+                    }
+                    continue;
+                }
+
+                // No proofs yet: re-check the mint and re-drive minting if paid/issued.
+                $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
+                if ($quoteStatus->isPaid() || $quoteStatus->isIssued()) {
+                    self::mintAndStoreTokens($invoice, $wallet);
+                    if (self::getById($invoice['id'])['status'] === 'Settled') {
+                        $recovered[] = $invoice['id'];
+                        error_log("CashuPayServer: Re-minted orphaned invoice {$invoice['id']}");
                     }
                 }
             } catch (Exception $e) {
                 error_log("CashuPayServer: Error recovering invoice {$invoice['id']}: " . $e->getMessage());
+            }
+        }
+
+        return $recovered;
+    }
+
+    /**
+     * Recover invoices that were marked Expired by the local clock but whose Lightning
+     * quote was actually paid (late payment, or cron down at expiry). Within a grace window
+     * we re-check the mint and, if paid/issued, mint the tokens and settle — instead of
+     * silently losing the customer's payment. See FABLE-CASHUPAYSERVER-AUDIT (C1).
+     *
+     * @return array Recovered invoice IDs
+     */
+    public static function recoverExpiredPaidInvoices(int $minInterval = 60, int $batchLimit = 10): array {
+        $recovered = [];
+        $now = time();
+
+        $rows = Database::fetchAll(
+            "SELECT * FROM invoices
+             WHERE status = 'Expired'
+             AND quote_id IS NOT NULL
+             AND expiration_time > ?
+             AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+             ORDER BY last_polled_at ASC
+             LIMIT ?",
+            [$now - self::EXPIRY_RECOVERY_GRACE, $now, $minInterval, $batchLimit]
+        );
+
+        foreach ($rows as $invoice) {
+            try {
+                Database::update('invoices', ['last_polled_at' => $now], 'id = ?', [$invoice['id']]);
+
+                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null);
+                $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
+
+                if ($quoteStatus->isPaid() || $quoteStatus->isIssued()) {
+                    error_log("CashuPayServer: Late payment on expired invoice {$invoice['id']} - recovering");
+                    if ($quoteStatus->isIssued()) {
+                        // Un-expire so completeIssuedInvoice/mint can settle it.
+                        self::claimForMinting($invoice['id']);
+                        self::completeIssuedInvoice(self::getById($invoice['id']), $wallet);
+                    } else {
+                        self::mintAndStoreTokens($invoice, $wallet);
+                    }
+                    if (self::getById($invoice['id'])['status'] === 'Settled') {
+                        $recovered[] = $invoice['id'];
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("CashuPayServer: Error recovering expired invoice {$invoice['id']}: " . $e->getMessage());
             }
         }
 
@@ -545,12 +683,28 @@ class Invoice {
             return 0;
         }
 
-        $storage = new WalletStorage(
-            Database::getDbPath(),
-            $store['mint_url'],
-            $store['mint_unit'] ?? 'sat'
-        );
-        return $storage->getBalance();
+        $unit = $store['mint_unit'] ?? 'sat';
+
+        // Aggregate across the primary mint AND any backup mints. Funds settled via
+        // failover live under the backup mint's namespace (walletId = hash(mintUrl:unit));
+        // summing here makes them visible instead of appearing lost.
+        // See FABLE-CASHUPAYSERVER-AUDIT (C2).
+        $mintUrls = Config::getStoreAllMintUrls($storeId);
+        if (empty($mintUrls)) {
+            $mintUrls = [$store['mint_url']];
+        }
+
+        $total = 0;
+        $seen = [];
+        foreach ($mintUrls as $mintUrl) {
+            if ($mintUrl === '' || isset($seen[$mintUrl])) {
+                continue;
+            }
+            $seen[$mintUrl] = true;
+            $storage = new WalletStorage(Database::getDbPath(), $mintUrl, $unit);
+            $total += $storage->getBalance();
+        }
+        return $total;
     }
 
     /**

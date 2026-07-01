@@ -28,6 +28,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     exit;
 }
 
+// A GET on an invoice can trigger minting (pollSingleQuote). Keep it alive if the client
+// disconnects mid-mint so proofs aren't stranded. See FABLE-CASHUPAYSERVER-AUDIT (C-ABORT-1).
+ignore_user_abort(true);
+@set_time_limit(60);
+
 // Check if setup is complete
 if (!Database::isInitialized() || !Config::isSetupComplete()) {
     http_response_code(503);
