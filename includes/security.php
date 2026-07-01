@@ -219,8 +219,19 @@ class Security {
             $trusted = [];
         }
 
-        // Only consult forwarded headers when the immediate peer is a trusted proxy.
-        if (in_array($remote, $trusted, true)) {
+        // Auto-trust the common "reverse proxy on the same host / private network" case:
+        // if the immediate peer is loopback or a private/reserved address, the real client
+        // arrived via that proxy and its IP is in X-Forwarded-For. An external attacker
+        // cannot forge a loopback/private REMOTE_ADDR, so this stays safe. Explicit
+        // trusted_proxies still works for public-IP proxies.
+        $peerIsLocalProxy = !filter_var(
+            $remote,
+            FILTER_VALIDATE_IP,
+            FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE
+        );
+
+        // Only consult forwarded headers when the immediate peer is trusted.
+        if (in_array($remote, $trusted, true) || $peerIsLocalProxy) {
             $headers = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP'];
             foreach ($headers as $header) {
                 if (!empty($_SERVER[$header])) {
