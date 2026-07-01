@@ -372,6 +372,12 @@ class Config {
      * @return array{success: bool, error: ?string, info: ?array}
      */
     public static function testMintConnection(string $mintUrl): array {
+        // Only allow http(s) mint URLs (blocks file:// and other schemes at the single
+        // point every mint-URL entry path flows through). See FABLE-SECURITY-AUDIT (MED-2).
+        require_once __DIR__ . '/security.php';
+        if (Security::sanitizeUrl($mintUrl) === null) {
+            return ['success' => false, 'error' => 'Mint URL must be a valid http(s) URL', 'info' => null];
+        }
         try {
             $client = new \Cashu\MintClient(rtrim($mintUrl, '/'));
             $info = $client->get('info');

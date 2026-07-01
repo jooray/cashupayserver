@@ -149,6 +149,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($mintUrl)) {
                     throw new Exception('Mint URL is required');
                 }
+                // Reject non-http(s) schemes (file://, etc.). See FABLE-SECURITY-AUDIT (MED-2).
+                if (Security::sanitizeUrl($mintUrl) === null) {
+                    throw new Exception('Mint URL must be a valid http(s) URL');
+                }
 
                 // Fetch available units from mint
                 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
@@ -272,6 +276,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
 
                     Config::set('setup_complete', true);
+                    // Generate a cron key so background processing can be scheduled and the
+                    // cron endpoint isn't left open. See FABLE-CASHUPAYSERVER-AUDIT (C-CRON-1).
+                    if (!Config::get('cron_key')) {
+                        Config::set('cron_key', bin2hex(random_bytes(16)));
+                    }
                     $step = 7;
                 }
                 break;
@@ -1282,6 +1291,19 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                 <div class="success">
                     CashuPayServer is ready to accept payments.
+                </div>
+
+                <?php $cronUrl = rtrim(Config::getBaseUrl(), '/') . '/cron.php?key=' . htmlspecialchars(Config::get('cron_key', '')); ?>
+                <div style="background: rgba(247, 147, 26, 0.08); border: 1px solid rgba(247, 147, 26, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
+                    <p style="margin-bottom: 0.5rem; font-weight: 600; color: #f7931a;">Recommended: set up a cron job</p>
+                    <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 0.5rem;">
+                        Payments still settle when your payment/admin pages are visited, but a
+                        1-minute cron makes settlement, auto-withdrawal and recovery reliable
+                        even with no traffic. In your hosting control panel (cPanel &rarr; Cron Jobs),
+                        add a job that runs every minute:
+                    </p>
+                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem;">* * * * * curl -s "<?= $cronUrl ?>" &gt;/dev/null 2&gt;&amp;1</code>
+                    <p style="color: #718096; font-size: 0.8rem; margin-top: 0.5rem;">Keep this URL private — it authorizes background processing.</p>
                 </div>
 
                 <?php
