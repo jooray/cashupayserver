@@ -19,6 +19,17 @@ class Auth {
      */
     public static function initSession(): void {
         if (session_status() === PHP_SESSION_NONE) {
+            // Store sessions in an app-controlled, web-inaccessible directory (inside the
+            // protected data dir). This makes admin login work regardless of the shared
+            // system session path's permissions, and isolates sessions from other vhosts.
+            $sessDir = Database::getDataDir() . '/sessions';
+            if (!is_dir($sessDir)) {
+                @mkdir($sessDir, 0770, true);
+            }
+            if (is_dir($sessDir) && is_writable($sessDir)) {
+                session_save_path($sessDir);
+            }
+
             // Harden the session cookie without needing php.ini access (shared hosting).
             $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
                 || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
