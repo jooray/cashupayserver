@@ -238,12 +238,30 @@ class Invoice {
      * @return int Number of invoices marked as expired
      */
     public static function markExpiredInvoices(): int {
+        $now = time();
+        // Capture which invoices are transitioning so we can fire InvoiceExpired for each
+        // (the bulk UPDATE alone emitted no webhook, so shops never learned of expiry).
+        // See FABLE-CASHUPAYSERVER-AUDIT (C-WH-1).
+        $expiring = Database::fetchAll(
+            "SELECT id, store_id FROM invoices WHERE status = 'New' AND expiration_time < ?",
+            [$now]
+        );
+
         $stmt = Database::query(
             "UPDATE invoices SET status = 'Expired'
              WHERE status = 'New' AND expiration_time < ?",
-            [time()]
+            [$now]
         );
-        return $stmt->rowCount();
+        $count = $stmt->rowCount();
+
+        foreach ($expiring as $row) {
+            $invoice = self::getById($row['id']);
+            if ($invoice && $invoice['status'] === 'Expired') {
+                WebhookSender::fireEvent($row['store_id'], 'InvoiceExpired', $invoice);
+            }
+        }
+
+        return $count;
     }
 
     /**

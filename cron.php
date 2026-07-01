@@ -198,6 +198,14 @@ try {
     $results['tasks']['cleanup_pending_ops'] = 'error: ' . $e->getMessage();
 }
 
+// Task 9b: Retry failed webhook deliveries (non-2xx), bounded attempts
+try {
+    $retried = WebhookSender::retryFailedDeliveries();
+    $results['tasks']['retry_webhooks'] = $retried > 0 ? "retried {$retried}" : 'none';
+} catch (Exception $e) {
+    $results['tasks']['retry_webhooks'] = 'error: ' . $e->getMessage();
+}
+
 // Task 10: L4 - Webhook delivery cleanup (keep only last 1000)
 try {
     // First get the count

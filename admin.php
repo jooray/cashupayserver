@@ -28,6 +28,32 @@ function cashupay_public_store(array $store): array {
     return $store;
 }
 
+/**
+ * Acquire a non-blocking exclusive lock (flock) for a named operation, e.g. a per-store
+ * withdrawal. Prevents concurrent fund-moving requests (double-click / refresh / two tabs)
+ * from each melting a different set of proofs and paying twice.
+ * See FABLE-CASHUPAYSERVER-AUDIT (A4). Returns a handle, or null if already locked.
+ */
+function cashupay_acquire_lock(string $name) {
+    $path = Database::getDataDir() . '/.' . preg_replace('/[^a-zA-Z0-9_]/', '', $name) . '.lock';
+    $fp = @fopen($path, 'c');
+    if (!$fp) {
+        return null;
+    }
+    if (!flock($fp, LOCK_EX | LOCK_NB)) {
+        fclose($fp);
+        return null;
+    }
+    return $fp;
+}
+
+function cashupay_release_lock($fp): void {
+    if ($fp) {
+        @flock($fp, LOCK_UN);
+        @fclose($fp);
+    }
+}
+
 // Security headers (admin SPA needs Nostr relays + CDNs, so a tuned CSP is used).
 Security::setSecurityHeaders(Security::adminCsp());
 
@@ -618,7 +644,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
 
         case 'delete_store':
+            // Guard: deleting a store removes its seed phrase = irrecoverable funds.
+            // Refuse while it still holds ecash unless the operator explicitly confirms.
+            // See FABLE-CASHUPAYSERVER-AUDIT (A3).
             $storeId = $_POST['store_id'] ?? '';
+            $confirmLoss = isset($_POST['confirm_fund_loss']) && $_POST['confirm_fund_loss'] === '1';
+            $balance = 0;
+            try {
+                $balance = Config::isStoreConfigured($storeId) ? Invoice::getBalance($storeId) : 0;
+            } catch (Exception $e) {
+                $balance = 0;
+            }
+            if ($balance > 0 && !$confirmLoss) {
+                http_response_code(409);
+                echo json_encode([
+                    'error' => 'store_has_balance',
+                    'balance' => $balance,
+                    'message' => 'This store still holds funds. Withdraw first, or confirm you have backed up the seed phrase and accept losing these funds.'
+                ]);
+                break;
+            }
             Database::delete('stores', 'id = ?', [$storeId]);
             echo json_encode(['success' => true]);
             break;
@@ -817,6 +862,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
 
         case 'manual_melt':
+            // Serialize withdrawals per store so a double-submit can't pay twice (A4).
+            $meltStoreId = $_POST['store_id'] ?? '';
+            $meltLock = $meltStoreId ? cashupay_acquire_lock('melt_' . $meltStoreId) : null;
+            if ($meltStoreId && !$meltLock) {
+                http_response_code(409);
+                echo json_encode(['error' => 'A withdrawal is already in progress for this store. Please wait and check your balance before retrying.']);
+                break;
+            }
+            // A Lightning melt can exceed shared-hosting time limits; keep it alive.
+            @set_time_limit(0);
             try {
                 $storeId = $_POST['store_id'] ?? '';
                 $destination = $_POST['address'] ?? '';
@@ -971,6 +1026,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ? 'Mint returned error: ' . $e->getMessage()
                     : $e->getMessage();
                 echo json_encode(['error' => $errorMsg]);
+            } finally {
+                cashupay_release_lock($meltLock ?? null);
             }
             break;
 
@@ -1058,6 +1115,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // 4. If mint unreachable, ask user to confirm larger amount
             // 5. Process donation (sink may be reachable even if mint is not)
             // 6. Serialize and return token
+            // A swap during export contacts the mint and can be slow; keep the request alive.
+            @set_time_limit(0);
             try {
                 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
 
@@ -4021,8 +4080,9 @@ $isWp = Urls::isWordPress();
                 const response = await postWithCsrf(adminUrl, postData);
                 const result = await response.json();
 
-                // Handle mint unreachable - needs user confirmation for different amount
-                if (result.error === 'mint_unreachable_change_needed') {
+                // Handle change-needed (exact change unavailable) - needs user confirmation
+                // for a different amount. The server emits 'change_needed'. (A6)
+                if (result.error === 'change_needed' || result.error === 'mint_unreachable_change_needed') {
                     const unitLabel = mintUnit.toUpperCase();
                     const requestedDisplay = formatAmount(result.requested, mintUnit);
                     const availableDisplay = formatAmount(result.available, mintUnit);
@@ -4829,10 +4889,22 @@ $isWp = Urls::isWordPress();
             loadStoreApiKeys();
         }
 
-        async function deleteStore(storeId) {
-            if (!confirm('Delete this store and all its data? This action cannot be undone.')) return;
+        async function deleteStore(storeId, confirmFundLoss = false) {
+            if (!confirmFundLoss && !confirm('Delete this store and all its data? This action cannot be undone.')) return;
 
-            await postWithCsrf(adminUrl, `action=delete_store&store_id=${storeId}`);
+            const params = `action=delete_store&store_id=${encodeURIComponent(storeId)}`
+                + (confirmFundLoss ? '&confirm_fund_loss=1' : '');
+            const response = await postWithCsrf(adminUrl, params);
+            const result = await response.json().catch(() => ({}));
+
+            // Server refuses to delete a funded store unless the operator confirms fund loss.
+            if (response.status === 409 && result.error === 'store_has_balance') {
+                const bal = result.balance;
+                if (confirm(`This store still holds ${bal} (mint units) of ecash.\n\nDeleting it destroys the seed phrase and those funds are lost forever.\n\nOnly continue if you have backed up the seed phrase. Delete anyway?`)) {
+                    return deleteStore(storeId, true);
+                }
+                return;
+            }
 
             closeModal('modal-store');
             // Clear current store selection

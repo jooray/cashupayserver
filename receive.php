@@ -11,6 +11,7 @@
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
 
@@ -40,6 +41,14 @@ if (!Config::isSetupComplete()) {
  */
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
+
+    // Rate limit: this endpoint is unauthenticated and does mint round-trips + EC crypto
+    // per call. Throttle per client IP to prevent abuse. See FABLE-CASHUPAYSERVER-AUDIT (R1).
+    if (!Security::checkRateLimit('receive', Security::getClientIp(), 20)) {
+        http_response_code(429);
+        echo json_encode(['error' => 'Too many requests. Please wait.']);
+        exit;
+    }
 
     // Get JSON body
     $input = file_get_contents('php://input');

@@ -238,7 +238,9 @@ class ExchangeRates {
         foreach ($order as $provider) {
             try {
                 $rate = $provider->getBtcPrice($currency);
-                if ($rate !== null) {
+                // Reject non-positive rates: a provider glitch returning 0 would otherwise
+                // cause a division-by-zero or wildly wrong pricing. See FABLE-CASHUPAYSERVER-AUDIT (C-RATE-1).
+                if ($rate !== null && $rate > 0) {
                     self::saveToCache($currency, $rate, $provider->getName());
                     return $rate;
                 }
@@ -295,7 +297,10 @@ class ExchangeRates {
             $mintAmount = bcmul($mintAmount, (string)(1 + $exchangeFeePercent / 100), 8);
         }
 
-        return self::toSmallestUnit($mintAmount, $mintUnit);
+        // Round UP to the mint's smallest unit for invoice pricing, so rounding never
+        // makes the merchant undercharge (customer pays at most 1 sat/cent more).
+        // See FABLE-CASHUPAYSERVER-AUDIT (C-RATE-1).
+        return self::toSmallestUnit($mintAmount, $mintUnit, true);
     }
 
     /**
@@ -318,7 +323,7 @@ class ExchangeRates {
 
         // Fiat currency - divide by BTC price
         $btcPrice = self::getBtcPrice($currency, $primary, $secondary);
-        if ($btcPrice === null) {
+        if ($btcPrice === null || $btcPrice <= 0) {
             throw new Exception("Cannot get exchange rate for {$currency}");
         }
 
@@ -355,23 +360,25 @@ class ExchangeRates {
     /**
      * Convert amount to smallest unit (sats for BTC, cents for fiat)
      */
-    private static function toSmallestUnit(string $amount, string $currency): int {
+    private static function toSmallestUnit(string $amount, string $currency, bool $roundUp = false): int {
         $currency = strtoupper($currency);
 
-        if ($currency === 'BTC') {
-            return (int)bcmul($amount, '100000000', 0);
-        }
-
         if ($currency === 'SAT' || $currency === 'SATS') {
-            return (int)$amount;
+            return $roundUp ? (int)ceil((float)$amount) : (int)$amount;
         }
 
         if ($currency === 'MSAT') {
             return (int)ceil((float)$amount / 1000);
         }
 
+        if ($currency === 'BTC') {
+            $sats = bcmul($amount, '100000000', 8);
+            return $roundUp ? (int)ceil((float)$sats) : (int)$sats;
+        }
+
         // Fiat currencies - convert to cents (multiply by 100)
-        return (int)bcmul($amount, '100', 0);
+        $cents = bcmul($amount, '100', 8);
+        return $roundUp ? (int)ceil((float)$cents) : (int)$cents;
     }
 
     /**

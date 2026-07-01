@@ -203,6 +203,59 @@ class WebhookSender {
     }
 
     /**
+     * Retry webhook deliveries that failed (non-2xx), with bounded attempts.
+     *
+     * Called from cron. Re-sends the most recent failed delivery for a
+     * webhook+invoice+event, unless a later delivery already succeeded or the attempt cap
+     * has been reached. Fixes silently-dropped events (e.g. shop briefly down at settlement).
+     * See FABLE-CASHUPAYSERVER-AUDIT (C-WH-1).
+     *
+     * @return int Number of deliveries retried
+     */
+    public static function retryFailedDeliveries(int $maxAgeSeconds = 86400, int $limit = 20): int {
+        $rows = Database::fetchAll(
+            "SELECT wd.* FROM webhook_deliveries wd
+             JOIN webhooks w ON w.id = wd.webhook_id
+             WHERE wd.created_at > ?
+               AND (wd.status_code IS NULL OR wd.status_code < 200 OR wd.status_code >= 300)
+               AND w.enabled = 1
+             ORDER BY wd.created_at ASC
+             LIMIT ?",
+            [time() - $maxAgeSeconds, $limit]
+        );
+
+        $retried = 0;
+        foreach ($rows as $d) {
+            // Skip if a later delivery for the same webhook+invoice+event already succeeded.
+            $succeeded = Database::fetchOne(
+                "SELECT 1 FROM webhook_deliveries
+                 WHERE webhook_id = ? AND IFNULL(invoice_id,'') = IFNULL(?, '') AND event_type = ?
+                   AND status_code >= 200 AND status_code < 300 AND created_at >= ?
+                 LIMIT 1",
+                [$d['webhook_id'], $d['invoice_id'], $d['event_type'], $d['created_at']]
+            );
+            if ($succeeded) {
+                continue;
+            }
+            // Bound total attempts for this webhook+invoice+event.
+            $attempts = Database::fetchOne(
+                "SELECT COUNT(*) AS c FROM webhook_deliveries
+                 WHERE webhook_id = ? AND IFNULL(invoice_id,'') = IFNULL(?, '') AND event_type = ?",
+                [$d['webhook_id'], $d['invoice_id'], $d['event_type']]
+            );
+            if ((int)($attempts['c'] ?? 0) > self::MAX_RETRIES) {
+                continue;
+            }
+
+            if (self::redeliver($d['id'])) {
+                $retried++;
+            }
+        }
+
+        return $retried;
+    }
+
+    /**
      * Get delivery history for a webhook
      */
     public static function getDeliveries(string $webhookId, int $limit = 20): array {
