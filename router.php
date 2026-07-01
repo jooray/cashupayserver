@@ -119,6 +119,16 @@ if (preg_match('#^/cron$#', $uri)) {
 // -----------------------------------------------------------------------------
 if (preg_match('#^/assets/#', $uri)) {
     $file = __DIR__ . $uri;
+    // Path-traversal containment: the resolved file must live under assets/.
+    // Prevents /assets/../../../etc/passwd style reads via readfile(). See FABLE-SECURITY-AUDIT (HIGH-7).
+    $real = realpath($file);
+    $assetRoot = realpath(__DIR__ . '/assets');
+    if ($real === false || $assetRoot === false
+        || strncmp($real, $assetRoot . DIRECTORY_SEPARATOR, strlen($assetRoot) + 1) !== 0) {
+        http_response_code(404);
+        echo 'Not found';
+        exit;
+    }
     if (file_exists($file) && is_file($file)) {
         // Determine content type
         $ext = pathinfo($file, PATHINFO_EXTENSION);

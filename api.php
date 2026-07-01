@@ -13,7 +13,12 @@ require_once __DIR__ . '/includes/security.php';
 // Set JSON content type
 header('Content-Type: application/json');
 
-// Handle CORS for API clients
+// Minimal hardening for the JSON API (no CSP needed for JSON).
+header('X-Content-Type-Options: nosniff');
+
+// Handle CORS for API clients.
+// NOTE: wildcard is acceptable because the API authenticates with a bearer token
+// (not ambient cookies). Do NOT add Access-Control-Allow-Credentials: true.
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
 header('Access-Control-Allow-Headers: Content-Type, Authorization');
@@ -96,7 +101,7 @@ $routes = [
     // Server info (no auth required)
     'GET /server/info' => 'handleServerInfo',
 
-    // Stores
+    // Stores (full Greenfield surface; create/delete gated by BTCPay permissions below)
     'GET /stores' => 'handleGetStores',
     'POST /stores' => 'handleCreateStore',
     'GET /stores/{storeId}' => 'handleGetStore',
@@ -167,6 +172,31 @@ function jsonResponse(array $data, int $status = 200): void {
  */
 function errorResponse(string $code, string $message, int $status = 400): void {
     jsonResponse(['code' => $code, 'message' => $message], $status);
+}
+
+/**
+ * Enforce that the authenticated API key is scoped to the requested store.
+ *
+ * CashuPayServer is single-operator; API keys are store-scoped (BTCPay Greenfield
+ * behaviour). A key issued for one store must not act on another store's data.
+ * Returns the validated storeId.
+ */
+function requireStore(array $auth, array $params): string {
+    $storeId = $params['storeId'] ?? '';
+    $keyStore = (string)($auth['store_id'] ?? '');
+    if ($storeId === '' || $keyStore === '' || !hash_equals($keyStore, (string)$storeId)) {
+        errorResponse('unauthorized', 'API key is not authorized for this store', 403);
+    }
+    return (string)$storeId;
+}
+
+/**
+ * Enforce that the authenticated API key holds a given BTCPay permission.
+ */
+function requirePermission(array $auth, string $permission): void {
+    if (!Auth::hasPermission($auth, $permission)) {
+        errorResponse('unauthorized', 'API key lacks required permission: ' . $permission, 403);
+    }
 }
 
 /**

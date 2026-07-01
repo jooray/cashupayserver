@@ -9,6 +9,14 @@ require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/invoice.php';
 require_once __DIR__ . '/includes/background.php';
+require_once __DIR__ . '/includes/security.php';
+
+// Keep minting alive if the customer navigates away mid-request. See FABLE-CASHUPAYSERVER-AUDIT (C-ABORT-1).
+ignore_user_abort(true);
+@set_time_limit(60);
+
+// Security headers (customer page: strict CSP, only self + jsdelivr for the QR lib).
+Security::setSecurityHeaders();
 
 // Check setup
 if (!Database::isInitialized() || !Config::isSetupComplete()) {

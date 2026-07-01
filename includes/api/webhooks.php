@@ -9,7 +9,8 @@ require_once __DIR__ . '/../webhook_sender.php';
  * Create a new webhook
  */
 function handleCreateWebhook(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
 
     // Verify store exists
     $store = Database::fetchOne("SELECT id FROM stores WHERE id = ?", [$storeId]);
@@ -25,8 +26,9 @@ function handleCreateWebhook(array $auth, array $params, array $body): void {
         errorResponse('validation-error', 'Webhook URL is required');
     }
 
-    if (!filter_var($url, FILTER_VALIDATE_URL)) {
-        errorResponse('validation-error', 'Invalid webhook URL');
+    // Anti-SSRF: only allow public http(s) targets (blocks file://, internal IPs, metadata).
+    if (!Security::isSafePublicHttpUrl($url)) {
+        errorResponse('validation-error', 'Webhook URL must be a public http(s) URL');
     }
 
     // Generate secret for HMAC signing
@@ -52,7 +54,8 @@ function handleCreateWebhook(array $auth, array $params, array $body): void {
  * Get webhooks for a store
  */
 function handleGetWebhooks(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
 
     $webhooks = Database::fetchAll(
         "SELECT * FROM webhooks WHERE store_id = ? ORDER BY created_at DESC",
@@ -67,7 +70,8 @@ function handleGetWebhooks(array $auth, array $params, array $body): void {
  * Get a single webhook
  */
 function handleGetWebhook(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
     $webhookId = $params['webhookId'];
 
     $webhook = Database::fetchOne(
@@ -86,7 +90,8 @@ function handleGetWebhook(array $auth, array $params, array $body): void {
  * Update a webhook
  */
 function handleUpdateWebhook(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
     $webhookId = $params['webhookId'];
 
     $webhook = Database::fetchOne(
@@ -101,8 +106,8 @@ function handleUpdateWebhook(array $auth, array $params, array $body): void {
     $updates = [];
 
     if (isset($body['url'])) {
-        if (!filter_var($body['url'], FILTER_VALIDATE_URL)) {
-            errorResponse('validation-error', 'Invalid webhook URL');
+        if (!Security::isSafePublicHttpUrl($body['url'])) {
+            errorResponse('validation-error', 'Webhook URL must be a public http(s) URL');
         }
         $updates['url'] = $body['url'];
     }
@@ -128,7 +133,8 @@ function handleUpdateWebhook(array $auth, array $params, array $body): void {
  * Delete a webhook
  */
 function handleDeleteWebhook(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
     $webhookId = $params['webhookId'];
 
     $webhook = Database::fetchOne(

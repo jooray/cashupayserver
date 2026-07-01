@@ -41,9 +41,15 @@ if ($isInternal) {
         exit;
     }
 } else {
-    // External cron request - verify cron key if set
+    // External cron request - a cron key is REQUIRED. Auto-generate on first use so
+    // upgrades don't silently leave the endpoint open. Without a valid key, external
+    // callers cannot trigger background tasks (incl. auto-melt / cleanup).
     $cronKey = Config::get('cron_key');
-    if ($cronKey && !hash_equals($cronKey, $providedKey)) {
+    if (!$cronKey) {
+        $cronKey = bin2hex(random_bytes(16));
+        Config::set('cron_key', $cronKey);
+    }
+    if (!hash_equals($cronKey, (string)$providedKey)) {
         http_response_code(403);
         echo 'Invalid cron key';
         exit;

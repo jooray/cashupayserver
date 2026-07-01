@@ -167,9 +167,18 @@ class Config {
             return rtrim($baseUrl, '/');
         }
 
-        // Auto-detect
-        $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
-        $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
+        // Auto-detect (fallback only). NOTE: HTTP_HOST is attacker-controlled; it is
+        // sanitized here so it cannot be used to redirect internal self-requests (e.g. the
+        // background cron trigger, which carries an internal key) to an arbitrary host.
+        // Operators behind a proxy should set an explicit `base_url`. See FABLE-SECURITY-AUDIT (HIGH-5).
+        $protocol = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+            || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https')
+            ? 'https' : 'http';
+        $host = $_SERVER['HTTP_HOST'] ?? $_SERVER['SERVER_NAME'] ?? 'localhost';
+        // Allow only valid host[:port] characters.
+        if (!preg_match('/^[A-Za-z0-9.\-]+(:[0-9]+)?$/', $host)) {
+            $host = $_SERVER['SERVER_NAME'] ?? 'localhost';
+        }
         $path = dirname($_SERVER['SCRIPT_NAME'] ?? '');
 
         return rtrim($protocol . '://' . $host . $path, '/');

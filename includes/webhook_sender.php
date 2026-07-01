@@ -6,6 +6,7 @@
  */
 
 require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/security.php';
 
 class WebhookSender {
     private const MAX_RETRIES = 3;
@@ -110,6 +111,15 @@ class WebhookSender {
      * Send HTTP request
      */
     private static function sendRequest(string $url, string $payload, string $signature): array {
+        // Anti-SSRF: refuse non-public / non-http(s) targets at delivery time too
+        // (defence in depth; the create/update handlers validate as well).
+        if (!Security::isSafePublicHttpUrl($url)) {
+            return [
+                'status_code' => 0,
+                'response' => 'blocked: webhook URL is not a public http(s) URL',
+            ];
+        }
+
         $ch = curl_init($url);
 
         curl_setopt_array($ch, [
@@ -117,6 +127,11 @@ class WebhookSender {
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => self::TIMEOUT,
+            // Restrict protocols and forbid redirects so a target cannot bounce us to
+            // file:// / gopher:// / an internal host. See FABLE-SECURITY-AUDIT (CRIT-4).
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'BTCPay-Sig: ' . $signature,
@@ -135,9 +150,12 @@ class WebhookSender {
             ];
         }
 
+        // Do not persist the full response body (it could contain data fetched from an
+        // internal target if the URL check were ever bypassed). Store only a short,
+        // length-capped marker for debugging.
         return [
             'status_code' => $statusCode,
-            'response' => substr($response, 0, 1000), // Limit stored response
+            'response' => 'delivered (HTTP ' . (int)$statusCode . ', ' . strlen((string)$response) . ' bytes)',
         ];
     }
 

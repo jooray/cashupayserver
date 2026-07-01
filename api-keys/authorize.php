@@ -28,6 +28,9 @@ if (!Database::isInitialized() || !Config::isSetupComplete()) {
     exit;
 }
 
+// Security headers (self-contained page, strict CSP).
+Security::setSecurityHeaders();
+
 // Parse request parameters
 // Note: PHP's $_GET only keeps the last value for duplicate keys (e.g. permissions=a&permissions=b).
 // BTCPay clients send permissions without [] brackets, so we parse the raw query string.
@@ -71,12 +74,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $error = 'Invalid password';
         }
     } elseif ($action === 'approve' && Auth::isLoggedIn()) {
+        // CSRF protection: this action mints an API key, so it must not be forgeable.
+        // See FABLE-SECURITY-AUDIT (CRIT-5).
+        if (!Auth::validateCsrfToken($_POST['csrf_token'] ?? '')) {
+            $error = 'Invalid security token. Please reload and try again.';
+            $selectedStoreId = null;
+        } else {
         // Get selected store and permissions
         $selectedStoreId = $_POST['store_id'] ?? null;
         $approvedPermissions = $_POST['approved_permissions'] ?? $permissions;
 
+        // The API key is POSTed to `redirect` on success — only allow safe http(s)
+        // destinations so a malicious pairing link cannot exfiltrate the key to any host
+        // via a non-http scheme or an internal target.
+        if ($redirect !== null && !Security::isSafePublicHttpUrl($redirect, true)) {
+            $error = 'Invalid redirect URL';
+            $selectedStoreId = null;
+        }
+
         if (empty($selectedStoreId)) {
-            $error = 'Please select a store';
+            $error = $error ?: 'Please select a store';
         } else {
             $redirectHost = $redirect ? parse_url($redirect, PHP_URL_HOST) : null;
 
@@ -125,9 +142,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $generatedKey = $apiKey;
             }
         }
+        } // end CSRF-valid branch
     } elseif ($action === 'deny') {
-        if ($redirect) {
-            // Redirect with error
+        // Only redirect to a validated http(s) destination (open-redirect guard).
+        if ($redirect && Security::isSafePublicHttpUrl($redirect, true)) {
             $separator = str_contains($redirect, '?') ? '&' : '?';
             header('Location: ' . $redirect . $separator . 'error=access_denied');
             exit;
@@ -499,6 +517,7 @@ $baseUrl = Config::getBaseUrl();
             <?php else: ?>
                 <form method="POST">
                     <input type="hidden" name="action" value="approve">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(Auth::generateCsrfToken()) ?>">
 
                     <div class="form-group">
                         <label for="store_id">Select Store</label>

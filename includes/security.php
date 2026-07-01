@@ -6,6 +6,7 @@
  */
 
 require_once __DIR__ . '/database.php';
+require_once __DIR__ . '/config.php';
 
 class Security {
     private const RATE_LIMIT_WINDOW = 60; // seconds
@@ -135,6 +136,66 @@ class Security {
     }
 
     /**
+     * Validate that a URL is a public http(s) URL safe to make an outbound request to.
+     *
+     * Rejects non-http(s) schemes (file://, gopher://, etc.) and hosts that resolve to
+     * loopback / private / link-local / reserved ranges. This is the anti-SSRF gate used
+     * before the server fetches an operator- or API-supplied URL (webhooks, mint URLs,
+     * Lightning-address hosts). See FABLE-SECURITY-AUDIT (CRIT-4, MED-2).
+     *
+     * @param bool $allowLocalhost Permit localhost/127.0.0.1 (only for explicit dev/self-calls)
+     */
+    public static function isSafePublicHttpUrl(string $url, bool $allowLocalhost = false): bool {
+        $parts = parse_url($url);
+        if ($parts === false || empty($parts['host'])) {
+            return false;
+        }
+
+        $scheme = strtolower($parts['scheme'] ?? '');
+        if (!in_array($scheme, ['http', 'https'], true)) {
+            return false;
+        }
+
+        $host = $parts['host'];
+
+        // Resolve host to IPs (IPv4 + IPv6) and reject any private/reserved address.
+        $ips = [];
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            $ips[] = $host;
+        } else {
+            $v4 = @gethostbynamel($host);
+            if ($v4) {
+                $ips = array_merge($ips, $v4);
+            }
+            $aaaa = @dns_get_record($host, DNS_AAAA);
+            if ($aaaa) {
+                foreach ($aaaa as $rec) {
+                    if (!empty($rec['ipv6'])) {
+                        $ips[] = $rec['ipv6'];
+                    }
+                }
+            }
+        }
+
+        // Could not resolve -> treat as unsafe (fail closed).
+        if (empty($ips)) {
+            return false;
+        }
+
+        $flags = FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE;
+        foreach ($ips as $ip) {
+            if ($allowLocalhost && in_array($ip, ['127.0.0.1', '::1'], true)) {
+                continue;
+            }
+            if (!filter_var($ip, FILTER_VALIDATE_IP, $flags)) {
+                return false; // private, loopback, link-local or reserved
+            }
+        }
+
+        return true;
+    }
+
+    /**
      * Constant-time string comparison
      */
     public static function secureCompare(string $a, string $b): bool {
@@ -142,46 +203,93 @@ class Security {
     }
 
     /**
-     * Get client IP address
+     * Get client IP address.
+     *
+     * Forwarded headers (X-Forwarded-For, X-Real-IP, CF-Connecting-IP) are trusted ONLY
+     * when the direct peer (REMOTE_ADDR) is a configured trusted proxy. Otherwise they are
+     * spoofable and would let an attacker bypass login lockout / rate limits by rotating the
+     * header value. Configure `trusted_proxies` (array of IPs) if the app is behind a
+     * reverse proxy / CDN. See FABLE-SECURITY-AUDIT (MED-1).
      */
     public static function getClientIp(): string {
-        // Check for proxied IP
-        $headers = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR'];
+        $remote = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
 
-        foreach ($headers as $header) {
-            if (!empty($_SERVER[$header])) {
-                $ip = $_SERVER[$header];
-                // Handle comma-separated IPs (X-Forwarded-For)
-                if (strpos($ip, ',') !== false) {
-                    $ip = trim(explode(',', $ip)[0]);
-                }
-                if (filter_var($ip, FILTER_VALIDATE_IP)) {
-                    return $ip;
+        $trusted = Config::get('trusted_proxies', []);
+        if (!is_array($trusted)) {
+            $trusted = [];
+        }
+
+        // Only consult forwarded headers when the immediate peer is a trusted proxy.
+        if (in_array($remote, $trusted, true)) {
+            $headers = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP'];
+            foreach ($headers as $header) {
+                if (!empty($_SERVER[$header])) {
+                    $ip = $_SERVER[$header];
+                    // X-Forwarded-For may be a comma list; take the first (client) hop.
+                    if (strpos($ip, ',') !== false) {
+                        $ip = trim(explode(',', $ip)[0]);
+                    }
+                    if (filter_var($ip, FILTER_VALIDATE_IP)) {
+                        return $ip;
+                    }
                 }
             }
+        }
+
+        if (filter_var($remote, FILTER_VALIDATE_IP)) {
+            return $remote;
         }
 
         return '0.0.0.0';
     }
 
     /**
-     * Set security headers
+     * Set security headers.
+     *
+     * @param string|null $csp Explicit Content-Security-Policy. If null a strict default
+     *                         is used. Pass a custom policy for pages with external needs
+     *                         (e.g. the admin SPA loads Nostr relays over wss).
+     *                         Pass '' to omit the CSP header entirely.
      */
-    public static function setSecurityHeaders(): void {
+    public static function setSecurityHeaders(?string $csp = null): void {
         // Prevent clickjacking
         header('X-Frame-Options: SAMEORIGIN');
 
         // Prevent MIME type sniffing
         header('X-Content-Type-Options: nosniff');
 
-        // XSS protection
+        // XSS protection (legacy browsers)
         header('X-XSS-Protection: 1; mode=block');
 
         // Referrer policy
         header('Referrer-Policy: strict-origin-when-cross-origin');
 
-        // Content Security Policy (adjust as needed)
-        header("Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'");
+        if ($csp === null) {
+            // Strict default: self-hosted + jsdelivr (QR lib); no external data egress.
+            $csp = "default-src 'self'; "
+                 . "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                 . "style-src 'self' 'unsafe-inline'; "
+                 . "img-src 'self' data: https:; "
+                 . "connect-src 'self'; "
+                 . "object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
+        }
+        if ($csp !== '') {
+            header('Content-Security-Policy: ' . $csp);
+        }
+    }
+
+    /**
+     * CSP tuned for the admin SPA, which must reach Nostr relays (wss) and two CDNs for
+     * mint discovery. connect-src is necessarily broad; the primary XSS defences are output
+     * escaping and not shipping secrets to the browser (see FABLE-SECURITY-AUDIT HIGH-1/2/3).
+     */
+    public static function adminCsp(): string {
+        return "default-src 'self'; "
+             . "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.skypack.dev; "
+             . "style-src 'self' 'unsafe-inline'; "
+             . "img-src 'self' data: https:; "
+             . "connect-src 'self' https: wss:; "
+             . "object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
     }
 
     // Simple file-based cache for rate limiting

@@ -9,7 +9,8 @@ require_once __DIR__ . '/../invoice.php';
  * Create a new invoice
  */
 function handleCreateInvoice(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.cancreateinvoice');
 
     // Verify store exists and user has access
     $store = Database::fetchOne("SELECT id FROM stores WHERE id = ?", [$storeId]);
@@ -23,6 +24,12 @@ function handleCreateInvoice(array $auth, array $params, array $body): void {
 
     if ($amount === null || $amount === '') {
         errorResponse('validation-error', 'Amount is required');
+    }
+
+    // Amount must be numeric — it is later rendered in the admin UI and used for
+    // conversion. Rejecting non-numeric input closes a stored-XSS vector (HIGH-2).
+    if (!is_numeric($amount)) {
+        errorResponse('validation-error', 'Amount must be numeric');
     }
 
     // Create invoice
@@ -44,7 +51,8 @@ function handleCreateInvoice(array $auth, array $params, array $body): void {
  * Get invoices for a store
  */
 function handleGetInvoices(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.canviewinvoices');
 
     // Parse query parameters
     $status = $_GET['status'] ?? null;
@@ -61,7 +69,8 @@ function handleGetInvoices(array $auth, array $params, array $body): void {
  * Get a single invoice
  */
 function handleGetInvoice(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.canviewinvoices');
     $invoiceId = $params['invoiceId'];
 
     // Poll only this specific invoice's quote status
@@ -80,7 +89,8 @@ function handleGetInvoice(array $auth, array $params, array $body): void {
  * Update invoice status (mark as invalid, etc.)
  */
 function handleUpdateInvoiceStatus(array $auth, array $params, array $body): void {
-    $storeId = $params['storeId'];
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.canmodifyinvoices');
     $invoiceId = $params['invoiceId'];
 
     $invoice = Invoice::getById($invoiceId);
@@ -98,6 +108,13 @@ function handleUpdateInvoiceStatus(array $auth, array $params, array $body): voi
     // Only allow marking as Invalid if currently New or Processing
     if ($status === 'Invalid' && !in_array($invoice['status'], ['New', 'Processing'])) {
         errorResponse('validation-error', 'Can only invalidate New or Processing invoices');
+    }
+
+    // Settling must not be usable to fake a payment on an unpaid/expired invoice.
+    // Only an invoice already detected as paid (Processing) or still open (New) may be
+    // manually settled. See FABLE-SECURITY-AUDIT (C-API-1).
+    if ($status === 'Settled' && !in_array($invoice['status'], ['New', 'Processing'])) {
+        errorResponse('validation-error', 'Can only settle New or Processing invoices');
     }
 
     Invoice::updateStatus($invoiceId, $status);

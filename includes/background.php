@@ -26,7 +26,10 @@ class Background {
             CURLOPT_TIMEOUT_MS => 100,
             CURLOPT_NOSIGNAL => 1,
             CURLOPT_SSL_VERIFYPEER => false, // For local development
-            CURLOPT_FOLLOWLOCATION => true,
+            // Do NOT follow redirects: this request carries the internal key, and a
+            // redirect could leak it to another host. See FABLE-SECURITY-AUDIT (HIGH-5).
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
         ]);
         @curl_exec($ch);
         // Note: curl_close() is a no-op since PHP 8.0, handle is auto-closed

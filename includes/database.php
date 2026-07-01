@@ -295,6 +295,10 @@ HTACCESS;
         if (!self::columnExists($pdo, 'invoices', 'last_polled_at')) {
             $pdo->exec("ALTER TABLE invoices ADD COLUMN last_polled_at INTEGER DEFAULT NULL");
         }
+        // Timestamp of when an invoice was claimed for minting (atomic mint claim).
+        if (!self::columnExists($pdo, 'invoices', 'processing_since')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN processing_since INTEGER DEFAULT NULL");
+        }
     }
 
     private static function columnExists(\PDO $pdo, string $table, string $column): bool {

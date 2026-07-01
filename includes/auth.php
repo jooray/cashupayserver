@@ -19,8 +19,25 @@ class Auth {
      */
     public static function initSession(): void {
         if (session_status() === PHP_SESSION_NONE) {
+            // Harden the session cookie without needing php.ini access (shared hosting).
+            $secure = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+                || (($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+            session_set_cookie_params([
+                'httponly' => true,     // not readable from JS (limits XSS -> session theft)
+                'secure'   => $secure,  // HTTPS-only when served over TLS
+                'samesite' => 'Lax',    // mitigates cross-site POST/CSRF
+                'path'     => '/',
+            ]);
             session_name(self::SESSION_NAME);
             session_start();
+
+            // Absolute session timeout (24h) using the stored login_time.
+            if (isset($_SESSION['admin_logged_in'], $_SESSION['login_time'])
+                && (time() - (int)$_SESSION['login_time']) > 86400) {
+                $_SESSION = [];
+                session_destroy();
+                session_start();
+            }
         }
     }
 
@@ -165,13 +182,32 @@ class Auth {
      * Check if API key has specific permission
      */
     public static function hasPermission(array $authData, string $permission): bool {
-        // Check for wildcard permission
-        if (in_array('*', $authData['permissions'])) {
+        $perms = $authData['permissions'] ?? [];
+
+        // Wildcard (admin-created keys) grants everything.
+        if (in_array('*', $perms, true)) {
             return true;
         }
 
-        // Check for specific permission
-        return in_array($permission, $authData['permissions']);
+        foreach ($perms as $held) {
+            // Exact match.
+            if ($held === $permission) {
+                return true;
+            }
+            // BTCPay Greenfield stores store-scoped permissions as "perm:storeId".
+            // Treat the base permission as held regardless of the scope suffix (the
+            // store scope itself is enforced separately by requireStore()).
+            if (strpos($held, $permission . ':') === 0) {
+                return true;
+            }
+            // BTCPay's server-settings permission implies store-settings management.
+            if ($held === 'btcpay.server.canmodifyserversettings'
+                && strpos($permission, 'btcpay.store.') === 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

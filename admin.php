@@ -16,6 +16,21 @@ require_once __DIR__ . '/includes/urls.php';
 
 use Cashu\ProofState;
 
+/**
+ * Strip secrets from a store row before it is sent to the browser.
+ *
+ * seed_phrase and internal_api_key are wallet-controlling secrets and must never
+ * leave the server. Any XSS in the admin SPA would otherwise be able to exfiltrate
+ * them. See FABLE-SECURITY-AUDIT (HIGH-1).
+ */
+function cashupay_public_store(array $store): array {
+    unset($store['seed_phrase'], $store['internal_api_key'], $store['internalApiKey']);
+    return $store;
+}
+
+// Security headers (admin SPA needs Nostr relays + CDNs, so a tuned CSP is used).
+Security::setSecurityHeaders(Security::adminCsp());
+
 // Check setup
 if (!Database::isInitialized() || !Config::isSetupComplete()) {
     header('Location: ' . Urls::setup());
@@ -80,10 +95,12 @@ if (isset($_GET['api'])) {
             // Get all stores for selector
             $stores = Database::fetchAll("SELECT * FROM stores ORDER BY created_at DESC");
 
-            // Ensure each store has an internal API key
+            // Ensure the internal API key EXISTS server-side (used by server-side
+            // invoice creation), but never send it — or the seed — to the browser.
             foreach ($stores as &$store) {
-                $store['internalApiKey'] = Auth::getOrCreateInternalApiKey($store['id']);
+                Auth::getOrCreateInternalApiKey($store['id']);
                 $store['isConfigured'] = Config::isStoreConfigured($store['id']);
+                $store = cashupay_public_store($store);
             }
             unset($store);
 
@@ -211,6 +228,7 @@ if (isset($_GET['api'])) {
 
         case 'stores':
             $stores = Database::fetchAll("SELECT * FROM stores ORDER BY created_at DESC");
+            $stores = array_map('cashupay_public_store', $stores);
             echo json_encode($stores);
             break;
 
@@ -296,14 +314,19 @@ if (isset($_GET['api'])) {
             break;
 
         case 'proofs':
+            // Return only a NON-sensitive summary. Raw proofs contain `secret` + `C`,
+            // which are bearer ecash — they must never be sent to the browser.
+            // See FABLE-SECURITY-AUDIT (HIGH-1 / A3).
             $storeId = $_GET['store_id'] ?? null;
             if (!$storeId || !Config::isStoreConfigured($storeId)) {
-                echo json_encode([]);
+                echo json_encode(['count' => 0, 'balance' => 0]);
                 break;
             }
             $wallet = Invoice::getWalletInstance($storeId);
             $rows = $wallet->getStorage()->getProofs(ProofState::UNSPENT);
-            echo json_encode($rows);
+            $total = 0;
+            foreach ($rows as $r) { $total += (int)($r['amount'] ?? 0); }
+            echo json_encode(['count' => count($rows), 'balance' => $total]);
             break;
 
         default:
@@ -379,6 +402,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'logout':
             Auth::logout();
             echo json_encode(['success' => true]);
+            break;
+
+        case 'create_invoice':
+            // Server-side invoice creation for the admin "Request" feature.
+            // Runs under the admin session, so no API key is exposed to the browser.
+            try {
+                $storeId = $_POST['store_id'] ?? '';
+                $amount = $_POST['amount'] ?? '';
+                $currency = $_POST['currency'] ?? 'sat';
+                $memo = trim((string)($_POST['memo'] ?? ''));
+                $redirect = $_POST['redirect'] ?? '';
+
+                if (empty($storeId) || !Config::isStoreConfigured($storeId)) {
+                    throw new Exception('Store not configured');
+                }
+                if (!is_numeric($amount) || (float)$amount <= 0) {
+                    throw new Exception('Invalid amount');
+                }
+                // Only allow same-origin http(s) redirect targets (no javascript:/data:).
+                $checkout = null;
+                if ($redirect !== '' && Security::isSafePublicHttpUrl($redirect, true)) {
+                    $checkout = ['redirectURL' => $redirect, 'redirectAutomatically' => true];
+                }
+
+                $options = [
+                    'amount' => $amount,
+                    'currency' => strtoupper($currency),
+                ];
+                if ($memo !== '') {
+                    $options['metadata'] = ['itemDesc' => $memo];
+                }
+                if ($checkout !== null) {
+                    $options['checkout'] = $checkout;
+                }
+
+                $invoice = Invoice::create($storeId, $options);
+                echo json_encode(Invoice::formatForApi($invoice));
+            } catch (Exception $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
             break;
 
         case 'save_url_mode':
@@ -3418,7 +3482,7 @@ $isWp = Urls::isWordPress();
                     <div class="list-item">
                         <div class="list-icon" style="background: rgba(247, 147, 26, 0.2);">🔑</div>
                         <div class="list-content">
-                            <div class="list-title">${key.label || 'API Key'}</div>
+                            <div class="list-title">${escapeHtml(key.label || 'API Key')}</div>
                             <div class="list-subtitle">ID: ${key.id.substring(0, 8)}...</div>
                         </div>
                         <button class="btn btn-secondary" style="padding: 0.25rem 0.5rem; font-size: 0.75rem;" onclick="deleteApiKeyFromSettings('${key.id}')">Delete</button>
@@ -3458,7 +3522,7 @@ $isWp = Urls::isWordPress();
                             <div class="list-subtitle">${date}${description ? ' · ' + inv.id : ''}</div>
                         </div>
                         <div class="list-amount">
-                            <div class="list-amount-value">${inv.amount} ${inv.currency}</div>
+                            <div class="list-amount-value">${escapeHtml(inv.amount)} ${escapeHtml(inv.currency)}</div>
                             <div class="list-amount-status ${statusClass}">${inv.status}</div>
                         </div>
                     </div>
@@ -3473,11 +3537,11 @@ $isWp = Urls::isWordPress();
             if (!container) return;
 
             container.innerHTML = stores.map(store => `
-                <div class="list-item" onclick="showStoreDetails('${store.id}', '${store.name}')">
+                <div class="list-item" data-store-id="${escapeHtml(store.id)}" data-store-name="${escapeHtml(store.name)}" onclick="showStoreDetails(this.dataset.storeId, this.dataset.storeName)">
                     <div class="list-icon" style="background: rgba(247, 147, 26, 0.2);">🏪</div>
                     <div class="list-content">
-                        <div class="list-title">${store.name}</div>
-                        <div class="list-subtitle">${store.id}</div>
+                        <div class="list-title">${escapeHtml(store.name)}</div>
+                        <div class="list-subtitle">${escapeHtml(store.id)}</div>
                     </div>
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polyline points="9 18 15 12 9 6"></polyline>
@@ -4121,7 +4185,6 @@ $isWp = Urls::isWordPress();
 
             // Get store info from dashboardData
             const store = dashboardData?.stores?.find(s => s.id === storeId);
-            const apiKey = store?.internalApiKey;
             const mintUnit = store?.mint_unit || 'sat';
             const minAmount = (mintUnit === 'sat' || mintUnit === 'msat') ? 1 : 0.01;
 
@@ -4130,41 +4193,19 @@ $isWp = Urls::isWordPress();
                 return;
             }
 
-            if (!apiKey) {
-                showToast('Store API key not available', 'error');
-                return;
-            }
-
             try {
-                // Use Greenfield API to create invoice
-                const apiUrl = API_BASE_URL + '/api/v1/stores/' + encodeURIComponent(storeId) + '/invoices';
-
-                const invoiceData = {
-                    amount: amount,
-                    currency: mintUnit,
-                    checkout: {
-                        redirectURL: window.location.href.split('?')[0], // Return to admin
-                        redirectAutomatically: true
-                    }
-                };
-
-                if (memo) {
-                    invoiceData.metadata = { itemDesc: memo };
-                }
-
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': 'token ' + apiKey
-                    },
-                    body: JSON.stringify(invoiceData)
-                });
-
+                // Create the invoice server-side (admin session + CSRF). The internal
+                // API key stays on the server and is never exposed to the browser.
+                const params = `action=create_invoice`
+                    + `&store_id=${encodeURIComponent(storeId)}`
+                    + `&amount=${encodeURIComponent(amount)}`
+                    + `&currency=${encodeURIComponent(mintUnit)}`
+                    + `&memo=${encodeURIComponent(memo || '')}`
+                    + `&redirect=${encodeURIComponent(window.location.href.split('?')[0])}`;
+                const response = await postWithCsrf(adminUrl, params);
                 const result = await response.json();
 
                 if (response.ok && result.checkoutLink) {
-                    // Redirect to checkout page
                     window.location.href = result.checkoutLink;
                 } else {
                     showToast(result.message || result.error || 'Failed to create invoice', 'error');
@@ -4532,7 +4573,7 @@ $isWp = Urls::isWordPress();
                         <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
                             ${units.length > 0 ? units.map(u => u.toUpperCase()).join(' \u2022 ') : 'Unknown units'}
                         </div>
-                        <button type="button" class="btn btn-full" style="font-size: 0.85rem;" onclick="selectDiscoveredMint('${escapeHtml(m.url)}')">Select</button>
+                        <button type="button" class="btn btn-full" style="font-size: 0.85rem;" data-mint-url="${escapeHtml(m.url)}" onclick="selectDiscoveredMint(this.dataset.mintUrl)">Select</button>
                     </div>
                 `;
             }).join('');
@@ -4618,10 +4659,10 @@ $isWp = Urls::isWordPress();
                         <div id="add-backup-mint-form" style="display: none; margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border);">
                             <div style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem;">
                                 <input type="url" id="backup-mint-url" class="form-input" placeholder="https://mint.example.com" style="flex: 1; font-size: 0.85rem;">
-                                <button class="btn btn-secondary" style="font-size: 0.8rem; white-space: nowrap;" onclick="openBackupMintDiscovery('${storeId}', '${escapeHtml(storeName)}')">Discover</button>
+                                <button class="btn btn-secondary" style="font-size: 0.8rem; white-space: nowrap;" data-store-id="${escapeHtml(storeId)}" data-store-name="${escapeHtml(storeName)}" onclick="openBackupMintDiscovery(this.dataset.storeId, this.dataset.storeName)">Discover</button>
                             </div>
                             <div style="display: flex; gap: 0.5rem;">
-                                <button class="btn btn-full" style="font-size: 0.8rem;" onclick="addBackupMint('${storeId}', '${escapeHtml(storeName)}')">Add</button>
+                                <button class="btn btn-full" style="font-size: 0.8rem;" data-store-id="${escapeHtml(storeId)}" data-store-name="${escapeHtml(storeName)}" onclick="addBackupMint(this.dataset.storeId, this.dataset.storeName)">Add</button>
                                 <button class="btn btn-secondary" style="font-size: 0.8rem;" onclick="document.getElementById('add-backup-mint-form').style.display='none'">Cancel</button>
                             </div>
                         </div>
@@ -5034,9 +5075,15 @@ $isWp = Urls::isWordPress();
 
         // Utility: escape HTML
         function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
+            // Encode quotes too, so values are safe inside single/double-quoted HTML
+            // attributes (e.g. onclick='fn("...")'), not just text nodes.
+            // See FABLE-SECURITY-AUDIT (HIGH-3).
+            return String(text ?? '').replace(/[&<>"']/g, function (c) {
+                return {
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;',
+                    '"': '&quot;', "'": '&#39;'
+                }[c];
+            });
         }
 
         // Toast
