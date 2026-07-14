@@ -71,6 +71,7 @@ function handleCreateStore(array $auth, array $params, array $body): void {
     Database::insert('stores', [
         'id' => $storeId,
         'name' => $name,
+        'wallet_account_id' => Database::generateWalletAccountId(),
         'created_at' => $now,
     ]);
 

@@ -534,6 +534,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 Database::insert('stores', [
                     'id' => $storeId,
                     'name' => $name,
+                    'wallet_account_id' => Database::generateWalletAccountId(),
                     'mint_url' => $mintUrl,
                     'mint_unit' => $mintUnit,
                     'seed_phrase' => $seedPhrase,
@@ -542,6 +543,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'price_provider_secondary' => $secondaryProvider,
                     'created_at' => Database::timestamp(),
                 ]);
+
+                if ($mintUrl && $seedPhrase) {
+                    $existingSeed = isset($_POST['seed_phrase']) && $_POST['seed_phrase'] !== '';
+                    $wallet = Invoice::initializeWalletForStore($storeId, $existingSeed);
+                    if ($existingSeed) {
+                        $wallet->restore();
+                    }
+                }
 
                 echo json_encode([
                     'id' => $storeId,
@@ -652,8 +661,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $balance = 0;
             try {
                 $balance = Config::isStoreConfigured($storeId) ? Invoice::getBalance($storeId) : 0;
-            } catch (Exception $e) {
-                $balance = 0;
+            } catch (Throwable $e) {
+                http_response_code(409);
+                echo json_encode([
+                    'error' => 'balance_unavailable',
+                    'message' => 'Cannot verify this store wallet safely; refusing to delete it.'
+                ]);
+                break;
             }
             if ($balance > 0 && !$confirmLoss) {
                 http_response_code(409);
@@ -1427,6 +1441,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $id = Config::addStoreBackupMint($storeId, $mintUrl, $unit, $priority);
+                try {
+                    $wallet = Invoice::initializeWalletForStore($storeId, true, $mintUrl, $unit);
+                    $wallet->restore();
+                } catch (Throwable $e) {
+                    Config::removeStoreBackupMint($id);
+                    throw new Exception('Backup mint recovery check failed: ' . $e->getMessage());
+                }
                 echo json_encode([
                     'success' => true,
                     'id' => $id,

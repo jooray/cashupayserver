@@ -255,13 +255,37 @@ class Config {
         $store = self::getStore($storeId);
         return $store !== null
             && !empty($store['mint_url'])
-            && !empty($store['seed_phrase']);
+            && !empty($store['seed_phrase'])
+            && !empty($store['wallet_account_id']);
+    }
+
+    public static function getStoreWalletAccountId(string $storeId): ?string {
+        $store = self::getStore($storeId);
+        return $store['wallet_account_id'] ?? null;
     }
 
     /**
      * Update store settings
      */
     public static function updateStore(string $storeId, array $data): void {
+        $store = self::getStore($storeId);
+        if (!$store) {
+            throw new Exception('Store not found');
+        }
+        foreach (['mint_url', 'mint_unit', 'seed_phrase'] as $field) {
+            if (!array_key_exists($field, $data)) {
+                continue;
+            }
+            $old = (string)($store[$field] ?? '');
+            $new = (string)($data[$field] ?? '');
+            if ($field === 'mint_url') {
+                $old = rtrim($old, '/');
+                $new = rtrim($new, '/');
+            }
+            if ($old !== '' && $old !== $new && self::walletAccountIsInitialized($store)) {
+                throw new Exception('Wallet seed, mint, and unit are immutable after wallet initialization. Create a new store wallet instead.');
+            }
+        }
         $allowed = [
             'name', 'mint_url', 'mint_unit', 'seed_phrase',
             'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary'
@@ -271,6 +295,19 @@ class Config {
         if (!empty($updateData)) {
             Database::update('stores', $updateData, 'id = ?', [$storeId]);
         }
+    }
+
+    private static function walletAccountIsInitialized(array $store): bool {
+        if (empty($store['wallet_account_id']) || empty($store['mint_url'])) {
+            return false;
+        }
+        $storage = new \Cashu\WalletStorage(
+            Database::getDbPath(),
+            $store['mint_url'],
+            $store['mint_unit'] ?? 'sat',
+            $store['wallet_account_id']
+        );
+        return $storage->getSeedFingerprint() !== null || $storage->hasWalletData();
     }
 
     // ========================================================================
@@ -324,6 +361,42 @@ class Config {
         }
 
         return $allMints;
+    }
+
+    /** Include disabled backups because they may still contain recovery state. */
+    public static function getStoreWalletAccounts(string $storeId): array {
+        $store = self::getStore($storeId);
+        if (!$store) {
+            return [];
+        }
+        $accounts = [];
+        if (!empty($store['mint_url'])) {
+            $accounts[] = [
+                'mint_url' => rtrim($store['mint_url'], '/'),
+                'unit' => strtolower($store['mint_unit'] ?? 'sat'),
+                'primary' => true,
+                'enabled' => true,
+            ];
+        }
+        foreach (self::getStoreBackupMints($storeId) as $mint) {
+            $key = rtrim($mint['mint_url'], '/') . '|' . strtolower($mint['unit'] ?? 'sat');
+            $exists = false;
+            foreach ($accounts as $account) {
+                if ($key === $account['mint_url'] . '|' . $account['unit']) {
+                    $exists = true;
+                    break;
+                }
+            }
+            if (!$exists) {
+                $accounts[] = [
+                    'mint_url' => rtrim($mint['mint_url'], '/'),
+                    'unit' => strtolower($mint['unit'] ?? 'sat'),
+                    'primary' => false,
+                    'enabled' => (bool)$mint['enabled'],
+                ];
+            }
+        }
+        return $accounts;
     }
 
     /**

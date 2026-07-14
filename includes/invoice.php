@@ -71,6 +71,22 @@ class Invoice {
         return $changed === 1;
     }
 
+    private static function settleAndEnqueue(string $invoiceId): bool {
+        Database::beginTransaction();
+        try {
+            $settled = self::markSettledOnce($invoiceId);
+            if ($settled) {
+                $invoice = self::getById($invoiceId);
+                WebhookSender::fireEvent($invoice['store_id'], 'InvoiceSettled', $invoice);
+            }
+            Database::commit();
+            return $settled;
+        } catch (Throwable $e) {
+            Database::rollback();
+            throw $e;
+        }
+    }
+
     /**
      * Create a new invoice
      *
@@ -147,29 +163,32 @@ class Invoice {
         $invoiceId = Database::generateId('inv');
         $now = Database::timestamp();
 
-        // Store invoice with mint URL used
-        Database::insert('invoices', [
-            'id' => $invoiceId,
-            'store_id' => $storeId,
-            'status' => 'New',
-            'additional_status' => 'None',
-            'amount' => $amount,
-            'currency' => $currency,
-            'amount_sats' => $amountInMintUnit, // Actually amount in mint's smallest unit
-            'exchange_rate' => $exchangeRate,
-            'quote_id' => $quote->quote,
-            'bolt11' => $quote->request,
-            'mint_url' => $usedMintUrl,
-            'metadata' => $metadata ? json_encode($metadata) : null,
-            'checkout_config' => $checkout ? json_encode($checkout) : null,
-            'created_at' => $now,
-            'expiration_time' => $expiration,
-        ]);
-
-        $invoice = self::getById($invoiceId);
-
-        // Fire InvoiceCreated webhook
-        WebhookSender::fireEvent($storeId, 'InvoiceCreated', $invoice);
+        Database::beginTransaction();
+        try {
+            Database::insert('invoices', [
+                'id' => $invoiceId,
+                'store_id' => $storeId,
+                'status' => 'New',
+                'additional_status' => 'None',
+                'amount' => $amount,
+                'currency' => $currency,
+                'amount_sats' => $amountInMintUnit, // Actually amount in mint's smallest unit
+                'exchange_rate' => $exchangeRate,
+                'quote_id' => $quote->quote,
+                'bolt11' => $quote->request,
+                'mint_url' => $usedMintUrl,
+                'metadata' => $metadata ? json_encode($metadata) : null,
+                'checkout_config' => $checkout ? json_encode($checkout) : null,
+                'created_at' => $now,
+                'expiration_time' => $expiration,
+            ]);
+            $invoice = self::getById($invoiceId);
+            WebhookSender::fireEvent($storeId, 'InvoiceCreated', $invoice);
+            Database::commit();
+        } catch (Throwable $e) {
+            Database::rollback();
+            throw $e;
+        }
 
         return $invoice;
     }
@@ -213,12 +232,6 @@ class Invoice {
             $updates['additional_status'] = $additionalStatus;
         }
 
-        Database::update('invoices', $updates, 'id = ?', [$invoiceId]);
-
-        // Get updated invoice for webhook
-        $invoice = self::getById($invoiceId);
-
-        // Fire appropriate webhook
         $eventType = match ($status) {
             'Processing' => 'InvoiceProcessing',
             'Settled' => 'InvoiceSettled',
@@ -227,8 +240,17 @@ class Invoice {
             default => null,
         };
 
-        if ($eventType && $invoice) {
-            WebhookSender::fireEvent($invoice['store_id'], $eventType, $invoice);
+        Database::beginTransaction();
+        try {
+            Database::update('invoices', $updates, 'id = ?', [$invoiceId]);
+            $invoice = self::getById($invoiceId);
+            if ($eventType && $invoice) {
+                WebhookSender::fireEvent($invoice['store_id'], $eventType, $invoice);
+            }
+            Database::commit();
+        } catch (Throwable $e) {
+            Database::rollback();
+            throw $e;
         }
     }
 
@@ -247,18 +269,24 @@ class Invoice {
             [$now]
         );
 
-        $stmt = Database::query(
-            "UPDATE invoices SET status = 'Expired'
-             WHERE status = 'New' AND expiration_time < ?",
-            [$now]
-        );
-        $count = $stmt->rowCount();
-
-        foreach ($expiring as $row) {
-            $invoice = self::getById($row['id']);
-            if ($invoice && $invoice['status'] === 'Expired') {
-                WebhookSender::fireEvent($row['store_id'], 'InvoiceExpired', $invoice);
+        Database::beginTransaction();
+        try {
+            $stmt = Database::query(
+                "UPDATE invoices SET status = 'Expired'
+                 WHERE status = 'New' AND expiration_time < ?",
+                [$now]
+            );
+            $count = $stmt->rowCount();
+            foreach ($expiring as $row) {
+                $invoice = self::getById($row['id']);
+                if ($invoice && $invoice['status'] === 'Expired') {
+                    WebhookSender::fireEvent($row['store_id'], 'InvoiceExpired', $invoice);
+                }
             }
+            Database::commit();
+        } catch (Throwable $e) {
+            Database::rollback();
+            throw $e;
         }
 
         return $count;
@@ -336,8 +364,6 @@ class Invoice {
             return; // another worker owns this mint (or it's not claimable)
         }
 
-        self::clearWebhookQueue();
-
         // Mint tokens - library stores proofs in cashu_proofs with quote_id.
         // Proofs are persisted by the library BEFORE this returns; a crash here is
         // recovered by recoverOrphanedInvoices() on the next cron tick.
@@ -347,22 +373,15 @@ class Invoice {
         Database::beginTransaction();
 
         try {
-            self::queueWebhook($invoice['store_id'], 'InvoiceReceivedPayment', $invoice);
-
             $settled = self::markSettledOnce($invoice['id']);
-
-            Database::commit();
-
             if ($settled) {
                 $updatedInvoice = self::getById($invoice['id']);
-                self::queueWebhook($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
-                self::flushWebhookQueue();
-            } else {
-                self::clearWebhookQueue();
+                WebhookSender::fireEvent($invoice['store_id'], 'InvoiceReceivedPayment', $updatedInvoice);
+                WebhookSender::fireEvent($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
             }
-        } catch (Exception $e) {
+            Database::commit();
+        } catch (Throwable $e) {
             Database::rollback();
-            self::clearWebhookQueue();
             throw $e;
         }
     }
@@ -436,35 +455,35 @@ class Invoice {
     private static array $walletCache = [];
 
     /**
-     * Webhook queue for deferred delivery after transaction commit
-     */
-    private static array $webhookQueue = [];
-
-    /**
      * Get or create wallet instance for a store
      *
      * @param string $storeId Store ID
      * @param string|null $mintUrl Optional specific mint URL (for backup mints)
      * @return Wallet
      */
-    public static function getWalletForStore(string $storeId, ?string $mintUrl = null): Wallet {
+    public static function getWalletForStore(
+        string $storeId,
+        ?string $mintUrl = null,
+        ?string $mintUnit = null
+    ): Wallet {
         $store = Config::getStore($storeId);
         if (!$store) {
             throw new Exception('Store not found');
         }
 
         $mintUrl = $mintUrl ?? $store['mint_url'];
-        $mintUnit = $store['mint_unit'] ?? 'sat';
+        $mintUnit = $mintUnit ?? ($store['mint_unit'] ?? 'sat');
         $seedPhrase = $store['seed_phrase'];
+        $accountId = $store['wallet_account_id'] ?? null;
 
-        if (empty($mintUrl) || empty($seedPhrase)) {
+        if (empty($mintUrl) || empty($seedPhrase) || empty($accountId)) {
             throw new Exception('Store wallet not configured');
         }
 
         $cacheKey = $storeId . '|' . $mintUrl . '|' . $mintUnit;
 
         if (!isset(self::$walletCache[$cacheKey])) {
-            $wallet = new Wallet($mintUrl, $mintUnit, Database::getDbPath());
+            $wallet = new Wallet($mintUrl, $mintUnit, Database::getDbPath(), $accountId);
             $wallet->loadMint();
             $wallet->initFromMnemonic($seedPhrase);
 
@@ -474,30 +493,43 @@ class Invoice {
         return self::$walletCache[$cacheKey];
     }
 
+    /** Initialize a newly configured store explicitly as new or recovery-only. */
+    public static function initializeWalletForStore(
+        string $storeId,
+        bool $existingSeed,
+        ?string $mintUrl = null,
+        ?string $mintUnit = null
+    ): Wallet {
+        $store = Config::getStore($storeId);
+        if (!$store || empty($store['mint_url']) || empty($store['seed_phrase']) || empty($store['wallet_account_id'])) {
+            throw new Exception('Store wallet not configured');
+        }
+        $mintUrl = $mintUrl ?? $store['mint_url'];
+        $mintUnit = $mintUnit ?? ($store['mint_unit'] ?? 'sat');
+        $wallet = new Wallet(
+            $mintUrl,
+            $mintUnit,
+            Database::getDbPath(),
+            $store['wallet_account_id']
+        );
+        $wallet->loadMint();
+        $fingerprint = $wallet->getStorage()?->getSeedFingerprint();
+        if ($fingerprint !== null) {
+            $wallet->initFromMnemonic($store['seed_phrase']);
+        } elseif ($existingSeed) {
+            $wallet->initializeForRestore($store['seed_phrase']);
+        } else {
+            $wallet->initializeNewFromMnemonic($store['seed_phrase']);
+        }
+        self::$walletCache[$storeId . '|' . $mintUrl . '|' . $mintUnit] = $wallet;
+        return $wallet;
+    }
+
     /**
      * Get wallet instance for a store (public accessor)
      */
     public static function getWalletInstance(string $storeId): Wallet {
         return self::getWalletForStore($storeId);
-    }
-
-    // =========================================================================
-    // WEBHOOK QUEUE
-    // =========================================================================
-
-    private static function queueWebhook(string $storeId, string $event, array $data): void {
-        self::$webhookQueue[] = compact('storeId', 'event', 'data');
-    }
-
-    private static function flushWebhookQueue(): void {
-        foreach (self::$webhookQueue as $item) {
-            WebhookSender::fireEvent($item['storeId'], $item['event'], $item['data']);
-        }
-        self::$webhookQueue = [];
-    }
-
-    private static function clearWebhookQueue(): void {
-        self::$webhookQueue = [];
     }
 
     // =========================================================================
@@ -554,10 +586,7 @@ class Invoice {
             $proofs = $wallet->getStorage()->getProofsByQuoteId($invoice['quote_id']);
             if (!empty($proofs)) {
                 // Proofs already exist for this quote — just settle (once).
-                if (self::markSettledOnce($invoice['id'])) {
-                    $updatedInvoice = self::getById($invoice['id']);
-                    WebhookSender::fireEvent($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
-                }
+                self::settleAndEnqueue($invoice['id']);
                 return;
             }
         }
@@ -605,10 +634,8 @@ class Invoice {
 
                 $proofs = $wallet->getStorage()->getProofsByQuoteId($invoice['quote_id']);
                 if (!empty($proofs)) {
-                    if (self::markSettledOnce($invoice['id'])) {
+                    if (self::settleAndEnqueue($invoice['id'])) {
                         $recovered[] = $invoice['id'];
-                        $updatedInvoice = self::getById($invoice['id']);
-                        WebhookSender::fireEvent($invoice['store_id'], 'InvoiceSettled', $updatedInvoice);
                         error_log("CashuPayServer: Recovered orphaned invoice {$invoice['id']}");
                     }
                     continue;
@@ -701,25 +728,14 @@ class Invoice {
             return 0;
         }
 
-        $unit = $store['mint_unit'] ?? 'sat';
-
-        // Aggregate across the primary mint AND any backup mints. Funds settled via
-        // failover live under the backup mint's namespace (walletId = hash(mintUrl:unit));
-        // summing here makes them visible instead of appearing lost.
-        // See FABLE-CASHUPAYSERVER-AUDIT (C2).
-        $mintUrls = Config::getStoreAllMintUrls($storeId);
-        if (empty($mintUrls)) {
-            $mintUrls = [$store['mint_url']];
-        }
-
         $total = 0;
-        $seen = [];
-        foreach ($mintUrls as $mintUrl) {
-            if ($mintUrl === '' || isset($seen[$mintUrl])) {
-                continue;
-            }
-            $seen[$mintUrl] = true;
-            $storage = new WalletStorage(Database::getDbPath(), $mintUrl, $unit);
+        foreach (Config::getStoreWalletAccounts($storeId) as $account) {
+            $storage = new WalletStorage(
+                Database::getDbPath(),
+                $account['mint_url'],
+                $account['unit'],
+                $store['wallet_account_id']
+            );
             $total += $storage->getBalance();
         }
         return $total;
@@ -740,7 +756,8 @@ class Invoice {
         $storage = new WalletStorage(
             Database::getDbPath(),
             $store['mint_url'],
-            $store['mint_unit'] ?? 'sat'
+            $store['mint_unit'] ?? 'sat',
+            $store['wallet_account_id']
         );
         return $storage->getProofsAsObjects(ProofState::UNSPENT);
     }
@@ -761,7 +778,8 @@ class Invoice {
         $storage = new WalletStorage(
             Database::getDbPath(),
             $store['mint_url'],
-            $store['mint_unit'] ?? 'sat'
+            $store['mint_unit'] ?? 'sat',
+            $store['wallet_account_id']
         );
         $storage->updateProofsState($secrets, ProofState::SPENT);
     }
@@ -785,7 +803,8 @@ class Invoice {
         $storage = new WalletStorage(
             Database::getDbPath(),
             $store['mint_url'],
-            $store['mint_unit'] ?? 'sat'
+            $store['mint_unit'] ?? 'sat',
+            $store['wallet_account_id']
         );
         $storage->updateProofsState($secrets, ProofState::PENDING);
     }
@@ -867,6 +886,33 @@ class Invoice {
             error_log("CashuPayServer: Error checking pending proofs: " . $e->getMessage());
             return ['checked' => 0, 'spent' => 0, 'recovered' => 0, 'error' => $e->getMessage()];
         }
+    }
+
+    /** Recover ambiguous outgoing operations for primary and disabled backup mints. */
+    public static function recoverPendingWalletOperations(): array {
+        $result = ['accounts' => 0, 'melts' => 0, 'swaps' => 0, 'errors' => []];
+        $stores = Database::fetchAll(
+            "SELECT id FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL AND wallet_account_id IS NOT NULL"
+        );
+        foreach ($stores as $store) {
+            foreach (Config::getStoreWalletAccounts($store['id']) as $account) {
+                $label = $store['id'] . '|' . $account['mint_url'] . '|' . $account['unit'];
+                try {
+                    $wallet = self::getWalletForStore($store['id'], $account['mint_url'], $account['unit']);
+                    $melts = $wallet->recoverPendingMelts();
+                    $swaps = $wallet->recoverPendingSwaps();
+                    $result['accounts']++;
+                    $result['melts'] += (int)($melts['paid'] ?? 0) + (int)($melts['restored'] ?? 0);
+                    $result['swaps'] += (int)($swaps['recovered'] ?? 0) + (int)($swaps['released'] ?? 0);
+                    if (!empty($melts['errors']) || !empty($swaps['errors'])) {
+                        $result['errors'][$label] = array_merge($melts['errors'] ?? [], $swaps['errors'] ?? []);
+                    }
+                } catch (Throwable $e) {
+                    $result['errors'][$label] = $e->getMessage();
+                }
+            }
+        }
+        return $result;
     }
 
     /**

@@ -21,9 +21,12 @@ if (file_exists(__DIR__ . '/config.local.php')) {
     require_once __DIR__ . '/config.local.php';
 }
 
+use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
+    private const SCHEMA_VERSION = 4;
+
     private static ?PDO $instance = null;
     private static ?string $dbPath = null;
     private static ?string $dataDir = null;
@@ -73,6 +76,7 @@ class Database {
     public static function getInstance(): PDO {
         if (self::$instance === null) {
             self::$instance = self::connect();
+            self::ensureCurrentSchema(self::$instance);
         }
         return self::$instance;
     }
@@ -180,6 +184,7 @@ HTACCESS;
             mint_url TEXT,
             mint_unit TEXT NOT NULL DEFAULT 'sat',
             seed_phrase TEXT,
+            wallet_account_id TEXT,
             -- Exchange settings
             exchange_fee_percent REAL NOT NULL DEFAULT 0,
             price_provider_primary TEXT NOT NULL DEFAULT 'coingecko',
@@ -251,6 +256,15 @@ HTACCESS;
             status_code INTEGER,
             response TEXT,
             created_at INTEGER NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_at INTEGER NOT NULL DEFAULT 0,
+            leased_until INTEGER,
+            lease_token TEXT,
+            last_attempt_at INTEGER,
+            delivered_at INTEGER,
+            idempotency_key TEXT,
+            target_url TEXT,
+            signing_secret TEXT,
             FOREIGN KEY (webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE
         );
 
@@ -279,25 +293,79 @@ HTACCESS;
 
         $pdo->exec($schema);
 
-        self::runMigrations($pdo);
-
         // Initialize wallet storage schema (for cashu-wallet-php library)
         WalletStorage::initializeSchema($pdo);
+        self::ensureCurrentSchema($pdo);
     }
 
     /**
      * Apply idempotent schema migrations for existing databases.
      */
-    private static function runMigrations(\PDO $pdo): void {
-        if (!self::columnExists($pdo, 'invoices', 'mint_url')) {
-            $pdo->exec("ALTER TABLE invoices ADD COLUMN mint_url TEXT");
+    public static function ensureCurrentSchema(?\PDO $pdo = null): void {
+        $pdo = $pdo ?? self::getInstance();
+
+        // An empty database belongs to setup.php; do not make isInitialized() true here.
+        $table = $pdo->query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config'")->fetchColumn();
+        if (!$table || (int)$pdo->query('PRAGMA user_version')->fetchColumn() >= self::SCHEMA_VERSION) {
+            return;
         }
-        if (!self::columnExists($pdo, 'invoices', 'last_polled_at')) {
-            $pdo->exec("ALTER TABLE invoices ADD COLUMN last_polled_at INTEGER DEFAULT NULL");
+
+        // Wallet tables must exist before the account-identity migration runs.
+        WalletStorage::initializeSchema($pdo);
+        $pdo->exec('BEGIN IMMEDIATE');
+        try {
+            $version = (int)$pdo->query('PRAGMA user_version')->fetchColumn();
+            if ($version < 1) {
+                self::addColumnIfMissing($pdo, 'invoices', 'mint_url', 'TEXT');
+                self::addColumnIfMissing($pdo, 'invoices', 'last_polled_at', 'INTEGER DEFAULT NULL');
+                self::addColumnIfMissing($pdo, 'invoices', 'processing_since', 'INTEGER DEFAULT NULL');
+                $pdo->exec('PRAGMA user_version = 1');
+            }
+            if ($version < 2) {
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'attempts', 'INTEGER NOT NULL DEFAULT 0');
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'next_attempt_at', 'INTEGER NOT NULL DEFAULT 0');
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'leased_until', 'INTEGER');
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'lease_token', 'TEXT');
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'last_attempt_at', 'INTEGER');
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'delivered_at', 'INTEGER');
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'idempotency_key', 'TEXT');
+                // Rows from the old synchronous log are history, not pending outbox work.
+                $pdo->exec("UPDATE webhook_deliveries SET delivered_at = created_at WHERE delivered_at IS NULL");
+                $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_delivery_idempotency ON webhook_deliveries(idempotency_key) WHERE idempotency_key IS NOT NULL');
+                $pdo->exec('CREATE INDEX IF NOT EXISTS idx_webhook_outbox_due ON webhook_deliveries(delivered_at, next_attempt_at, leased_until)');
+                $pdo->exec('PRAGMA user_version = 2');
+            }
+            if ($version < 3) {
+                self::addColumnIfMissing($pdo, 'stores', 'wallet_account_id', 'TEXT');
+                self::migrateWalletAccounts($pdo);
+                $pdo->exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_stores_wallet_account_id ON stores(wallet_account_id) WHERE wallet_account_id IS NOT NULL');
+                $pdo->exec('PRAGMA user_version = 3');
+            }
+            if ($version < 4) {
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'target_url', 'TEXT');
+                self::addColumnIfMissing($pdo, 'webhook_deliveries', 'signing_secret', 'TEXT');
+                if (self::tableExists($pdo, 'webhooks')) {
+                    $pdo->exec(
+                        "UPDATE webhook_deliveries
+                         SET target_url = (SELECT url FROM webhooks WHERE webhooks.id = webhook_deliveries.webhook_id),
+                             signing_secret = (SELECT secret FROM webhooks WHERE webhooks.id = webhook_deliveries.webhook_id)
+                         WHERE target_url IS NULL OR signing_secret IS NULL"
+                    );
+                }
+                $pdo->exec('PRAGMA user_version = 4');
+            }
+            $pdo->commit();
+        } catch (Throwable $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            throw $e;
         }
-        // Timestamp of when an invoice was claimed for minting (atomic mint claim).
-        if (!self::columnExists($pdo, 'invoices', 'processing_since')) {
-            $pdo->exec("ALTER TABLE invoices ADD COLUMN processing_since INTEGER DEFAULT NULL");
+    }
+
+    private static function addColumnIfMissing(\PDO $pdo, string $table, string $column, string $definition): void {
+        if (!self::columnExists($pdo, $table, $column)) {
+            $pdo->exec("ALTER TABLE {$table} ADD COLUMN {$column} {$definition}");
         }
     }
 
@@ -311,6 +379,114 @@ HTACCESS;
         return false;
     }
 
+    private static function tableExists(\PDO $pdo, string $table): bool {
+        $stmt = $pdo->prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?");
+        $stmt->execute([$table]);
+        return $stmt->fetchColumn() !== false;
+    }
+
+    /**
+     * Move legacy mint/unit namespaces to immutable per-store account namespaces.
+     * Populated namespaces with multiple owners are not attributable safely, so abort.
+     */
+    private static function migrateWalletAccounts(\PDO $pdo): void {
+        $stores = $pdo->query('SELECT id, name, mint_url, mint_unit, seed_phrase, wallet_account_id FROM stores')->fetchAll(\PDO::FETCH_ASSOC);
+        $updateAccount = $pdo->prepare('UPDATE stores SET wallet_account_id = ? WHERE id = ?');
+        foreach ($stores as &$store) {
+            if (empty($store['wallet_account_id'])) {
+                $store['wallet_account_id'] = self::generateWalletAccountId();
+                $updateAccount->execute([$store['wallet_account_id'], $store['id']]);
+            }
+        }
+        unset($store);
+
+        $candidates = [];
+        foreach ($stores as $store) {
+            if (!empty($store['mint_url'])) {
+                $candidates[] = [
+                    'store' => $store,
+                    'mint_url' => rtrim($store['mint_url'], '/'),
+                    'unit' => strtolower($store['mint_unit'] ?: 'sat'),
+                ];
+            }
+            $stmt = $pdo->prepare('SELECT mint_url, unit FROM store_mints WHERE store_id = ?');
+            $stmt->execute([$store['id']]);
+            foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $mint) {
+                $candidates[] = [
+                    'store' => $store,
+                    'mint_url' => rtrim($mint['mint_url'], '/'),
+                    'unit' => strtolower($mint['unit'] ?: 'sat'),
+                ];
+            }
+        }
+
+        $byLegacy = [];
+        foreach ($candidates as $candidate) {
+            $legacyId = WalletStorage::deriveWalletId($candidate['mint_url'], $candidate['unit']);
+            $byLegacy[$legacyId][$candidate['store']['id']] = $candidate;
+        }
+
+        foreach ($byLegacy as $legacyId => $owners) {
+            $hasData = self::walletNamespaceHasData($pdo, $legacyId);
+            if ($hasData && count($owners) > 1) {
+                $names = array_map(fn($owner) => $owner['store']['name'] . ' (' . $owner['store']['id'] . ')', array_values($owners));
+                throw new RuntimeException(
+                    'Wallet migration blocked: legacy wallet data is shared by multiple stores: ' . implode(', ', $names)
+                );
+            }
+
+            foreach ($owners as $candidate) {
+                $store = $candidate['store'];
+                $newId = WalletStorage::deriveWalletId(
+                    $candidate['mint_url'],
+                    $candidate['unit'],
+                    $store['wallet_account_id']
+                );
+                if ($hasData) {
+                    if (self::walletNamespaceHasData($pdo, $newId)) {
+                        throw new RuntimeException("Wallet migration blocked: destination namespace already contains data for store {$store['id']}");
+                    }
+                    foreach (['cashu_proofs', 'cashu_counters'] as $table) {
+                        $stmt = $pdo->prepare("UPDATE {$table} SET wallet_id = ? WHERE wallet_id = ?");
+                        $stmt->execute([$newId, $legacyId]);
+                    }
+                    $stmt = $pdo->prepare(
+                        "UPDATE cashu_pending_operations
+                         SET id = CASE WHEN id LIKE ? THEN ? || substr(id, ?) ELSE id END, wallet_id = ?
+                         WHERE wallet_id = ?"
+                    );
+                    $stmt->execute([$legacyId . ':%', $newId . ':', strlen($legacyId) + 2, $newId, $legacyId]);
+                    $stmt = $pdo->prepare('UPDATE cashu_wallet_metadata SET wallet_id = ? WHERE wallet_id = ?');
+                    $stmt->execute([$newId, $legacyId]);
+                }
+
+                if (!empty($store['seed_phrase'])) {
+                    $fingerprint = Wallet::calculateSeedFingerprint($store['seed_phrase']);
+                    $stmt = $pdo->prepare(
+                        'INSERT OR IGNORE INTO cashu_wallet_metadata (wallet_id, seed_fingerprint, ready, created_at) VALUES (?, ?, 1, ?)'
+                    );
+                    $stmt->execute([$newId, $fingerprint, time()]);
+                    $existing = $pdo->prepare('SELECT seed_fingerprint FROM cashu_wallet_metadata WHERE wallet_id = ?');
+                    $existing->execute([$newId]);
+                    if (!hash_equals($fingerprint, (string)$existing->fetchColumn())) {
+                        throw new RuntimeException("Wallet migration blocked: seed fingerprint mismatch for store {$store['id']}");
+                    }
+                }
+            }
+        }
+    }
+
+    private static function walletNamespaceHasData(\PDO $pdo, string $walletId): bool {
+        foreach (['cashu_proofs', 'cashu_counters', 'cashu_pending_operations', 'cashu_wallet_metadata'] as $table) {
+            $stmt = $pdo->prepare("SELECT 1 FROM {$table} WHERE wallet_id = ? LIMIT 1");
+            $stmt->execute([$walletId]);
+            if ($stmt->fetchColumn() !== false) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Generate a unique ID
      */
@@ -318,6 +494,10 @@ HTACCESS;
         $bytes = random_bytes(12);
         $id = bin2hex($bytes);
         return $prefix ? $prefix . '_' . $id : $id;
+    }
+
+    public static function generateWalletAccountId(): string {
+        return 'wa_' . bin2hex(random_bytes(16));
     }
 
     /**

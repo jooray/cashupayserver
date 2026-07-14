@@ -9,11 +9,13 @@ require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/security.php';
 
 class WebhookSender {
-    private const MAX_RETRIES = 3;
+    private const MAX_ATTEMPTS = 4;
     private const TIMEOUT = 10;
+    private const LEASE_SECONDS = 30;
 
     /**
-     * Fire webhook event
+     * Enqueue an event for durable delivery. If called inside a transaction, the
+     * invoice transition and all matching webhook rows commit atomically.
      */
     public static function fireEvent(string $storeId, string $eventType, array $invoiceData): void {
         // Get all enabled webhooks for this store that subscribe to this event
@@ -30,14 +32,14 @@ class WebhookSender {
                 continue;
             }
 
-            self::deliverWebhook($webhook, $eventType, $invoiceData);
+            self::enqueueWebhook($webhook, $eventType, $invoiceData);
         }
     }
 
     /**
-     * Deliver webhook to endpoint
+     * Add one subscribed webhook delivery to the outbox.
      */
-    private static function deliverWebhook(array $webhook, string $eventType, array $invoiceData): void {
+    private static function enqueueWebhook(array $webhook, string $eventType, array $invoiceData): void {
         $deliveryId = Database::generateId('del');
         $now = Database::timestamp();
 
@@ -80,23 +82,17 @@ class WebhookSender {
 
         $payloadJson = json_encode($payload);
 
-        // Calculate HMAC signature
-        $signature = self::calculateSignature($payloadJson, $webhook['secret']);
-
-        // Send webhook
-        $result = self::sendRequest($webhook['url'], $payloadJson, $signature);
-
-        // Log delivery
-        Database::insert('webhook_deliveries', [
-            'id' => $deliveryId,
-            'webhook_id' => $webhook['id'],
-            'invoice_id' => $invoiceData['id'],
-            'event_type' => $eventType,
-            'payload' => $payloadJson,
-            'status_code' => $result['status_code'],
-            'response' => $result['response'],
-            'created_at' => $now,
-        ]);
+        $idempotencyKey = $webhook['id'] . '|' . $invoiceData['id'] . '|' . $eventType;
+        Database::query(
+            "INSERT OR IGNORE INTO webhook_deliveries
+             (id, webhook_id, invoice_id, event_type, payload, created_at, attempts,
+              next_attempt_at, idempotency_key, target_url, signing_secret)
+             VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?)",
+            [
+                $deliveryId, $webhook['id'], $invoiceData['id'], $eventType, $payloadJson,
+                $now, $now, $idempotencyKey, $webhook['url'], $webhook['secret']
+            ]
+        );
     }
 
     /**
@@ -160,99 +156,59 @@ class WebhookSender {
     }
 
     /**
-     * Redeliver a webhook
+     * Deliver due outbox rows with short leases so overlapping cron runs do not
+     * send the same row concurrently. Failed rows use bounded exponential retry.
+     *
+     * @return int Number of rows attempted
      */
-    public static function redeliver(string $deliveryId): bool {
-        $delivery = Database::fetchOne(
-            "SELECT wd.*, w.url, w.secret FROM webhook_deliveries wd
-             JOIN webhooks w ON w.id = wd.webhook_id
-             WHERE wd.id = ?",
-            [$deliveryId]
-        );
+    public static function deliverPending(int $limit = 20): int {
+        $attempted = 0;
+        for ($i = 0; $i < $limit; $i++) {
+            $delivery = self::claimNextDelivery();
+            if ($delivery === null) {
+                break;
+            }
 
-        if ($delivery === null) {
-            return false;
+            $signature = self::calculateSignature($delivery['payload'], $delivery['signing_secret']);
+            $result = self::sendRequest($delivery['target_url'], $delivery['payload'], $signature);
+            $now = time();
+            $success = $result['status_code'] >= 200 && $result['status_code'] < 300;
+            $attempts = (int)$delivery['attempts'] + 1;
+            $nextAttempt = $success || $attempts >= self::MAX_ATTEMPTS
+                ? 0
+                : $now + min(3600, 30 * (2 ** ($attempts - 1)));
+
+            Database::query(
+                "UPDATE webhook_deliveries
+                 SET attempts = ?, status_code = ?, response = ?, last_attempt_at = ?,
+                     delivered_at = ?, next_attempt_at = ?, leased_until = NULL, lease_token = NULL
+                 WHERE id = ? AND lease_token = ?",
+                [$attempts, $result['status_code'], $result['response'], $now,
+                 $success ? $now : null, $nextAttempt, $delivery['id'], $delivery['lease_token']]
+            );
+            $attempted++;
         }
-
-        // Parse original payload and update for redelivery
-        $payload = json_decode($delivery['payload'], true);
-        $newDeliveryId = Database::generateId('del');
-        $payload['deliveryId'] = $newDeliveryId;
-        $payload['originalDeliveryId'] = $delivery['id'];
-        $payload['isRedelivery'] = true;
-        $payload['timestamp'] = Database::timestamp();
-
-        $payloadJson = json_encode($payload);
-        $signature = self::calculateSignature($payloadJson, $delivery['secret']);
-
-        $result = self::sendRequest($delivery['url'], $payloadJson, $signature);
-
-        // Log redelivery
-        Database::insert('webhook_deliveries', [
-            'id' => $newDeliveryId,
-            'webhook_id' => $delivery['webhook_id'],
-            'invoice_id' => $delivery['invoice_id'],
-            'event_type' => $delivery['event_type'],
-            'payload' => $payloadJson,
-            'status_code' => $result['status_code'],
-            'response' => $result['response'],
-            'created_at' => Database::timestamp(),
-        ]);
-
-        return $result['status_code'] >= 200 && $result['status_code'] < 300;
+        return $attempted;
     }
 
-    /**
-     * Retry webhook deliveries that failed (non-2xx), with bounded attempts.
-     *
-     * Called from cron. Re-sends the most recent failed delivery for a
-     * webhook+invoice+event, unless a later delivery already succeeded or the attempt cap
-     * has been reached. Fixes silently-dropped events (e.g. shop briefly down at settlement).
-     * See FABLE-CASHUPAYSERVER-AUDIT (C-WH-1).
-     *
-     * @return int Number of deliveries retried
-     */
-    public static function retryFailedDeliveries(int $maxAgeSeconds = 86400, int $limit = 20): int {
-        $rows = Database::fetchAll(
-            "SELECT wd.* FROM webhook_deliveries wd
-             JOIN webhooks w ON w.id = wd.webhook_id
-             WHERE wd.created_at > ?
-               AND (wd.status_code IS NULL OR wd.status_code < 200 OR wd.status_code >= 300)
-               AND w.enabled = 1
-             ORDER BY wd.created_at ASC
-             LIMIT ?",
-            [time() - $maxAgeSeconds, $limit]
+    private static function claimNextDelivery(): ?array {
+        $now = time();
+        $leaseToken = bin2hex(random_bytes(16));
+        Database::query(
+            "UPDATE webhook_deliveries SET leased_until = ?, lease_token = ?
+             WHERE id = (
+                 SELECT wd.id FROM webhook_deliveries wd
+                  WHERE wd.delivered_at IS NULL AND wd.attempts < ? AND wd.next_attempt_at <= ?
+                    AND (wd.leased_until IS NULL OR wd.leased_until < ?)
+                    AND wd.target_url IS NOT NULL AND wd.signing_secret IS NOT NULL
+                 ORDER BY wd.next_attempt_at ASC, wd.created_at ASC LIMIT 1
+             )",
+            [$now + self::LEASE_SECONDS, $leaseToken, self::MAX_ATTEMPTS, $now, $now]
         );
-
-        $retried = 0;
-        foreach ($rows as $d) {
-            // Skip if a later delivery for the same webhook+invoice+event already succeeded.
-            $succeeded = Database::fetchOne(
-                "SELECT 1 FROM webhook_deliveries
-                 WHERE webhook_id = ? AND IFNULL(invoice_id,'') = IFNULL(?, '') AND event_type = ?
-                   AND status_code >= 200 AND status_code < 300 AND created_at >= ?
-                 LIMIT 1",
-                [$d['webhook_id'], $d['invoice_id'], $d['event_type'], $d['created_at']]
-            );
-            if ($succeeded) {
-                continue;
-            }
-            // Bound total attempts for this webhook+invoice+event.
-            $attempts = Database::fetchOne(
-                "SELECT COUNT(*) AS c FROM webhook_deliveries
-                 WHERE webhook_id = ? AND IFNULL(invoice_id,'') = IFNULL(?, '') AND event_type = ?",
-                [$d['webhook_id'], $d['invoice_id'], $d['event_type']]
-            );
-            if ((int)($attempts['c'] ?? 0) > self::MAX_RETRIES) {
-                continue;
-            }
-
-            if (self::redeliver($d['id'])) {
-                $retried++;
-            }
-        }
-
-        return $retried;
+        return Database::fetchOne(
+            "SELECT wd.* FROM webhook_deliveries wd WHERE wd.lease_token = ?",
+            [$leaseToken]
+        );
     }
 
     /**

@@ -64,6 +64,13 @@ $results = [
     'tasks' => [],
 ];
 
+// Recover ambiguous outgoing operations before starting any new auto-withdrawal.
+try {
+    $results['tasks']['recover_wallet_operations'] = Invoice::recoverPendingWalletOperations();
+} catch (Throwable $e) {
+    $results['tasks']['recover_wallet_operations'] = 'error: ' . $e->getMessage();
+}
+
 // Task 1: Poll pending quotes
 try {
     Invoice::pollPendingQuotes();
@@ -198,12 +205,12 @@ try {
     $results['tasks']['cleanup_pending_ops'] = 'error: ' . $e->getMessage();
 }
 
-// Task 9b: Retry failed webhook deliveries (non-2xx), bounded attempts
+// Task 9b: Deliver the transactional webhook outbox with bounded retries and leases
 try {
-    $retried = WebhookSender::retryFailedDeliveries();
-    $results['tasks']['retry_webhooks'] = $retried > 0 ? "retried {$retried}" : 'none';
+    $attempted = WebhookSender::deliverPending();
+    $results['tasks']['webhook_outbox'] = $attempted > 0 ? "attempted {$attempted}" : 'none';
 } catch (Exception $e) {
-    $results['tasks']['retry_webhooks'] = 'error: ' . $e->getMessage();
+    $results['tasks']['webhook_outbox'] = 'error: ' . $e->getMessage();
 }
 
 // Task 10: L4 - Webhook delivery cleanup (keep only last 1000)
@@ -219,6 +226,7 @@ try {
             DELETE FROM webhook_deliveries
             WHERE id IN (
                 SELECT id FROM webhook_deliveries
+                WHERE delivered_at IS NOT NULL OR attempts >= 4
                 ORDER BY created_at ASC LIMIT ?
             )
         ", [$deleteCount]);

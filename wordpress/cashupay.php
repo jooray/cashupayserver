@@ -32,8 +32,18 @@ function cashupay_cron_poll(): void {
     require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
     require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
     require_once CASHUPAY_PLUGIN_DIR . '/includes/invoice.php';
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/webhook_sender.php';
 
     if (Database::isInitialized() && Config::isSetupComplete()) {
+        Invoice::recoverPendingWalletOperations();
         Invoice::pollPendingQuotes();
+        WebhookSender::deliverPending();
     }
 }
+
+// Plugin updates do not run activation hooks, so normal WordPress requests must
+// also perform the cheap version check.
+add_action('plugins_loaded', static function (): void {
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+    Database::ensureCurrentSchema();
+});

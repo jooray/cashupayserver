@@ -101,8 +101,8 @@ function handleUpdateInvoiceStatus(array $auth, array $params, array $body): voi
 
     $status = $body['status'] ?? null;
 
-    if (!in_array($status, ['Invalid', 'Settled'])) {
-        errorResponse('validation-error', 'Invalid status. Allowed: Invalid, Settled');
+    if ($status !== 'Invalid') {
+        errorResponse('validation-error', 'Only Invalid status may be set manually');
     }
 
     // Only allow marking as Invalid if currently New or Processing
@@ -110,14 +110,7 @@ function handleUpdateInvoiceStatus(array $auth, array $params, array $body): voi
         errorResponse('validation-error', 'Can only invalidate New or Processing invoices');
     }
 
-    // Settling must not be usable to fake a payment on an unpaid/expired invoice.
-    // Only an invoice already detected as paid (Processing) or still open (New) may be
-    // manually settled. See FABLE-SECURITY-AUDIT (C-API-1).
-    if ($status === 'Settled' && !in_array($invoice['status'], ['New', 'Processing'])) {
-        errorResponse('validation-error', 'Can only settle New or Processing invoices');
-    }
-
-    Invoice::updateStatus($invoiceId, $status);
+    Invoice::updateStatus($invoiceId, 'Invalid');
 
     $invoice = Invoice::getById($invoiceId);
     jsonResponse(Invoice::formatForApi($invoice));

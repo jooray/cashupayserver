@@ -23,6 +23,14 @@ require_once __DIR__ . '/includes/urls.php';
 
 // Initialize session early - needed for storing temp data during setup
 Auth::initSession();
+$csrfToken = Auth::generateCsrfToken();
+$isWordPressSetup = Urls::isWordPress();
+
+if (!$isWordPressSetup && empty($_SESSION['setup_ownership_token'])) {
+    $_SESSION['setup_ownership_token'] = bin2hex(random_bytes(16));
+}
+$ownershipToken = $_SESSION['setup_ownership_token'] ?? '';
+$ownershipChallengeFile = __DIR__ . '/.cashupay-setup-challenge';
 
 // Get mode parameter
 $mode = $_GET['mode'] ?? $_POST['mode'] ?? '';
@@ -58,8 +66,24 @@ $error = null;
 $success = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!Auth::validateCsrfToken((string)($_POST['csrf_token'] ?? ''))) {
+        http_response_code(403);
+        $error = 'Your setup session expired. Reload this page and try again.';
+    } elseif (!$isWordPressSetup && !Config::isSetupComplete() && empty($_SESSION['setup_ownership_verified'])) {
+        $challenge = is_file($ownershipChallengeFile) ? trim((string)@file_get_contents($ownershipChallengeFile)) : '';
+        if ($ownershipToken === '' || !hash_equals($ownershipToken, $challenge)) {
+            http_response_code(403);
+            $error = 'Server ownership could not be verified. Create the challenge file shown below, then try again.';
+        } else {
+            $_SESSION['setup_ownership_verified'] = true;
+            @unlink($ownershipChallengeFile);
+        }
+    }
+
+    if ($error !== null) {
+        // Render the current setup step with the validation error.
     // Handle AJAX action for expiry testing
-    if (isset($_POST['action']) && $_POST['action'] === 'test_mint_expiry') {
+    } elseif (isset($_POST['action']) && $_POST['action'] === 'test_mint_expiry') {
         header('Content-Type: application/json');
         require_once __DIR__ . '/includes/mint_helpers.php';
         $mintUrl = $_POST['mint_url'] ?? '';
@@ -74,7 +98,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     // Handle AJAX action for saving URL mode
-    if (isset($_POST['action']) && $_POST['action'] === 'save_url_mode') {
+    if ($error === null && isset($_POST['action']) && $_POST['action'] === 'save_url_mode') {
         header('Content-Type: application/json');
         $mode = $_POST['mode'] ?? 'router';
         if (in_array($mode, ['direct', 'router'])) {
@@ -86,12 +110,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    try {
+    if ($error === null) try {
         switch ($step) {
             case 1: // Welcome + Security (merged step)
                 $securityPassed = $_POST['security_acknowledged'] ?? false;
                 if (!$securityPassed) {
                     throw new Exception('Please verify that your database is protected');
+                }
+                $detectedUrlMode = $_POST['detected_url_mode'] ?? '';
+                if (in_array($detectedUrlMode, ['direct', 'router'], true)) {
+                    Config::set('url_mode', $detectedUrlMode);
                 }
                 // Go to password step (standalone) or create store step (WordPress)
                 $step = Urls::isWordPress() ? 4 : 2;
@@ -130,6 +158,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 Database::insert('stores', [
                     'id' => $storeId,
                     'name' => $storeName,
+                    'wallet_account_id' => Database::generateWalletAccountId(),
                     'created_at' => Database::timestamp(),
                 ]);
 
@@ -223,12 +252,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'seed_phrase' => $seed,
                     ]);
 
-                    // If seed was manually entered (not freshly generated), restore wallet
-                    // to recover counter position and avoid "token already spent" errors
-                    if (!$isGenerated) {
-                        require_once __DIR__ . '/includes/invoice.php';
-                        try {
-                            $wallet = Invoice::getWalletInstance($storeId);
+                    require_once __DIR__ . '/includes/invoice.php';
+                    try {
+                        $wallet = Invoice::initializeWalletForStore($storeId, !$isGenerated);
+                        if (!$isGenerated) {
                             $restoreResult = $wallet->restore();
 
                             // Persist restored counters to storage
@@ -255,14 +282,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 'proofs_spent' => $spentCount,
                                 'counters' => $restoreResult['counters'] ?? [],
                             ];
-                        } catch (Exception $e) {
-                            // Log but don't fail setup - user can still proceed
-                            error_log("Wallet restore during setup failed: " . $e->getMessage());
+                        }
+                    } catch (Throwable $e) {
+                        error_log("Wallet initialization during setup failed: " . $e->getMessage());
+                        if (!$isGenerated) {
                             $_SESSION['restore_result'] = [
                                 'success' => false,
                                 'error' => $e->getMessage(),
                             ];
                         }
+                        throw new Exception(
+                            $isGenerated
+                                ? 'Could not initialize the new wallet: ' . $e->getMessage()
+                                : 'Wallet restore must complete before setup can continue: ' . $e->getMessage()
+                        );
                     }
 
                     unset($_SESSION['temp_seed']);
@@ -732,6 +765,20 @@ function getDataDirHttpPath(): ?string {
                     Let's get you set up in a few minutes.
                 </p>
 
+                <?php if (!$isWordPressSetup && empty($_SESSION['setup_ownership_verified'])): ?>
+                    <div class="warning" style="margin-bottom: 1.5rem;">
+                        <strong>Verify server ownership</strong>
+                        <p style="margin: 0.5rem 0;">
+                            Using your hosting file manager or FTP, create <code>.cashupay-setup-challenge</code>
+                            in the same directory as <code>setup.php</code>. Put only this value in the file:
+                        </p>
+                        <code style="display: block; user-select: all; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px;"><?= htmlspecialchars($ownershipToken) ?></code>
+                        <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #a0aec0;">
+                            The wizard verifies the file on Continue and removes it when possible.
+                        </p>
+                    </div>
+                <?php endif; ?>
+
                 <?php
                 // Check PHP requirements silently - only show if something fails
                 $checks = [
@@ -910,6 +957,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                     <form method="post">
                         <input type="hidden" name="step" value="1">
+                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
 
                         <div class="checkbox-group" style="margin: 1.5rem 0;">
                             <input type="checkbox" id="security_acknowledged" name="security_acknowledged" required>
@@ -1048,15 +1096,15 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                 selectedMode = 'router';
                             }
 
-                            // Save the detected mode
+                            // Submit the detected mode with Step 1, after ownership verification.
                             if (selectedMode) {
-                                try {
-                                    const formData = new FormData();
-                                    formData.append('action', 'save_url_mode');
-                                    formData.append('mode', selectedMode);
-                                    await fetch(setupUrl, { method: 'POST', body: formData });
-                                } catch (e) {
-                                    console.error('Failed to save URL mode:', e);
+                                const setupForm = document.querySelector('form input[name="step"][value="1"]')?.form;
+                                if (setupForm) {
+                                    const input = document.createElement('input');
+                                    input.type = 'hidden';
+                                    input.name = 'detected_url_mode';
+                                    input.value = selectedMode;
+                                    setupForm.appendChild(input);
                                 }
                             }
 
@@ -1093,6 +1141,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                 <form method="post">
                     <input type="hidden" name="step" value="2">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
 
                     <div class="form-group">
                         <label for="password">Password</label>
@@ -1115,6 +1164,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                 <form method="post">
                     <input type="hidden" name="step" value="4">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                     <?php if ($mode === 'add_store'): ?>
                         <input type="hidden" name="mode" value="add_store">
                     <?php endif; ?>
@@ -1145,6 +1195,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                 <form method="post">
                     <input type="hidden" name="step" value="5">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                     <?php if ($mode === 'add_store'): ?>
                         <input type="hidden" name="mode" value="add_store">
                     <?php endif; ?>
@@ -1235,6 +1286,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                     <form method="post">
                         <input type="hidden" name="step" value="6">
+                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                         <input type="hidden" name="action" value="confirm">
                         <?php if ($mode === 'add_store'): ?>
                             <input type="hidden" name="mode" value="add_store">
@@ -1254,6 +1306,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                     <form method="post" style="margin-bottom: 1rem;">
                         <input type="hidden" name="step" value="6">
+                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                         <input type="hidden" name="action" value="generate">
                         <?php if ($mode === 'add_store'): ?>
                             <input type="hidden" name="mode" value="add_store">
@@ -1265,6 +1318,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         <summary style="cursor: pointer; color: #a0aec0;">Restore from existing seed phrase</summary>
                         <form method="post" style="margin-top: 1rem;">
                             <input type="hidden" name="step" value="6">
+                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                             <input type="hidden" name="action" value="confirm">
                             <?php if ($mode === 'add_store'): ?>
                                 <input type="hidden" name="mode" value="add_store">
@@ -1425,6 +1479,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             </p>
                             <form method="post">
                                 <input type="hidden" name="step" value="7">
+                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
                                 <input type="hidden" name="configure_woocommerce" value="1">
                                 <button type="submit" class="btn" style="width: 100%;">Configure WooCommerce</button>
                             </form>
@@ -1828,10 +1883,11 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
         if (expiryTestTimeout) clearTimeout(expiryTestTimeout);
 
         expiryTestTimeout = setTimeout(function() {
-            var formData = new FormData();
-            formData.append('action', 'test_mint_expiry');
-            formData.append('mint_url', mintUrl);
-            formData.append('unit', unit);
+             var formData = new FormData();
+             formData.append('action', 'test_mint_expiry');
+             formData.append('mint_url', mintUrl);
+             formData.append('unit', unit);
+             formData.append('csrf_token', <?= json_encode($csrfToken) ?>);
             <?php if ($mode === 'add_store'): ?>
             formData.append('mode', 'add_store');
             <?php endif; ?>

@@ -93,7 +93,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $seed = Config::getStoreSeedPhrase($storeId);
         $dbPath = Database::getDbPath();
 
-        $wallet = new Wallet($mintUrl, $unit, $dbPath);
+        $accountId = Config::getStoreWalletAccountId($storeId);
+        $wallet = new Wallet($mintUrl, $unit, $dbPath, $accountId);
         $wallet->loadMint();
         $wallet->initFromMnemonic($seed);
 
