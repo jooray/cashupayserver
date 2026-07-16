@@ -83,6 +83,15 @@ function load_state(): array
     if (empty($state['keysets'])) {
         $keyset = make_keyset(1);
         $state['keysets'][$keyset['id']] = $keyset;
+
+        // Like many production mints: an old V1 keyset whose announced ID was
+        // created under a historical derivation rule and does NOT re-derive
+        // from its keys. Wallets must treat such IDs as opaque identifiers.
+        $legacy = make_keyset(99);
+        $legacy['id'] = '00deadbeefcafe12';
+        $legacy['final_expiry'] = null;
+        $state['keysets'][$legacy['id']] = $legacy;
+
         save_state($state);
     }
     return $state;

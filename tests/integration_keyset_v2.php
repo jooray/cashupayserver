@@ -87,10 +87,15 @@ Database::insert('stores', [
     'created_at' => Database::timestamp(),
 ]);
 
+// The mock also serves an ACTIVE legacy v1 keyset ("00deadbeefcafe12") whose
+// ID does not re-derive from its keys — like many production mints. Loading
+// must not throw, and the v2 keyset must stay the one used for outputs.
 $wallet = Invoice::initializeWalletForStore($storeId, false);
+check(true, 'wallet loads despite non-derivable legacy v1 keyset id');
 $keysetId = $wallet->getActiveKeysetId();
 check(strlen($keysetId) === 66 && str_starts_with($keysetId, '01'), "mint presents a v2 keyset id ($keysetId)");
 check($wallet->getInputFeePpk($keysetId) === 100, 'input_fee_ppk read from v2 keyset metadata');
+check($wallet->getInputFeePpk('00deadbeefcafe12') === 100, 'legacy v1 keyset fee metadata loaded');
 
 // --- Invoice flow ----------------------------------------------------------
 echo "invoice flow:\n";
