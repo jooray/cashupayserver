@@ -165,4 +165,63 @@ $balanceAfter = Invoice::getBalance($storeId);
 // 8 in, minus ceil(1 * 100/1000) = 1 sat fee -> 7
 check($balanceAfter === 21 + 7, "swap accounted for input_fee_ppk (balance $balanceAfter = 28)");
 
+// --- NUT-20 quote locking ----------------------------------------------------
+echo "nut-20 quote locking:\n";
+$lockedInvoice = Invoice::create($storeId, ['amount' => 5, 'currency' => 'sat']);
+$quoteKey = $wallet->getStorage()->getMintQuoteKey($lockedInvoice['quote_id']);
+check($quoteKey !== null, 'new mint quote is locked with a stored deterministic key');
+$mockQuote = json_decode((string)file_get_contents("$mintUrl/v1/mint/quote/bolt11/{$lockedInvoice['quote_id']}"), true);
+check(($mockQuote['pubkey'] ?? null) === $quoteKey['pubkey'], 'quote locked to our pubkey at the mint');
+
+$payQuote = function (string $quoteId) use ($mintUrl): void {
+    file_get_contents("$mintUrl/__control/pay", false, stream_context_create([
+        'http' => ['method' => 'POST', 'header' => 'Content-Type: application/json', 'content' => json_encode(['quote' => $quoteId])],
+    ]));
+};
+$payQuote($lockedInvoice['quote_id']);
+Invoice::pollSingleQuote($lockedInvoice['id']);
+$lockedSettled = Invoice::getById($lockedInvoice['id']);
+// The mock REQUIRES a valid BIP340 signature for this quote, so settling
+// proves the wallet signed the mint request correctly.
+check($lockedSettled['status'] === 'Settled', "locked invoice settled with valid signature (status: {$lockedSettled['status']})");
+check($wallet->getStorage()->getMintQuoteKey($lockedInvoice['quote_id']) === null, 'quote key record cleaned up after mint');
+check(Invoice::getBalance($storeId) === 33, 'balance includes NUT-20 locked mint');
+
+// Seed-restore path: the local key record is gone, but the deterministic key
+// is recovered by scanning counters against the quote pubkey.
+echo "nut-20 restore scan:\n";
+$scanQuote = $external->requestMintQuote(4);
+$payQuote($scanQuote->quote);
+$external->getStorage()->deleteMintQuoteKey($scanQuote->quote);
+$scanProofs = $external->mint($scanQuote->quote, 4);
+check(count($scanProofs) > 0, 'locked quote minted after deterministic key recovery scan');
+
+// --- Keyset rotation ---------------------------------------------------------
+echo "keyset rotation:\n";
+file_get_contents("$mintUrl/__control/rotate", false, stream_context_create([
+    'http' => ['method' => 'POST', 'header' => 'Content-Type: application/json', 'content' => '{}'],
+]));
+$storeRow = Database::fetchOne('SELECT wallet_account_id FROM stores WHERE id = ?', [$storeId]);
+$freshWallet = new Wallet($mintUrl, 'sat', Database::getDbPath(), $storeRow['wallet_account_id']);
+$freshWallet->loadMint();
+$freshWallet->initFromMnemonic($mnemonic);
+$newKeysetId = $freshWallet->getActiveKeysetId();
+check($newKeysetId !== $keysetId && str_starts_with($newKeysetId, '01'), 'mint rotated to a new v2 keyset');
+
+$balanceBeforeRotation = Invoice::getBalance($storeId);
+$rotation = $freshWallet->rotateProofs();
+check($rotation['rotated'] > 0 && empty($rotation['errors']), "proofs rotated off the old keyset ({$rotation['rotated']} proofs)");
+foreach (Invoice::getUnspentProofs($storeId) as $proof) {
+    check($proof->id === $newKeysetId, 'unspent proof now lives on the new keyset');
+}
+$balanceAfterRotation = Invoice::getBalance($storeId);
+$rotationFee = (int)ceil($rotation['rotated'] * 100 / 1000);
+check(
+    $balanceAfterRotation === $balanceBeforeRotation - $rotationFee,
+    "balance preserved minus swap fee ($balanceAfterRotation = $balanceBeforeRotation - $rotationFee)"
+);
+// A second run must be a no-op (nothing left on old keysets).
+$rotationAgain = $freshWallet->rotateProofs();
+check($rotationAgain['rotated'] === 0 && $rotationAgain['checked'] === 0, 'second rotation run is a no-op');
+
 echo "integration_keyset_v2: OK\n";

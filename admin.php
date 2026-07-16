@@ -1042,8 +1042,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 echo json_encode($result);
             } catch (Exception $e) {
-                // If melt failed due to "already spent", sync proof states
-                if (stripos($e->getMessage(), 'already spent') !== false ||
+                // If melt failed due to "already spent", sync proof states.
+                // Prefer the standardized numeric code; message match is the
+                // fallback for mints that predate error_codes.md.
+                if (($e instanceof \Cashu\CashuProtocolException
+                        && $e->getCode() === \Cashu\CashuProtocolException::PROOFS_ALREADY_SPENT) ||
+                    stripos($e->getMessage(), 'already spent') !== false ||
                     stripos($e->getMessage(), 'proof already spent') !== false) {
                     try {
                         $wallet = Invoice::getWalletInstance($storeId);
@@ -1293,7 +1297,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         if (Invoice::isMintUnreachable($e)) {
                             $mintReachable = false;
                             // Continue with greedy selection below
-                        } elseif (stripos($e->getMessage(), 'already spent') !== false ||
+                        } elseif (($e instanceof \Cashu\CashuProtocolException
+                                      && $e->getCode() === \Cashu\CashuProtocolException::PROOFS_ALREADY_SPENT) ||
+                                  stripos($e->getMessage(), 'already spent') !== false ||
                                   stripos($e->getMessage(), 'proof already spent') !== false) {
                             // Sync proof states and ask user to retry
                             if ($wallet) {

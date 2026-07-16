@@ -3,12 +3,22 @@
  * Mock Cashu mint for integration tests. Run with:
  *   MOCK_MINT_STATE=/tmp/state.json php -S 127.0.0.1:8787 tests/mock_mint_router.php
  *
- * Serves a single V2 ("01"-prefix) keyset it can actually sign for, returns
- * NUT-12 DLEQ proofs with every signature, and uses the post-deprecation
- * NUT-04/NUT-23 mint quote shape (amount_paid/amount_issued, no `state`).
+ * Behaviour:
+ * - Serves V2 ("01"-prefix) keysets it can actually sign for (fee 100 ppk)
+ * - Returns NUT-12 DLEQ proofs with every signature
+ * - Post-deprecation NUT-04/NUT-23 mint quotes (amount_paid/amount_issued, no `state`)
+ * - Enforces NUT-20: quotes created with a pubkey require a valid BIP340
+ *   signature on the mint request (error 20008 otherwise)
+ * - NUT-19-style response cache for mint/swap (byte-identical replay returns
+ *   the original response)
+ * - /v1/keys lists only ACTIVE keysets (rotated keysets must be fetched via
+ *   /v1/keys/{id}, like real mints)
  *
- * Control endpoint (not part of the Cashu API):
- *   POST /__control/pay {"quote": "..."} — mark a mint quote as paid.
+ * Control endpoints (not part of the Cashu API):
+ *   POST /__control/pay    {"quote": "..."}  — mark a mint quote as paid
+ *   POST /__control/rotate {}                — deactivate current keyset
+ *                                              (final_expiry = now + 1 day)
+ *                                              and activate a fresh one
  */
 
 declare(strict_types=1);
@@ -19,10 +29,10 @@ use Cashu\BigInt;
 use Cashu\Crypto;
 use Cashu\Keyset;
 use Cashu\Secp256k1;
+use Cashu\Wallet;
 
 const MOCK_UNIT = 'sat';
 const MOCK_FEE_PPK = 100;
-const MOCK_FINAL_EXPIRY = 2059210353;
 const MOCK_AMOUNTS = [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048];
 
 function state_path(): string
@@ -35,33 +45,44 @@ function state_path(): string
     return $path;
 }
 
+function make_keyset(int $generation): array
+{
+    $privkeys = [];
+    $pubkeys = [];
+    $G = Secp256k1::getGenerator();
+    $n = Secp256k1::getOrder();
+    foreach (MOCK_AMOUNTS as $amount) {
+        $k = BigInt::fromHex(hash('sha256', "mock-mint-key-gen$generation-$amount"))->mod($n);
+        $privkeys[(string)$amount] = str_pad($k->toHex(), 64, '0', STR_PAD_LEFT);
+        $pubkeys[(string)$amount] = bin2hex(Secp256k1::compressPoint(Secp256k1::scalarMult($k, $G)));
+    }
+    $finalExpiry = 2059210353;
+    $id = Keyset::deriveKeysetIdV2(
+        array_combine(array_map('intval', array_keys($pubkeys)), array_values($pubkeys)),
+        MOCK_UNIT,
+        MOCK_FEE_PPK,
+        $finalExpiry
+    );
+    return [
+        'id' => $id,
+        'generation' => $generation,
+        'active' => true,
+        'final_expiry' => $finalExpiry,
+        'privkeys' => $privkeys,
+        'pubkeys' => $pubkeys,
+    ];
+}
+
 function load_state(): array
 {
     $path = state_path();
     $state = is_file($path) ? json_decode((string)file_get_contents($path), true) : null;
     if (!is_array($state)) {
-        $state = ['quotes' => [], 'spent' => [], 'keyset' => null];
+        $state = ['quotes' => [], 'spent' => [], 'keysets' => [], 'cache' => []];
     }
-    if ($state['keyset'] === null) {
-        $privkeys = [];
-        $pubkeys = [];
-        $G = Secp256k1::getGenerator();
-        $n = Secp256k1::getOrder();
-        foreach (MOCK_AMOUNTS as $amount) {
-            $k = BigInt::fromHex(hash('sha256', "mock-mint-key-$amount"))->mod($n);
-            $privkeys[(string)$amount] = str_pad($k->toHex(), 64, '0', STR_PAD_LEFT);
-            $pubkeys[(string)$amount] = bin2hex(Secp256k1::compressPoint(Secp256k1::scalarMult($k, $G)));
-        }
-        $state['keyset'] = [
-            'id' => Keyset::deriveKeysetIdV2(
-                array_combine(array_map('intval', array_keys($pubkeys)), array_values($pubkeys)),
-                MOCK_UNIT,
-                MOCK_FEE_PPK,
-                MOCK_FINAL_EXPIRY
-            ),
-            'privkeys' => $privkeys,
-            'pubkeys' => $pubkeys,
-        ];
+    if (empty($state['keysets'])) {
+        $keyset = make_keyset(1);
+        $state['keysets'][$keyset['id']] = $keyset;
         save_state($state);
     }
     return $state;
@@ -72,6 +93,17 @@ function save_state(array $state): void
     file_put_contents(state_path(), json_encode($state), LOCK_EX);
 }
 
+function active_keyset(array $state): array
+{
+    foreach ($state['keysets'] as $keyset) {
+        if ($keyset['active']) {
+            return $keyset;
+        }
+    }
+    http_response_code(500);
+    exit(json_encode(['detail' => 'no active keyset']));
+}
+
 function respond(array $data, int $code = 200): never
 {
     http_response_code($code);
@@ -79,9 +111,13 @@ function respond(array $data, int $code = 200): never
     exit(json_encode($data));
 }
 
-/** Sign a blinded message and attach a NUT-12 DLEQ proof. */
-function sign_output(array $output, array $keyset): array
+/** Sign a blinded message with the keyset the output names, with NUT-12 DLEQ. */
+function sign_output(array $output, array $state): array
 {
+    $keyset = $state['keysets'][$output['id']] ?? null;
+    if ($keyset === null) {
+        respond(['detail' => 'Keyset is not known', 'code' => 12001], 400);
+    }
     $amount = (string)$output['amount'];
     if (!isset($keyset['privkeys'][$amount])) {
         respond(['detail' => "no key for amount $amount", 'code' => 10000], 400);
@@ -112,9 +148,9 @@ function sign_output(array $output, array $keyset): array
 
 $uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 $method = $_SERVER['REQUEST_METHOD'];
-$body = json_decode((string)file_get_contents('php://input'), true) ?: [];
+$rawBody = (string)file_get_contents('php://input');
+$body = json_decode($rawBody, true) ?: [];
 $state = load_state();
-$keyset = $state['keyset'];
 
 // --- control -----------------------------------------------------------
 if ($uri === '/__control/pay' && $method === 'POST') {
@@ -127,31 +163,62 @@ if ($uri === '/__control/pay' && $method === 'POST') {
     respond(['ok' => true]);
 }
 
+if ($uri === '/__control/rotate' && $method === 'POST') {
+    $maxGen = 0;
+    foreach ($state['keysets'] as $id => $keyset) {
+        $state['keysets'][$id]['active'] = false;
+        $state['keysets'][$id]['final_expiry'] = time() + 86400; // expiring soon
+        $maxGen = max($maxGen, $keyset['generation']);
+    }
+    $fresh = make_keyset($maxGen + 1);
+    $state['keysets'][$fresh['id']] = $fresh;
+    save_state($state);
+    respond(['ok' => true, 'active_keyset' => $fresh['id']]);
+}
+
 // --- Cashu API ----------------------------------------------------------
 if ($uri === '/v1/info') {
     respond([
         'name' => 'Mock Mint (keyset v2)',
-        'version' => 'mock/1.0',
+        'version' => 'mock/1.1',
         'nuts' => [
             '4' => ['methods' => [['method' => 'bolt11', 'unit' => MOCK_UNIT]], 'disabled' => false],
             '5' => ['methods' => [['method' => 'bolt11', 'unit' => MOCK_UNIT]], 'disabled' => false],
             '7' => ['supported' => true],
             '12' => ['supported' => true],
+            '19' => ['ttl' => 300, 'cached_endpoints' => [
+                ['method' => 'POST', 'path' => '/v1/mint/bolt11'],
+                ['method' => 'POST', 'path' => '/v1/swap'],
+            ]],
+            '20' => ['supported' => true],
         ],
     ]);
 }
 
 if ($uri === '/v1/keysets') {
-    respond(['keysets' => [[
-        'id' => $keyset['id'],
+    respond(['keysets' => array_values(array_map(fn($ks) => [
+        'id' => $ks['id'],
         'unit' => MOCK_UNIT,
-        'active' => true,
+        'active' => $ks['active'],
         'input_fee_ppk' => MOCK_FEE_PPK,
-        'final_expiry' => MOCK_FINAL_EXPIRY,
-    ]]]);
+        'final_expiry' => $ks['final_expiry'],
+    ], $state['keysets']))]);
 }
 
-if ($uri === '/v1/keys' || $uri === '/v1/keys/' . $keyset['id']) {
+if ($uri === '/v1/keys') {
+    // Like real mints: only ACTIVE keysets are listed here.
+    respond(['keysets' => array_values(array_map(fn($ks) => [
+        'id' => $ks['id'],
+        'unit' => MOCK_UNIT,
+        'keys' => $ks['pubkeys'],
+    ], array_filter($state['keysets'], fn($ks) => $ks['active'])))]);
+}
+
+if (preg_match('#^/v1/keys/(.+)$#', $uri, $m)) {
+    $keyset = $state['keysets'][urldecode($m[1])] ?? null;
+    if ($keyset === null) {
+        respond(['detail' => 'Keyset is not known', 'code' => 12001], 404);
+    }
     respond(['keysets' => [[
         'id' => $keyset['id'],
         'unit' => MOCK_UNIT,
@@ -170,6 +237,7 @@ if ($uri === '/v1/mint/quote/bolt11' && $method === 'POST') {
         // Post-deprecation shape: no `state` field at all.
         'amount_paid' => 0,
         'amount_issued' => 0,
+        'pubkey' => $body['pubkey'] ?? null, // NUT-20
     ];
     $state['quotes'][$quoteId] = $quote;
     save_state($state);
@@ -182,22 +250,46 @@ if (preg_match('#^/v1/mint/quote/bolt11/([0-9a-f]+)$#', $uri, $m)) {
 }
 
 if ($uri === '/v1/mint/bolt11' && $method === 'POST') {
+    // NUT-19: byte-identical replay returns the cached response.
+    $cacheKey = 'mint:' . hash('sha256', $rawBody);
+    if (isset($state['cache'][$cacheKey])) {
+        respond($state['cache'][$cacheKey]);
+    }
+
     $quoteId = $body['quote'] ?? '';
     $quote = $state['quotes'][$quoteId] ?? null;
     if (!$quote) {
         respond(['detail' => 'unknown quote', 'code' => 20005], 404);
     }
     if ($quote['amount_paid'] <= $quote['amount_issued']) {
-        respond(['detail' => 'quote not paid', 'code' => 20001], 400);
+        respond(['detail' => 'Quote request is not paid', 'code' => 20001], 400);
     }
-    $signatures = array_map(fn($o) => sign_output($o, $keyset), $body['outputs'] ?? []);
+
+    // NUT-20: a locked quote requires a valid BIP340 signature.
+    if (!empty($quote['pubkey'])) {
+        $signature = $body['signature'] ?? '';
+        $msg = Wallet::buildMintQuoteSignatureMessage($quoteId, $body['outputs'] ?? []);
+        if ($signature === '' || !Secp256k1::schnorrVerify($quote['pubkey'], hash('sha256', $msg, true), $signature)) {
+            respond(['detail' => 'Signature for mint request invalid', 'code' => 20008], 400);
+        }
+    }
+
+    $signatures = array_map(fn($o) => sign_output($o, $state), $body['outputs'] ?? []);
     $state['quotes'][$quoteId]['amount_issued'] = $quote['amount_paid'];
+    $response = ['signatures' => $signatures];
+    $state['cache'][$cacheKey] = $response;
     save_state($state);
-    respond(['signatures' => $signatures]);
+    respond($response);
 }
 
 if ($uri === '/v1/swap' && $method === 'POST') {
+    $cacheKey = 'swap:' . hash('sha256', $rawBody);
+    if (isset($state['cache'][$cacheKey])) {
+        respond($state['cache'][$cacheKey]);
+    }
+
     $inputSum = 0;
+    $feePpkSum = 0;
     $Ys = [];
     foreach ($body['inputs'] ?? [] as $input) {
         $Y = Crypto::computeY($input['secret']);
@@ -206,18 +298,21 @@ if ($uri === '/v1/swap' && $method === 'POST') {
         }
         $Ys[] = $Y;
         $inputSum += (int)$input['amount'];
+        $feePpkSum += MOCK_FEE_PPK;
     }
     $outputSum = array_sum(array_map(fn($o) => (int)$o['amount'], $body['outputs'] ?? []));
-    $fee = (int)ceil(count($body['inputs'] ?? []) * MOCK_FEE_PPK / 1000);
+    $fee = (int)ceil($feePpkSum / 1000);
     if ($inputSum - $fee !== $outputSum) {
-        respond(['detail' => "inputs $inputSum - fee $fee != outputs $outputSum", 'code' => 11002], 400);
+        respond(['detail' => "Transaction is not balanced (inputs $inputSum - fee $fee != outputs $outputSum)", 'code' => 11005], 400);
     }
     foreach ($Ys as $Y) {
         $state['spent'][$Y] = true;
     }
-    $signatures = array_map(fn($o) => sign_output($o, $keyset), $body['outputs'] ?? []);
+    $signatures = array_map(fn($o) => sign_output($o, $state), $body['outputs'] ?? []);
+    $response = ['signatures' => $signatures];
+    $state['cache'][$cacheKey] = $response;
     save_state($state);
-    respond(['signatures' => $signatures]);
+    respond($response);
 }
 
 if ($uri === '/v1/checkstate' && $method === 'POST') {

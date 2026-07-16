@@ -205,6 +205,40 @@ try {
     $results['tasks']['cleanup_pending_ops'] = 'error: ' . $e->getMessage();
 }
 
+// Task 9c: NUT-02 keyset hygiene — swap proofs off inactive or expiring keysets
+// so held balances survive keyset rotations and never strand past final_expiry.
+try {
+    $lastRotation = (int)Config::get('last_keyset_rotation_check', '0');
+    if (time() - $lastRotation >= 6 * 3600) {
+        $stores = Database::fetchAll(
+            "SELECT id FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL"
+        );
+        $rotated = 0;
+        $checked = 0;
+        foreach ($stores as $store) {
+            try {
+                $wallet = Invoice::getWalletInstance($store['id']);
+                if ($wallet->hasStorage()) {
+                    $rotation = $wallet->rotateProofs();
+                    $rotated += $rotation['rotated'];
+                    $checked += $rotation['checked'];
+                    foreach ($rotation['errors'] as $rotationError) {
+                        error_log("Keyset rotation error for store {$store['id']}: {$rotationError}");
+                    }
+                }
+            } catch (Exception $e) {
+                error_log("Keyset rotation failed for store {$store['id']}: " . $e->getMessage());
+            }
+        }
+        Config::set('last_keyset_rotation_check', (string)time());
+        $results['tasks']['rotate_keyset_proofs'] = "checked {$checked} proofs, rotated {$rotated}";
+    } else {
+        $results['tasks']['rotate_keyset_proofs'] = 'skipped (recently checked)';
+    }
+} catch (Exception $e) {
+    $results['tasks']['rotate_keyset_proofs'] = 'error: ' . $e->getMessage();
+}
+
 // Task 9b: Deliver the transactional webhook outbox with bounded retries and leases
 try {
     $attempted = WebhookSender::deliverPending();
