@@ -12,3 +12,4 @@ PROTOCOL.md
 *.db-shm
 *.db-wal
 build/**
+CLAUDE.local.md

@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 4;
+    private const SCHEMA_VERSION = 5;
 
     private static ?PDO $instance = null;
     private static ?string $dbPath = null;
@@ -242,6 +242,7 @@ HTACCESS;
             secret TEXT NOT NULL,
             events TEXT NOT NULL,
             enabled INTEGER NOT NULL DEFAULT 1,
+            deleted_at INTEGER,
             created_at INTEGER NOT NULL,
             FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
         );
@@ -354,10 +355,21 @@ HTACCESS;
                 }
                 $pdo->exec('PRAGMA user_version = 4');
             }
-            $pdo->commit();
+            if ($version < 5) {
+                if (self::tableExists($pdo, 'webhooks')) {
+                    self::addColumnIfMissing($pdo, 'webhooks', 'deleted_at', 'INTEGER');
+                }
+                $pdo->exec('PRAGMA user_version = 5');
+            }
+            // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
+            // internal transaction flag does not track before PHP 8.4 — commit()
+            // and rollBack() would throw "There is no active transaction".
+            $pdo->exec('COMMIT');
         } catch (Throwable $e) {
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
+            try {
+                $pdo->exec('ROLLBACK');
+            } catch (Throwable $rollbackError) {
+                // No transaction left to roll back (e.g. the failure was the COMMIT).
             }
             throw $e;
         }

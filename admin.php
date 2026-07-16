@@ -496,14 +496,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $primaryProvider = $_POST['price_provider_primary'] ?? 'coingecko';
                 $secondaryProvider = $_POST['price_provider_secondary'] ?? 'binance';
 
-                // Check for duplicate store name
+                // A failed wallet restore leaves a resumable store. Reusing the exact
+                // same name, mint, unit, and seed resumes it instead of creating another.
                 $existingStore = Database::fetchOne(
-                    "SELECT id FROM stores WHERE LOWER(name) = LOWER(?)",
+                    "SELECT * FROM stores WHERE LOWER(name) = LOWER(?)",
                     [$name]
                 );
-                if ($existingStore) {
-                    throw new Exception('A store with this name already exists.');
-                }
 
                 // If mint URL provided, test connection
                 if ($mintUrl) {
@@ -519,36 +517,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $seedPhrase = \Cashu\Mnemonic::generate();
                 }
 
+                $resuming = false;
+                if ($existingStore) {
+                    $resuming = rtrim((string)$existingStore['mint_url'], '/') === rtrim((string)$mintUrl, '/')
+                        && strtolower((string)$existingStore['mint_unit']) === strtolower((string)$mintUnit)
+                        && hash_equals((string)$existingStore['seed_phrase'], (string)$seedPhrase);
+                    if (!$resuming) {
+                        throw new Exception('A store with this name already exists.');
+                    }
+                }
+
                 // Check for duplicate seed phrase (critical - same seed with different units = lost funds)
                 if ($seedPhrase) {
                     $existing = Database::fetchOne(
-                        "SELECT id, name FROM stores WHERE seed_phrase = ?",
-                        [$seedPhrase]
+                        "SELECT id, name FROM stores WHERE seed_phrase = ? AND id != ?",
+                        [$seedPhrase, $existingStore['id'] ?? '']
                     );
                     if ($existing) {
                         throw new Exception("This seed phrase is already used by store: {$existing['name']}. Using the same seed for multiple stores can result in lost funds.");
                     }
                 }
 
-                $storeId = Database::generateId('store');
-                Database::insert('stores', [
-                    'id' => $storeId,
-                    'name' => $name,
-                    'wallet_account_id' => Database::generateWalletAccountId(),
-                    'mint_url' => $mintUrl,
-                    'mint_unit' => $mintUnit,
-                    'seed_phrase' => $seedPhrase,
-                    'exchange_fee_percent' => $exchangeFee,
-                    'price_provider_primary' => $primaryProvider,
-                    'price_provider_secondary' => $secondaryProvider,
-                    'created_at' => Database::timestamp(),
-                ]);
+                $storeId = $resuming ? $existingStore['id'] : Database::generateId('store');
+                if (!$resuming) {
+                    Database::insert('stores', [
+                        'id' => $storeId,
+                        'name' => $name,
+                        'wallet_account_id' => Database::generateWalletAccountId(),
+                        'mint_url' => $mintUrl,
+                        'mint_unit' => $mintUnit,
+                        'seed_phrase' => $seedPhrase,
+                        'exchange_fee_percent' => $exchangeFee,
+                        'price_provider_primary' => $primaryProvider,
+                        'price_provider_secondary' => $secondaryProvider,
+                        'created_at' => Database::timestamp(),
+                    ]);
+                }
 
                 if ($mintUrl && $seedPhrase) {
                     $existingSeed = isset($_POST['seed_phrase']) && $_POST['seed_phrase'] !== '';
-                    $wallet = Invoice::initializeWalletForStore($storeId, $existingSeed);
-                    if ($existingSeed) {
-                        $wallet->restore();
+                    try {
+                        $wallet = Invoice::initializeWalletForStore($storeId, $existingSeed);
+                        if ($existingSeed && $wallet->requiresRecovery()) {
+                            $wallet->restore();
+                        }
+                    } catch (Throwable $e) {
+                        http_response_code(409);
+                        echo json_encode([
+                            'error' => 'wallet_recovery_required',
+                            'message' => $e->getMessage(),
+                            'id' => $storeId,
+                            'name' => $name,
+                            'seedPhrase' => $seedPhrase,
+                            'recoveryRequired' => true,
+                        ]);
+                        break;
                     }
                 }
 
@@ -1445,8 +1468,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $wallet = Invoice::initializeWalletForStore($storeId, true, $mintUrl, $unit);
                     $wallet->restore();
                 } catch (Throwable $e) {
-                    Config::removeStoreBackupMint($id);
-                    throw new Exception('Backup mint recovery check failed: ' . $e->getMessage());
+                    Config::updateStoreBackupMint($id, ['enabled' => 0]);
+                    throw new Exception(
+                        'Backup mint was saved but disabled because recovery did not finish. ' .
+                        'Enable it to retry recovery: ' . $e->getMessage()
+                    );
                 }
                 echo json_encode([
                     'success' => true,
@@ -1469,6 +1495,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($enabled !== null) $data['enabled'] = $enabled;
                 if ($priority !== null) $data['priority'] = $priority;
 
+                if ($enabled === 1) {
+                    $mint = Database::fetchOne(
+                        'SELECT store_id, mint_url, unit FROM store_mints WHERE id = ?',
+                        [$id]
+                    );
+                    if (!$mint) {
+                        throw new Exception('Backup mint not found');
+                    }
+                    $wallet = Invoice::initializeWalletForStore(
+                        $mint['store_id'],
+                        true,
+                        $mint['mint_url'],
+                        $mint['unit']
+                    );
+                    if ($wallet->requiresRecovery()) {
+                        $wallet->restore();
+                    }
+                }
                 Config::updateStoreBackupMint($id, $data);
                 echo json_encode(['success' => true]);
             } catch (Exception $e) {
@@ -4731,8 +4775,12 @@ $isWp = Urls::isWordPress();
                                             <code style="font-size: 0.7rem; word-break: break-all;">${escapeHtml(m.mint_url)}</code>
                                             <span style="opacity: 0.6; font-size: 0.75rem; margin-left: 0.5rem;">(${m.unit.toUpperCase()})</span>
                                         </div>
-                                        <button class="btn btn-danger" style="padding: 0.2rem 0.4rem; font-size: 0.7rem; margin-left: 0.5rem;"
-                                                onclick="removeBackupMint(${m.id}, '${storeId}', '${escapeHtml(storeName)}')">Remove</button>
+                                        <div style="display: flex; gap: 0.35rem; margin-left: 0.5rem;">
+                                            ${Number(m.enabled) === 1 ? '' : `<button class="btn btn-secondary" style="padding: 0.2rem 0.4rem; font-size: 0.7rem;"
+                                                    onclick="retryBackupMint(${m.id}, '${storeId}', '${escapeHtml(storeName)}')">Retry recovery</button>`}
+                                            <button class="btn btn-danger" style="padding: 0.2rem 0.4rem; font-size: 0.7rem;"
+                                                    onclick="removeBackupMint(${m.id}, '${storeId}', '${escapeHtml(storeName)}')">Remove</button>
+                                        </div>
                                     </div>
                                 `).join('')
                             }
@@ -4817,9 +4865,29 @@ $isWp = Urls::isWordPress();
                     showStoreDetails(storeId, storeName);
                 } else {
                     showToast(result.error || 'Failed to add backup mint', 'error');
+                    if (result.error && result.error.includes('saved but disabled')) {
+                        showStoreDetails(storeId, storeName);
+                    }
                 }
             } catch (e) {
                 showToast('Failed to add backup mint', 'error');
+            }
+        }
+
+        async function retryBackupMint(mintId, storeId, storeName) {
+            try {
+                const response = await postWithCsrf(
+                    adminUrl,
+                    `action=update_backup_mint&id=${mintId}&enabled=1`
+                );
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.error || 'Recovery did not finish');
+                }
+                showToast('Backup mint recovery completed', 'success');
+                showStoreDetails(storeId, storeName);
+            } catch (e) {
+                showToast(e.message || 'Backup mint recovery failed', 'error');
             }
         }
 

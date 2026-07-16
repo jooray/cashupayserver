@@ -9,6 +9,7 @@ require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/security.php';
+require_once __DIR__ . '/includes/background.php';
 
 // Set JSON content type
 header('Content-Type: application/json');
@@ -42,6 +43,10 @@ if (!Database::isInitialized() || !Config::isSetupComplete()) {
     ]);
     exit;
 }
+
+// API-only installations may have no page traffic to trigger background work.
+// Use the short self-request rather than delaying the API response on webhook I/O.
+register_shutdown_function(static fn() => Background::trigger());
 
 // M1: API Rate limiting (100 requests per minute per IP)
 $clientIp = Security::getClientIp();

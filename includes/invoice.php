@@ -837,6 +837,17 @@ class Invoice {
                 return ['checked' => 0, 'spent' => 0, 'recovered' => 0];
             }
 
+            // Melt/swap recovery exclusively owns these inputs. A mint may briefly report
+            // them UNSPENT after a timeout even though the original request is queued.
+            $reserved = array_flip($wallet->getStorage()->getReservedInputSecrets());
+            $rows = array_values(array_filter(
+                $rows,
+                fn($row) => !isset($reserved[$row['secret']])
+            ));
+            if (empty($rows)) {
+                return ['checked' => 0, 'spent' => 0, 'recovered' => 0];
+            }
+
             // Build Y values for batch check
             $Ys = [];
             $proofMap = [];

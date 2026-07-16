@@ -58,7 +58,7 @@ function handleGetWebhooks(array $auth, array $params, array $body): void {
     requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
 
     $webhooks = Database::fetchAll(
-        "SELECT * FROM webhooks WHERE store_id = ? ORDER BY created_at DESC",
+        "SELECT * FROM webhooks WHERE store_id = ? AND deleted_at IS NULL ORDER BY created_at DESC",
         [$storeId]
     );
 
@@ -75,7 +75,7 @@ function handleGetWebhook(array $auth, array $params, array $body): void {
     $webhookId = $params['webhookId'];
 
     $webhook = Database::fetchOne(
-        "SELECT * FROM webhooks WHERE id = ? AND store_id = ?",
+        "SELECT * FROM webhooks WHERE id = ? AND store_id = ? AND deleted_at IS NULL",
         [$webhookId, $storeId]
     );
 
@@ -95,7 +95,7 @@ function handleUpdateWebhook(array $auth, array $params, array $body): void {
     $webhookId = $params['webhookId'];
 
     $webhook = Database::fetchOne(
-        "SELECT * FROM webhooks WHERE id = ? AND store_id = ?",
+        "SELECT * FROM webhooks WHERE id = ? AND store_id = ? AND deleted_at IS NULL",
         [$webhookId, $storeId]
     );
 
@@ -125,7 +125,7 @@ function handleUpdateWebhook(array $auth, array $params, array $body): void {
         Database::update('webhooks', $updates, 'id = ?', [$webhookId]);
     }
 
-    $webhook = Database::fetchOne("SELECT * FROM webhooks WHERE id = ?", [$webhookId]);
+    $webhook = Database::fetchOne("SELECT * FROM webhooks WHERE id = ? AND deleted_at IS NULL", [$webhookId]);
     jsonResponse(formatWebhookForApi($webhook, false));
 }
 
@@ -138,7 +138,7 @@ function handleDeleteWebhook(array $auth, array $params, array $body): void {
     $webhookId = $params['webhookId'];
 
     $webhook = Database::fetchOne(
-        "SELECT id FROM webhooks WHERE id = ? AND store_id = ?",
+        "SELECT id FROM webhooks WHERE id = ? AND store_id = ? AND deleted_at IS NULL",
         [$webhookId, $storeId]
     );
 
@@ -146,7 +146,14 @@ function handleDeleteWebhook(array $auth, array $params, array $body): void {
         errorResponse('not-found', 'Webhook not found', 404);
     }
 
-    Database::delete('webhooks', 'id = ?', [$webhookId]);
+    // Keep the row as a tombstone so its foreign-key-linked committed outbox events
+    // remain deliverable using their snapshotted URL and signing secret.
+    Database::update(
+        'webhooks',
+        ['enabled' => 0, 'deleted_at' => Database::timestamp()],
+        'id = ?',
+        [$webhookId]
+    );
 
     http_response_code(200);
     exit;

@@ -26,12 +26,6 @@ Auth::initSession();
 $csrfToken = Auth::generateCsrfToken();
 $isWordPressSetup = Urls::isWordPress();
 
-if (!$isWordPressSetup && empty($_SESSION['setup_ownership_token'])) {
-    $_SESSION['setup_ownership_token'] = bin2hex(random_bytes(16));
-}
-$ownershipToken = $_SESSION['setup_ownership_token'] ?? '';
-$ownershipChallengeFile = __DIR__ . '/.cashupay-setup-challenge';
-
 // Get mode parameter
 $mode = $_GET['mode'] ?? $_POST['mode'] ?? '';
 
@@ -69,15 +63,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!Auth::validateCsrfToken((string)($_POST['csrf_token'] ?? ''))) {
         http_response_code(403);
         $error = 'Your setup session expired. Reload this page and try again.';
-    } elseif (!$isWordPressSetup && !Config::isSetupComplete() && empty($_SESSION['setup_ownership_verified'])) {
-        $challenge = is_file($ownershipChallengeFile) ? trim((string)@file_get_contents($ownershipChallengeFile)) : '';
-        if ($ownershipToken === '' || !hash_equals($ownershipToken, $challenge)) {
-            http_response_code(403);
-            $error = 'Server ownership could not be verified. Create the challenge file shown below, then try again.';
-        } else {
-            $_SESSION['setup_ownership_verified'] = true;
-            @unlink($ownershipChallengeFile);
-        }
     }
 
     if ($error !== null) {
@@ -764,20 +749,6 @@ function getDataDirHttpPath(): ?string {
                     CashuPayServer is a Lightning payment gateway that uses Cashu ecash.
                     Let's get you set up in a few minutes.
                 </p>
-
-                <?php if (!$isWordPressSetup && empty($_SESSION['setup_ownership_verified'])): ?>
-                    <div class="warning" style="margin-bottom: 1.5rem;">
-                        <strong>Verify server ownership</strong>
-                        <p style="margin: 0.5rem 0;">
-                            Using your hosting file manager or FTP, create <code>.cashupay-setup-challenge</code>
-                            in the same directory as <code>setup.php</code>. Put only this value in the file:
-                        </p>
-                        <code style="display: block; user-select: all; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px;"><?= htmlspecialchars($ownershipToken) ?></code>
-                        <p style="margin-top: 0.5rem; font-size: 0.85rem; color: #a0aec0;">
-                            The wizard verifies the file on Continue and removes it when possible.
-                        </p>
-                    </div>
-                <?php endif; ?>
 
                 <?php
                 // Check PHP requirements silently - only show if something fails

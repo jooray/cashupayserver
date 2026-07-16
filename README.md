@@ -138,6 +138,38 @@ After installation, configure WooCommerce to use CashuPayServer:
    - Click **Connect to BTCPay** to start the pairing flow
 3. Save and test with a small purchase
 
+## Updating to a New Version
+
+Upgrading never touches your ecash. Your database (`data/`, or `cashupay-data` for the WordPress plugin) is kept completely separate from the application code, and any database changes are applied automatically the first time you load the dashboard after an upgrade — there's no manual migration step to run.
+
+**Before you start**: back up your data folder. It only takes a minute and means you can always roll back if something goes wrong. And remember: your seed phrase (shown in the admin dashboard) is your ultimate backup — it lets you recover your funds even if every file backup fails.
+
+### Standalone (Shared Hosting)
+
+1. **Back up first** (recommended): copy the `data/` folder and `includes/config.local.php` (if you created one) somewhere safe, such as your own computer.
+2. **Download** the new `cashupayserver.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases).
+3. **Extract** it on your computer.
+4. **Upload** the extracted files over your existing installation via FTP or your host's file manager, overwriting the old files. The release zip never includes a `data/` folder or `config.local.php`, so a normal overwrite can't touch them.
+   - **Important**: if your FTP client offers a "mirror" or "delete extra files" sync mode, don't use it here — that could delete your `data/` directory along with everything in it. Do a plain upload/overwrite instead.
+5. **Open** your CashuPayServer URL in a browser. The database upgrades itself automatically on this first request — you should land straight on your normal admin dashboard, not the setup wizard.
+
+**Safer alternative**: if you'd rather not rely on the zip simply not containing `data/`, temporarily move `data/` and `includes/config.local.php` out of the installation folder before uploading the new files, then move them back afterward.
+
+### WordPress Plugin
+
+The plugin keeps its database in a `cashupay-data` folder *outside* the plugin's own directory (normally one level above your WordPress installation, or inside `wp-content/cashupay-data` if that's not possible — the exact path is shown on the **Tools → CashuPay** admin page). Updating the plugin only replaces its code folder, so this data is never touched.
+
+1. **Back up first** (recommended): copy the `cashupay-data` folder (path shown on **Tools → CashuPay**) somewhere safe.
+2. **Download** the new `cashupay-wordpress.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases).
+3. Update the plugin using either method:
+   - **WP Admin (easiest)**: go to **Plugins**, deactivate and delete the existing CashuPay plugin, then go to **Plugins → Add New → Upload Plugin** and upload the new zip. Deleting the plugin does not remove `cashupay-data` — it's deliberately left in place.
+   - **FTP/file manager**: replace the contents of the plugin's folder (usually `wp-content/plugins/cashupay/`) with the files from the new zip.
+4. **Activate** the plugin if needed, then open **Tools → CashuPay**. The database upgrades itself automatically on this first load.
+
+### After Upgrading
+
+Open the admin dashboard — it should load normally and show your existing balance and transaction history, with no setup wizard reappearing. If anything looks wrong, restore your backed-up data folder and open an issue; your seed phrase always lets you recover funds regardless of what happens to the files.
+
 ## Security
 
 ### Database Protection

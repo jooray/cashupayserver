@@ -80,7 +80,7 @@ function cashupay_register_webhook(string $store_id): array {
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
 
         // Check if webhook already exists for this store and URL
-        $stmt = $pdo->prepare("SELECT id, secret FROM webhooks WHERE store_id = ? AND url = ?");
+        $stmt = $pdo->prepare("SELECT id, secret FROM webhooks WHERE store_id = ? AND url = ? AND deleted_at IS NULL");
         $stmt->execute([$store_id, $webhookUrl]);
         $existing = $stmt->fetch(PDO::FETCH_ASSOC);
 

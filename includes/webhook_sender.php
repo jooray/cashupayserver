@@ -20,7 +20,7 @@ class WebhookSender {
     public static function fireEvent(string $storeId, string $eventType, array $invoiceData): void {
         // Get all enabled webhooks for this store that subscribe to this event
         $webhooks = Database::fetchAll(
-            "SELECT * FROM webhooks WHERE store_id = ? AND enabled = 1",
+            "SELECT * FROM webhooks WHERE store_id = ? AND enabled = 1 AND deleted_at IS NULL",
             [$storeId]
         );
 
