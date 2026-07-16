@@ -201,6 +201,24 @@ $external->getStorage()->deleteMintQuoteKey($scanQuote->quote);
 $scanProofs = $external->mint($scanQuote->quote, 4);
 check(count($scanProofs) > 0, 'locked quote minted after deterministic key recovery scan');
 
+// Older mints (nutshell <= 0.20.x) verify the pre-hardening legacy signature
+// message; the wallet must fall back to it after a 20008 rejection.
+echo "nut-20 legacy mint fallback:\n";
+$setLegacy = function (bool $enabled) use ($mintUrl): void {
+    file_get_contents("$mintUrl/__control/nut20_legacy", false, stream_context_create([
+        'http' => ['method' => 'POST', 'header' => 'Content-Type: application/json', 'content' => json_encode(['enabled' => $enabled])],
+    ]));
+};
+$setLegacy(true);
+$legacyInvoice = Invoice::create($storeId, ['amount' => 3, 'currency' => 'sat']);
+check($wallet->getStorage()->getMintQuoteKey($legacyInvoice['quote_id']) !== null, 'legacy-mint quote is still NUT-20 locked');
+$payQuote($legacyInvoice['quote_id']);
+Invoice::pollSingleQuote($legacyInvoice['id']);
+$legacySettled = Invoice::getById($legacyInvoice['id']);
+check($legacySettled['status'] === 'Settled', "invoice settled via legacy signature fallback (status: {$legacySettled['status']})");
+check(Invoice::getBalance($storeId) === 36, 'balance includes legacy-fallback mint');
+$setLegacy(false);
+
 // --- Keyset rotation ---------------------------------------------------------
 echo "keyset rotation:\n";
 file_get_contents("$mintUrl/__control/rotate", false, stream_context_create([

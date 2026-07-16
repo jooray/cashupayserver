@@ -172,6 +172,14 @@ if ($uri === '/__control/pay' && $method === 'POST') {
     respond(['ok' => true]);
 }
 
+if ($uri === '/__control/nut20_legacy' && $method === 'POST') {
+    // Emulate mints released before the NUT-20 message hardening
+    // (nutshell <= 0.20.x): verify ONLY the legacy signature message.
+    $state['nut20_legacy'] = (bool)($body['enabled'] ?? false);
+    save_state($state);
+    respond(['ok' => true, 'nut20_legacy' => $state['nut20_legacy']]);
+}
+
 if ($uri === '/__control/rotate' && $method === 'POST') {
     $maxGen = 0;
     foreach ($state['keysets'] as $id => $keyset) {
@@ -274,10 +282,14 @@ if ($uri === '/v1/mint/bolt11' && $method === 'POST') {
         respond(['detail' => 'Quote request is not paid', 'code' => 20001], 400);
     }
 
-    // NUT-20: a locked quote requires a valid BIP340 signature.
+    // NUT-20: a locked quote requires a valid BIP340 signature. In legacy
+    // mode the mint verifies ONLY the pre-hardening message, exactly like
+    // nutshell <= 0.20.x (sha256 over quote_id || B_ hex strings).
     if (!empty($quote['pubkey'])) {
         $signature = $body['signature'] ?? '';
-        $msg = Wallet::buildMintQuoteSignatureMessage($quoteId, $body['outputs'] ?? []);
+        $msg = !empty($state['nut20_legacy'])
+            ? Wallet::buildMintQuoteSignatureMessageLegacy($quoteId, $body['outputs'] ?? [])
+            : Wallet::buildMintQuoteSignatureMessage($quoteId, $body['outputs'] ?? []);
         if ($signature === '' || !Secp256k1::schnorrVerify($quote['pubkey'], hash('sha256', $msg, true), $signature)) {
             respond(['detail' => 'Signature for mint request invalid', 'code' => 20008], 400);
         }
