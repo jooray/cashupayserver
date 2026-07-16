@@ -219,6 +219,21 @@ check($legacySettled['status'] === 'Settled', "invoice settled via legacy signat
 check(Invoice::getBalance($storeId) === 36, 'balance includes legacy-fallback mint');
 $setLegacy(false);
 
+// --- Ambiguous melt reconciliation -------------------------------------------
+echo "ambiguous melt reconciliation:\n";
+$balanceBeforeMelt = Invoice::getBalance($storeId);
+file_get_contents("$mintUrl/__control/next_melt_ambiguous", false, stream_context_create([
+    'http' => ['method' => 'POST', 'header' => 'Content-Type: application/json', 'content' => '{}'],
+]));
+$meltQuote = $wallet->requestMeltQuote('lnbcmockmelt5');
+$meltProofs = Wallet::selectProofs(Invoice::getUnspentProofs($storeId), $meltQuote->amount + $meltQuote->feeReserve);
+$meltResult = $wallet->melt($meltQuote->quote, $meltProofs);
+check($meltResult['paid'] === true, 'melt reports paid after POST failed but quote reconciled as PAID');
+check($meltResult['preimage'] !== null, 'reconciled melt returns payment preimage');
+check($wallet->getStorage()->getPendingOperationById('melt:' . $meltQuote->quote) === null, 'reconciled melt clears pending journal');
+$balanceAfterMelt = Invoice::getBalance($storeId);
+check($balanceAfterMelt === $balanceBeforeMelt - 6, "reconciled melt preserves change (balance $balanceAfterMelt = $balanceBeforeMelt - 6)");
+
 // --- Keyset rotation ---------------------------------------------------------
 echo "keyset rotation:\n";
 file_get_contents("$mintUrl/__control/rotate", false, stream_context_create([

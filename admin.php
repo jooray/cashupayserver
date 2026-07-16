@@ -2459,7 +2459,7 @@ $isWp = Urls::isWordPress();
         </div>
 
         <div class="password-fallback" id="password-fallback">
-            <input type="password" id="password-input" placeholder="Or enter password">
+            <input type="password" id="password-input" placeholder="Enter password">
             <button class="btn btn-full" id="password-submit">Unlock</button>
         </div>
     </div>

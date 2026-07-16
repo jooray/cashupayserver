@@ -180,6 +180,16 @@ if ($uri === '/__control/nut20_legacy' && $method === 'POST') {
     respond(['ok' => true, 'nut20_legacy' => $state['nut20_legacy']]);
 }
 
+if ($uri === '/__control/next_melt_ambiguous' && $method === 'POST') {
+    // The next melt will be fully processed and persisted as PAID, but the
+    // endpoint returns a SQL-style 500 instead of its success response. This
+    // reproduces the real-world "payment succeeded, response lost/broken"
+    // failure that must be reconciled via GET /melt/quote.
+    $state['next_melt_ambiguous'] = true;
+    save_state($state);
+    respond(['ok' => true]);
+}
+
 if ($uri === '/__control/rotate' && $method === 'POST') {
     $maxGen = 0;
     foreach ($state['keysets'] as $id => $keyset) {
@@ -301,6 +311,69 @@ if ($uri === '/v1/mint/bolt11' && $method === 'POST') {
     $state['cache'][$cacheKey] = $response;
     save_state($state);
     respond($response);
+}
+
+if ($uri === '/v1/melt/quote/bolt11' && $method === 'POST') {
+    $quoteId = bin2hex(random_bytes(16));
+    // Test invoices use lnbcmockmelt<N>; default to 5 sats.
+    $amount = preg_match('/lnbcmockmelt(\d+)/', (string)($body['request'] ?? ''), $matches)
+        ? (int)$matches[1]
+        : 5;
+    $quote = [
+        'quote' => $quoteId,
+        'request' => (string)($body['request'] ?? ''),
+        'unit' => MOCK_UNIT,
+        'amount' => $amount,
+        'fee_reserve' => 1,
+        'state' => 'UNPAID',
+        'expiry' => time() + 900,
+        'payment_preimage' => null,
+        'change' => null,
+    ];
+    $state['melt_quotes'][$quoteId] = $quote;
+    save_state($state);
+    respond($quote);
+}
+
+if (preg_match('#^/v1/melt/quote/bolt11/([0-9a-f]+)$#', $uri, $m)) {
+    $quote = $state['melt_quotes'][$m[1]] ?? null;
+    $quote ? respond($quote) : respond(['detail' => 'unknown melt quote', 'code' => 20005], 404);
+}
+
+if ($uri === '/v1/melt/bolt11' && $method === 'POST') {
+    $quoteId = (string)($body['quote'] ?? '');
+    $quote = $state['melt_quotes'][$quoteId] ?? null;
+    if ($quote === null) {
+        respond(['detail' => 'unknown melt quote', 'code' => 20005], 404);
+    }
+
+    $Ys = [];
+    $inputSum = 0;
+    foreach ($body['inputs'] ?? [] as $input) {
+        $Y = Crypto::computeY($input['secret']);
+        if (isset($state['spent'][$Y])) {
+            // Deliberately SQL-flavoured, matching the production failure.
+            respond(['detail' => 'IntegrityError: duplicate key value violates unique constraint "proofs_used_new_y_key"'], 500);
+        }
+        $Ys[] = $Y;
+        $inputSum += (int)$input['amount'];
+    }
+
+    $change = array_map(fn($output) => sign_output($output, $state), $body['outputs'] ?? []);
+    foreach ($Ys as $Y) {
+        $state['spent'][$Y] = true;
+    }
+    $state['melt_quotes'][$quoteId]['state'] = 'PAID';
+    $state['melt_quotes'][$quoteId]['payment_preimage'] = hash('sha256', $quoteId);
+    $state['melt_quotes'][$quoteId]['change'] = $change;
+    save_state($state);
+
+    if (!empty($state['next_melt_ambiguous'])) {
+        unset($state['next_melt_ambiguous']);
+        save_state($state);
+        respond(['detail' => 'IntegrityError: simulated response failure after payment commit'], 500);
+    }
+    respond($state['melt_quotes'][$quoteId]);
 }
 
 if ($uri === '/v1/swap' && $method === 'POST') {
