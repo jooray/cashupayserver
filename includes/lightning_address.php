@@ -11,6 +11,7 @@ require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/invoice.php';
 require_once __DIR__ . '/rates.php';
+require_once __DIR__ . '/transfer.php';
 require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
 
 use Cashu\Wallet;
@@ -167,6 +168,18 @@ class LightningAddress {
                             $store['auto_melt_address'],
                             $meltAmountSats,
                             'CashuPayServer auto-withdrawal'
+                        );
+
+                        // Record the auto-withdrawal in the outgoing-transfer ledger.
+                        Transfer::record(
+                            $store['id'],
+                            Transfer::TYPE_AUTO_WITHDRAW,
+                            (int)($result['amountPaid'] ?? $meltAmountInMintUnit),
+                            (int)($result['fee'] ?? 0),
+                            $mintUnit,
+                            $store['auto_melt_address'],
+                            'completed',
+                            $result['preimage'] ?? null
                         );
 
                         // Send donation if configured (in mint units)
@@ -437,6 +450,18 @@ class Donation {
             $token = $wallet->serializeToken($donationProofs);
 
             self::postTokenToSink($token);
+
+            // Record the donation in the outgoing-transfer ledger.
+            Transfer::record(
+                $storeId,
+                Transfer::TYPE_DONATION,
+                (int)$amount,
+                0,
+                Config::getStoreMintUnit($storeId),
+                'CashuPayServer donation',
+                'completed',
+                null
+            );
 
             return ['success' => true, 'token' => $token, 'error' => null];
 

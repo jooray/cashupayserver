@@ -10,6 +10,7 @@ require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/invoice.php';
 require_once __DIR__ . '/includes/lightning_address.php';
+require_once __DIR__ . '/includes/transfer.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
@@ -173,6 +174,9 @@ if (isset($_GET['api'])) {
             // Get invoices for this store
             $recentInvoices = Invoice::getByStore($storeId, null, 10);
 
+            // Get outgoing transfers (withdrawals, auto-withdrawals, exports, donations)
+            $recentTransfers = Transfer::getByStore($storeId, 10);
+
             // Get store details including auto-melt settings
             $store = Config::getStore($storeId);
             $autoMelt = [
@@ -215,6 +219,7 @@ if (isset($_GET['api'])) {
                 'mintUnit' => $mintUnit,
                 'balanceCached' => $balanceCached,
                 'invoices' => array_map([Invoice::class, 'formatForApi'], $recentInvoices),
+                'transfers' => array_map([Transfer::class, 'formatForApi'], $recentTransfers),
                 'stores' => $stores,
                 'autoMelt' => $autoMelt,
             ]);
@@ -1069,6 +1074,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
+                // Record the completed withdrawal in the outgoing-transfer ledger
+                // (the donation, if any, is recorded inside Donation::sendToDonationSink).
+                if (!empty($result['success'])) {
+                    Transfer::record(
+                        $storeId,
+                        $isBolt11 ? Transfer::TYPE_LIGHTNING : Transfer::TYPE_LIGHTNING_ADDRESS,
+                        (int)($result['amountPaid'] ?? $amount),
+                        (int)($result['fee'] ?? 0),
+                        $mintUnit,
+                        $destination,
+                        'completed',
+                        $result['preimage'] ?? null
+                    );
+                }
+
                 // Include donation info in response
                 $result['donated'] = $donationAmount;
                 $result['donationSuccess'] = $donationSuccess;
@@ -1463,6 +1483,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $response['feeSaved'] = true;
                     }
                 }
+
+                // Record the export in the outgoing-transfer ledger.
+                Transfer::record(
+                    $storeId,
+                    Transfer::TYPE_TOKEN_EXPORT,
+                    (int)$response['amount'],
+                    0,
+                    $mintUnit,
+                    null,
+                    'completed',
+                    'Cashu token'
+                );
 
                 echo json_encode($response);
 
@@ -2642,6 +2674,15 @@ $isWp = Urls::isWordPress();
                         <div class="loading"><div class="spinner"></div></div>
                     </div>
                 </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Recent Transfers</div>
+                    </div>
+                    <div id="recent-transfers">
+                        <div class="loading"><div class="spinner"></div></div>
+                    </div>
+                </div>
             </div>
 
             <!-- Invoices View -->
@@ -3606,6 +3647,7 @@ $isWp = Urls::isWordPress();
                         document.getElementById('withdraw-available').textContent = '0';
                         document.getElementById('export-available').textContent = '0';
                         renderInvoices('recent-invoices', []);
+                        renderTransfers('recent-transfers', []);
                         return;
                     }
                 }
@@ -3673,8 +3715,9 @@ $isWp = Urls::isWordPress();
                     }
                 }
 
-                // Render recent invoices
+                // Render recent invoices and outgoing transfers
                 renderInvoices('recent-invoices', dashboardData.invoices || []);
+                renderTransfers('recent-transfers', dashboardData.transfers || []);
 
             } catch (e) {
                 console.error(e);
@@ -3831,6 +3874,53 @@ $isWp = Urls::isWordPress();
                         <div class="list-amount">
                             <div class="list-amount-value">${escapeHtml(inv.amount)} ${escapeHtml(inv.currency)}</div>
                             <div class="list-amount-status ${statusClass}">${inv.status}</div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function renderTransfers(containerId, transfers) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+
+            if (!transfers || transfers.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-state-icon">↗</div>
+                        <p>No transfers out yet</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const meta = {
+                lightning:         { icon: '⚡', label: 'Lightning withdrawal' },
+                lightning_address: { icon: '⚡', label: 'Lightning withdrawal' },
+                auto_withdraw:     { icon: '🔄', label: 'Auto-withdrawal' },
+                token_export:      { icon: '🎟️', label: 'Token export' },
+                donation:          { icon: '❤️', label: 'Donation' },
+            };
+
+            container.innerHTML = transfers.map(t => {
+                const m = meta[t.type] || { icon: '↗', label: t.type };
+                const date = new Date(t.createdTime * 1000).toLocaleDateString();
+                const unit = (t.unit || 'sat').toUpperCase();
+                const dest = t.destination
+                    ? (t.destination.length > 32 ? escapeHtml(t.destination.slice(0, 30)) + '…' : escapeHtml(t.destination))
+                    : '';
+                const feeText = (t.fee && t.fee > 0) ? ` · fee ${formatAmount(t.fee, t.unit)}` : '';
+                const statusClass = t.status === 'completed' ? 'settled' : (t.status === 'failed' ? 'expired' : 'new');
+                return `
+                    <div class="list-item">
+                        <div class="list-icon ${statusClass}">${m.icon}</div>
+                        <div class="list-content">
+                            <div class="list-title">${m.label}</div>
+                            <div class="list-subtitle">${date}${dest ? ' · ' + dest : ''}${feeText}</div>
+                        </div>
+                        <div class="list-amount">
+                            <div class="list-amount-value">-${formatAmount(t.amount, t.unit)} ${escapeHtml(unit)}</div>
+                            <div class="list-amount-status ${statusClass}">${escapeHtml(t.status)}</div>
                         </div>
                     </div>
                 `;

@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 5;
+    private const SCHEMA_VERSION = 6;
 
     private static ?PDO $instance = null;
     private static ?string $dbPath = null;
@@ -282,6 +282,22 @@ HTACCESS;
             UNIQUE(store_id, mint_url)
         );
 
+        -- Outgoing transfers ledger: Lightning withdrawals, auto-withdrawals,
+        -- token exports and donations. Accountability record of funds leaving.
+        CREATE TABLE IF NOT EXISTS transfers (
+            id TEXT PRIMARY KEY,
+            store_id TEXT NOT NULL,
+            type TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            fee INTEGER NOT NULL DEFAULT 0,
+            unit TEXT NOT NULL DEFAULT 'sat',
+            destination TEXT,
+            status TEXT NOT NULL DEFAULT 'completed',
+            detail TEXT,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+
         -- Indexes for performance
         CREATE INDEX IF NOT EXISTS idx_invoices_store ON invoices(store_id);
         CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
@@ -290,6 +306,7 @@ HTACCESS;
         CREATE INDEX IF NOT EXISTS idx_webhooks_store ON webhooks(store_id);
         CREATE INDEX IF NOT EXISTS idx_store_mints_store ON store_mints(store_id);
         CREATE INDEX IF NOT EXISTS idx_store_mints_priority ON store_mints(store_id, priority);
+        CREATE INDEX IF NOT EXISTS idx_transfers_store ON transfers(store_id, created_at);
         ";
 
         $pdo->exec($schema);
@@ -360,6 +377,24 @@ HTACCESS;
                     self::addColumnIfMissing($pdo, 'webhooks', 'deleted_at', 'INTEGER');
                 }
                 $pdo->exec('PRAGMA user_version = 5');
+            }
+            if ($version < 6) {
+                // Outgoing-transfer ledger (Lightning/auto withdrawals, exports, donations).
+                $pdo->exec("CREATE TABLE IF NOT EXISTS transfers (
+                    id TEXT PRIMARY KEY,
+                    store_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    fee INTEGER NOT NULL DEFAULT 0,
+                    unit TEXT NOT NULL DEFAULT 'sat',
+                    destination TEXT,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    detail TEXT,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+                )");
+                $pdo->exec("CREATE INDEX IF NOT EXISTS idx_transfers_store ON transfers(store_id, created_at)");
+                $pdo->exec('PRAGMA user_version = 6');
             }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()
