@@ -630,7 +630,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $updates['price_provider_secondary'] = $_POST['price_provider_secondary'];
                 }
 
-                Config::updateStore($storeId, $updates);
+                // Changing the mint URL or unit points the store at a new wallet
+                // namespace (namespace = hash(mint_url, unit, account)), stranding
+                // any funds held at the current mint — they stay in the DB but
+                // become invisible/unspendable through this store. It is not
+                // refused: warn (with the balance that would be stranded) and let
+                // the operator confirm; the funds stay recoverable afterwards.
+                $mintChanged = array_key_exists('mint_url', $updates)
+                    && rtrim((string)$updates['mint_url'], '/') !== rtrim((string)($store['mint_url'] ?? ''), '/');
+                $unitChanged = array_key_exists('mint_unit', $updates)
+                    && strtolower((string)$updates['mint_unit']) !== strtolower((string)($store['mint_unit'] ?? 'sat'));
+                $confirmStranding = isset($_POST['confirm_stranding']) && $_POST['confirm_stranding'] === '1';
+                $wouldStrand = ($mintChanged || $unitChanged) && Config::isStoreWalletInitialized($storeId);
+
+                if ($wouldStrand && !$confirmStranding) {
+                    $strandedBalance = 0;
+                    try {
+                        $strandedBalance = Invoice::getBalance($storeId);
+                    } catch (Throwable $e) {
+                        $strandedBalance = -1; // could not verify — warn to be safe
+                    }
+                    http_response_code(409);
+                    echo json_encode([
+                        'error' => 'mint_change_strands_funds',
+                        'balance' => max(0, $strandedBalance),
+                        'balanceUnknown' => $strandedBalance < 0,
+                        'currentMint' => $store['mint_url'] ?? null,
+                        'currentUnit' => $store['mint_unit'] ?? 'sat',
+                        'newMint' => array_key_exists('mint_url', $updates) ? $updates['mint_url'] : ($store['mint_url'] ?? null),
+                        'newUnit' => array_key_exists('mint_unit', $updates) ? $updates['mint_unit'] : ($store['mint_unit'] ?? 'sat'),
+                        'message' => 'Changing this store\'s mint or unit will make its current balance invisible and unspendable through this store. Export the balance first, or confirm to change anyway (the funds stay recoverable under "Recover funds from a previous mint").',
+                    ]);
+                    break;
+                }
+
+                // Allow the mint/unit change only when the operator confirmed the
+                // stranding warning; seed changes remain permanently blocked.
+                Config::updateStore($storeId, $updates, $wouldStrand && $confirmStranding);
 
                 echo json_encode([
                     'success' => true,
@@ -1563,6 +1599,80 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $result = MintHelpers::testExpiry($mintUrl, $unit);
                 echo json_encode($result);
             } catch (Exception $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'scan_stranded_funds':
+            // Find funds stranded in wallet namespaces left behind by a past
+            // mint/unit change (invisible to the normal balance/withdraw UI).
+            try {
+                echo json_encode(['stranded' => Invoice::scanStrandedNamespaces()]);
+            } catch (Throwable $e) {
+                http_response_code(500);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'export_stranded_funds':
+            // Serialize a stranded namespace's unspent proofs into a claimable
+            // token. Read-only (proofs stay UNSPENT locally until the operator
+            // confirms the claim via mark_stranded_recovered), so a lost token
+            // can be re-exported. No mint contact.
+            @set_time_limit(0);
+            try {
+                $mintUrl = trim($_POST['mint_url'] ?? '');
+                $unit = strtolower(trim($_POST['unit'] ?? 'sat'));
+                if ($mintUrl === '') {
+                    throw new Exception('Mint URL required');
+                }
+                if (class_exists('Security') && method_exists('Security', 'sanitizeUrl') && Security::sanitizeUrl($mintUrl) === null) {
+                    throw new Exception('Mint URL must be a valid http(s) URL');
+                }
+                if (array_key_exists('account', $_POST)) {
+                    $account = ($_POST['account'] === '') ? null : $_POST['account'];
+                } else {
+                    // Manual mint entry: find which account holds unspent funds.
+                    $resolved = Invoice::resolveNamespaceForMint($mintUrl, $unit);
+                    if (!$resolved['found']) {
+                        throw new Exception('No unspent funds found for that mint and unit in local storage.');
+                    }
+                    $account = $resolved['account'];
+                }
+                $result = Invoice::exportNamespaceAsToken($mintUrl, $unit, $account);
+                if ($result['token'] === null) {
+                    throw new Exception('No unspent funds found in that namespace.');
+                }
+                echo json_encode([
+                    'success' => true,
+                    'token' => $result['token'],
+                    'amount' => $result['amount'],
+                    'count' => $result['count'],
+                    'wallet_id' => $result['wallet_id'],
+                    'mint_url' => $mintUrl,
+                    'unit' => $unit,
+                    'account' => $account,
+                ]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'mark_stranded_recovered':
+            // After the exported token is confirmed claimed, mark the namespace's
+            // proofs SPENT so it no longer shows as recoverable.
+            try {
+                $mintUrl = trim($_POST['mint_url'] ?? '');
+                $unit = strtolower(trim($_POST['unit'] ?? 'sat'));
+                $account = (array_key_exists('account', $_POST) && $_POST['account'] !== '') ? $_POST['account'] : null;
+                if ($mintUrl === '') {
+                    throw new Exception('Mint URL required');
+                }
+                $n = Invoice::markNamespaceRecovered($mintUrl, $unit, $account);
+                echo json_encode(['success' => true, 'marked' => $n]);
+            } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
             }
@@ -2571,6 +2681,27 @@ $isWp = Urls::isWordPress();
                                 <span class="store-info-label">Unit</span>
                                 <span class="store-info-value" id="store-settings-unit">-</span>
                             </div>
+                            <button class="btn btn-secondary" id="btn-change-mint" style="margin-top: 0.75rem; padding: 0.3rem 0.7rem; font-size: 0.8rem;">Change mint / unit</button>
+
+                            <div id="mint-change-editor" style="display: none; margin-top: 0.75rem; padding: 0.75rem; border: 1px solid rgba(247,147,26,0.35); border-radius: 8px;">
+                                <p class="form-help" style="margin: 0 0 0.5rem;">
+                                    ⚠️ Changing the mint or unit leaves this store's current balance behind at the
+                                    old mint. Withdraw or export it first — it stays recoverable below, but only
+                                    while the old mint is online.
+                                </p>
+                                <div class="form-group">
+                                    <label class="form-label">New Mint URL</label>
+                                    <input type="text" class="form-input" id="edit-mint-url" placeholder="https://mint.example">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">Unit</label>
+                                    <input type="text" class="form-input" id="edit-mint-unit" value="sat" placeholder="sat">
+                                </div>
+                                <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                    <button class="btn" id="btn-save-mint-change">Save</button>
+                                    <button class="btn btn-secondary" id="btn-cancel-mint-change">Cancel</button>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -2648,6 +2779,31 @@ $isWp = Urls::isWordPress();
                                 <p class="form-help">Fee added to currency conversions (0-10%)</p>
                             </div>
                             <button class="btn btn-full" id="btn-save-exchange-settings">Save Settings</button>
+                        </div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-header">
+                            <div class="card-title">Recover Funds From a Previous Mint</div>
+                            <button class="btn btn-secondary" id="btn-scan-stranded">Scan</button>
+                        </div>
+                        <div class="card-body">
+                            <p class="form-help" style="margin-top: 0;">
+                                Changing a store's mint or unit leaves any existing balance behind in the
+                                old mint's wallet, where the normal balance and withdraw screens can't see it.
+                                This finds that stranded ecash and exports it as a claimable Cashu token.
+                            </p>
+                            <div id="stranded-results" style="margin-top: 0.75rem;"></div>
+                            <details style="margin-top: 1rem;">
+                                <summary style="cursor: pointer; color: var(--text-secondary); font-size: 0.85rem;">
+                                    Recover from a mint I know (manual)
+                                </summary>
+                                <div style="margin-top: 0.75rem; display: flex; flex-direction: column; gap: 0.5rem;">
+                                    <input type="text" class="form-input" id="stranded-manual-mint" placeholder="https://old-mint.example">
+                                    <input type="text" class="form-input" id="stranded-manual-unit" placeholder="unit (sat, usd, …)" value="sat">
+                                    <button class="btn btn-secondary" id="btn-stranded-manual">Export from this mint</button>
+                                </div>
+                            </details>
                         </div>
                     </div>
 
@@ -3271,6 +3427,27 @@ $isWp = Urls::isWordPress();
                 if (currentStoreId) {
                     deleteStore(currentStoreId);
                 }
+            });
+
+            // Change mint / unit (warns before stranding the current balance)
+            document.getElementById('btn-change-mint').addEventListener('click', () => {
+                const ed = document.getElementById('mint-change-editor');
+                document.getElementById('edit-mint-url').value = document.getElementById('store-settings-mint').textContent.trim().replace(/^-$/, '');
+                document.getElementById('edit-mint-unit').value = (document.getElementById('store-settings-unit').textContent.trim() || 'SAT').toLowerCase();
+                ed.style.display = ed.style.display === 'none' ? 'block' : 'none';
+            });
+            document.getElementById('btn-cancel-mint-change').addEventListener('click', () => {
+                document.getElementById('mint-change-editor').style.display = 'none';
+            });
+            document.getElementById('btn-save-mint-change').addEventListener('click', () => saveMintChange(false));
+
+            // Stranded-fund recovery (funds left behind by a past mint/unit change)
+            document.getElementById('btn-scan-stranded').addEventListener('click', scanStrandedFunds);
+            document.getElementById('btn-stranded-manual').addEventListener('click', () => {
+                const mint = document.getElementById('stranded-manual-mint').value.trim();
+                const unit = (document.getElementById('stranded-manual-unit').value.trim() || 'sat');
+                if (!mint) { showToast('Enter a mint URL', 'error'); return; }
+                exportStrandedFunds({ mint_url: mint, unit: unit }, null);
             });
 
             // Modal close on overlay click
@@ -5011,6 +5188,154 @@ $isWp = Urls::isWordPress();
             if (document.getElementById('view-stores').classList.contains('active')) {
                 loadStoreSettings();
             }
+        }
+
+        // ---- Stranded-fund recovery (funds left behind by a past mint change) ----
+
+        async function scanStrandedFunds() {
+            const box = document.getElementById('stranded-results');
+            box.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            try {
+                const response = await postWithCsrf(adminUrl, 'action=scan_stranded_funds');
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.error || 'Scan failed');
+                renderStrandedResults(result.stranded || []);
+            } catch (e) {
+                box.innerHTML = '';
+                showToast(e.message || 'Scan failed', 'error');
+            }
+        }
+
+        function renderStrandedResults(list) {
+            const box = document.getElementById('stranded-results');
+            if (!list.length) {
+                box.innerHTML = '<p class="form-help" style="margin: 0;">No stranded funds found. ✅</p>';
+                return;
+            }
+            box.innerHTML = list.map((s, i) => {
+                const mint = s.mint_url ? escapeHtml(s.mint_url) : '<em>unknown mint</em>';
+                const unit = (s.unit || '').toUpperCase();
+                const amt = s.unit ? `${s.amount} ${unit}` : `${s.amount} units`;
+                const ks = (s.keysets || []).map(escapeHtml).join(', ');
+                const canExport = !!s.mint_url;
+                return `
+                    <div class="store-info-item" style="flex-direction: column; align-items: stretch; gap: 0.4rem; border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 8px; padding: 0.75rem; margin-bottom: 0.5rem;">
+                        <div><strong>${amt}</strong> &middot; ${mint}</div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary); word-break: break-all;">
+                            ${s.count} proof(s) &middot; ${s.account_mode} namespace &middot; keysets: ${ks || '-'}
+                        </div>
+                        ${canExport
+                            ? `<button class="btn btn-secondary" data-stranded="${i}" style="align-self: flex-start; padding: 0.3rem 0.7rem; font-size: 0.8rem;">Export as token</button>`
+                            : `<div class="form-help" style="margin: 0;">Mint not in history — use "Recover from a mint I know" below with the old mint URL.</div>`}
+                        <div class="stranded-token" id="stranded-token-${i}" style="display: none;"></div>
+                    </div>`;
+            }).join('');
+            list.forEach((s, i) => {
+                const btn = box.querySelector(`[data-stranded="${i}"]`);
+                if (btn) btn.addEventListener('click', () => exportStrandedFunds(s, i));
+            });
+        }
+
+        async function exportStrandedFunds(entry, index) {
+            try {
+                let params = `action=export_stranded_funds&mint_url=${encodeURIComponent(entry.mint_url)}&unit=${encodeURIComponent(entry.unit || 'sat')}`;
+                if (Object.prototype.hasOwnProperty.call(entry, 'account')) {
+                    params += `&account=${encodeURIComponent(entry.account == null ? '' : entry.account)}`;
+                }
+                const response = await postWithCsrf(adminUrl, params);
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.error || 'Export failed');
+
+                const target = index !== null ? document.getElementById(`stranded-token-${index}`) : document.getElementById('stranded-results');
+                const unit = (result.unit || '').toUpperCase();
+                target.style.display = 'block';
+                target.innerHTML = `
+                    <div style="margin-top: 0.5rem; padding: 0.75rem; background: rgba(247,147,26,0.1); border-radius: 8px;">
+                        <div style="font-size: 0.85rem; margin-bottom: 0.5rem;">Claimable token for <strong>${result.amount} ${unit}</strong> — redeem it in any Cashu wallet on <code>${escapeHtml(result.mint_url)}</code>:</div>
+                        <textarea readonly style="width: 100%; min-height: 70px; font-size: 0.7rem; word-break: break-all;">${escapeHtml(result.token)}</textarea>
+                        <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
+                            <button class="btn btn-secondary" id="copy-stranded-${index}" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">Copy</button>
+                            <button class="btn btn-danger" id="recovered-stranded-${index}" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">I've claimed it — mark recovered</button>
+                        </div>
+                        <p class="form-help" style="margin: 0.5rem 0 0;">The proofs stay saved until you mark them recovered, so you can re-export if you lose the token.</p>
+                    </div>`;
+                const copyBtn = document.getElementById(`copy-stranded-${index}`);
+                if (copyBtn) copyBtn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(result.token).then(() => showToast('Token copied', 'success'));
+                });
+                const recBtn = document.getElementById(`recovered-stranded-${index}`);
+                if (recBtn) recBtn.addEventListener('click', () => markStrandedRecovered(result, index));
+            } catch (e) {
+                showToast(e.message || 'Export failed', 'error');
+            }
+        }
+
+        async function markStrandedRecovered(entry, index) {
+            if (!confirm('Mark these funds as recovered? Only do this after you have successfully claimed the token.')) return;
+            try {
+                let params = `action=mark_stranded_recovered&mint_url=${encodeURIComponent(entry.mint_url)}&unit=${encodeURIComponent(entry.unit || 'sat')}`;
+                params += `&account=${encodeURIComponent(entry.account == null ? '' : entry.account)}`;
+                const response = await postWithCsrf(adminUrl, params);
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) throw new Error(result.error || 'Failed');
+                showToast(`Marked ${result.marked} proof(s) recovered`, 'success');
+                scanStrandedFunds();
+            } catch (e) {
+                showToast(e.message || 'Failed', 'error');
+            }
+        }
+
+        async function saveMintChange(confirmStranding) {
+            if (!currentStoreId) return;
+            const mintUrl = document.getElementById('edit-mint-url').value.trim();
+            const mintUnit = (document.getElementById('edit-mint-unit').value.trim() || 'sat').toLowerCase();
+            if (!mintUrl) { showToast('Enter a mint URL', 'error'); return; }
+            try {
+                let params = `action=update_store&store_id=${encodeURIComponent(currentStoreId)}`
+                    + `&mint_url=${encodeURIComponent(mintUrl)}&mint_unit=${encodeURIComponent(mintUnit)}`;
+                if (confirmStranding) params += '&confirm_stranding=1';
+                const response = await postWithCsrf(adminUrl, params);
+                const result = await response.json().catch(() => ({}));
+
+                if (response.status === 409 && result.error === 'mint_change_strands_funds') {
+                    // Big warning + offer to export first; proceed only if confirmed.
+                    if (confirmMintChangeStranding(result)) {
+                        return saveMintChange(true);
+                    }
+                    showToast('Mint change cancelled — export your balance first, then retry.', '');
+                    return;
+                }
+                if (!response.ok) {
+                    showToast(result.error || 'Failed to change mint', 'error');
+                    return;
+                }
+                showToast('Mint updated. Any old balance is recoverable below.', 'success');
+                document.getElementById('mint-change-editor').style.display = 'none';
+                loadStoreSettings();
+                if (typeof loadDashboard === 'function') loadDashboard();
+                scanStrandedFunds();
+            } catch (e) {
+                showToast(e.message || 'Failed to change mint', 'error');
+            }
+        }
+
+        // Big warning shown by the store-save flow when changing a store's mint/unit
+        // would strand its balance (server returns 409 mint_change_strands_funds).
+        // Returns true if the operator chose to proceed anyway.
+        function confirmMintChangeStranding(result) {
+            const unit = (result.currentUnit || 'sat').toUpperCase();
+            const bal = result.balanceUnknown
+                ? 'an unknown amount of ecash (the current mint could not be reached to verify)'
+                : `${result.balance} ${unit} of ecash`;
+            return confirm(
+                '⚠️ WARNING: this store currently holds ' + bal + '.\n\n' +
+                'Changing its mint or unit will make that balance INVISIBLE and UNSPENDABLE through this store — ' +
+                'the funds stay at the old mint (' + (result.currentMint || 'current mint') + ').\n\n' +
+                'Recommended: cancel, export/withdraw the balance first, then change the mint.\n' +
+                'The funds remain recoverable afterwards under "Recover funds from a previous mint", but only if ' +
+                'the old mint stays online and you keep the seed phrase.\n\n' +
+                'Change the mint anyway?'
+            );
         }
 
         // Export Max button - uses pre-loaded dashboard data for instant response

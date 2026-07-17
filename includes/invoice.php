@@ -809,6 +809,160 @@ class Invoice {
         $storage->updateProofsState($secrets, ProofState::PENDING);
     }
 
+    // =========================================================================
+    // STRANDED-FUND RECOVERY (previous mints / units)
+    // =========================================================================
+    //
+    // A store's wallet namespace is hash(mint_url, unit, wallet_account_id).
+    // Changing any of those points the store at a fresh namespace, leaving the
+    // old mint's proofs stranded — present in the DB but invisible to the UI.
+    // These helpers find and export those funds without contacting any mint.
+
+    /**
+     * Export all UNSPENT proofs of a specific wallet namespace as a Cashu token.
+     *
+     * Read-only: it does NOT change local proof state, so a lost token can be
+     * re-exported safely. No mint contact — pure local serialization. Call
+     * markNamespaceRecovered() after the token is confirmed claimed.
+     *
+     * @return array{token: ?string, amount: int, count: int, wallet_id: string}
+     */
+    public static function exportNamespaceAsToken(string $mintUrl, string $unit, ?string $account): array {
+        $wallet = new Wallet(rtrim($mintUrl, '/'), strtolower($unit), Database::getDbPath(), $account);
+        $storage = $wallet->getStorage();
+        $unspent = $storage->getProofsAsObjects(ProofState::UNSPENT);
+        $wid = $storage->getWalletId();
+        if (empty($unspent)) {
+            return ['token' => null, 'amount' => 0, 'count' => 0, 'wallet_id' => $wid];
+        }
+        return [
+            'token' => $wallet->serializeToken($unspent),
+            'amount' => Wallet::sumProofs($unspent),
+            'count' => count($unspent),
+            'wallet_id' => $wid,
+        ];
+    }
+
+    /**
+     * Mark a namespace's UNSPENT proofs SPENT after its token has been claimed.
+     * @return int number of proofs marked
+     */
+    public static function markNamespaceRecovered(string $mintUrl, string $unit, ?string $account): int {
+        $storage = new WalletStorage(Database::getDbPath(), rtrim($mintUrl, '/'), strtolower($unit), $account);
+        $unspent = $storage->getProofsAsObjects(ProofState::UNSPENT);
+        if (empty($unspent)) {
+            return 0;
+        }
+        $storage->updateProofsState(array_map(fn($p) => $p->secret, $unspent), ProofState::SPENT);
+        return count($unspent);
+    }
+
+    /**
+     * Find wallet namespaces that still hold UNSPENT proofs but are not
+     * reachable by any store's current wallet — funds stranded by a past
+     * mint/unit change. Best-effort identifies each namespace's mint by
+     * matching known + historical mint URLs against the wallet_id derivation.
+     *
+     * Pure local/DB — no mint contact. Single-operator: reports all stranded
+     * namespaces regardless of store (see [[no-multitenancy]]).
+     *
+     * @return array<int, array{wallet_id:string, mint_url:?string, unit:?string,
+     *   account:?string, account_mode:string, amount:int, count:int, keysets:array}>
+     */
+    public static function scanStrandedNamespaces(): array {
+        $rows = Database::fetchAll(
+            "SELECT wallet_id, COUNT(*) c, COALESCE(SUM(amount),0) s
+             FROM cashu_proofs WHERE state = ? GROUP BY wallet_id",
+            [ProofState::UNSPENT]
+        );
+        if (empty($rows)) {
+            return [];
+        }
+
+        // Namespaces reachable by a live store wallet (primary + backups), and
+        // the pool of candidate mint URLs + accounts for identifying the rest.
+        $live = [];
+        $candidateMints = [];
+        $accounts = [];
+        foreach (Database::fetchAll("SELECT id, wallet_account_id FROM stores") as $st) {
+            $acct = $st['wallet_account_id'] ?: null;
+            if ($acct !== null) {
+                $accounts[$acct] = true;
+            }
+            foreach (Config::getStoreWalletAccounts($st['id']) as $acc) {
+                $candidateMints[rtrim($acc['mint_url'], '/')] = true;
+                $live[WalletStorage::deriveWalletId($acc['mint_url'], $acc['unit'], $acct)] = true;
+            }
+        }
+        // Historical mint URLs (invoices retain mint_url until cleanup).
+        foreach (Database::fetchAll("SELECT DISTINCT mint_url FROM invoices WHERE mint_url IS NOT NULL AND mint_url <> ''") as $r) {
+            $candidateMints[rtrim($r['mint_url'], '/')] = true;
+        }
+
+        $units = ['sat', 'usd', 'eur', 'usdt', 'msat'];
+        $accountsToTry = array_merge([null], array_keys($accounts));
+        $out = [];
+        foreach ($rows as $r) {
+            $wid = $r['wallet_id'];
+            if (isset($live[$wid])) {
+                continue; // reachable by a current store wallet — not stranded
+            }
+            $found = null;
+            foreach (array_keys($candidateMints) as $mu) {
+                foreach ($units as $unit) {
+                    foreach ($accountsToTry as $a) {
+                        if (WalletStorage::deriveWalletId($mu, $unit, $a) === $wid) {
+                            $found = ['mint_url' => $mu, 'unit' => $unit, 'account' => $a];
+                            break 3;
+                        }
+                    }
+                }
+            }
+            $keysets = array_column(
+                Database::fetchAll("SELECT DISTINCT keyset_id FROM cashu_proofs WHERE wallet_id = ?", [$wid]),
+                'keyset_id'
+            );
+            $out[] = [
+                'wallet_id' => $wid,
+                'mint_url' => $found['mint_url'] ?? null,
+                'unit' => $found['unit'] ?? null,
+                'account' => $found['account'] ?? null,
+                'account_mode' => $found === null ? 'unknown' : ($found['account'] === null ? 'legacy' : 'account'),
+                'amount' => (int)$r['s'],
+                'count' => (int)$r['c'],
+                'keysets' => $keysets,
+            ];
+        }
+        return $out;
+    }
+
+    /**
+     * Resolve the (account) that, together with $mintUrl/$unit, yields a
+     * namespace holding unspent proofs — used when the operator supplies a mint
+     * URL manually for an unidentified stranded namespace.
+     *
+     * @return array{found: bool, account: ?string, wallet_id: ?string, amount: int}
+     */
+    public static function resolveNamespaceForMint(string $mintUrl, string $unit): array {
+        $mintUrl = rtrim($mintUrl, '/');
+        $unit = strtolower($unit);
+        $accounts = [null];
+        foreach (Database::fetchAll("SELECT DISTINCT wallet_account_id FROM stores WHERE wallet_account_id IS NOT NULL") as $r) {
+            $accounts[] = $r['wallet_account_id'];
+        }
+        foreach ($accounts as $a) {
+            $wid = WalletStorage::deriveWalletId($mintUrl, $unit, $a);
+            $row = Database::fetchOne(
+                "SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM cashu_proofs WHERE wallet_id = ? AND state = ?",
+                [$wid, ProofState::UNSPENT]
+            );
+            if ($row && (int)$row['c'] > 0) {
+                return ['found' => true, 'account' => $a, 'wallet_id' => $wid, 'amount' => (int)$row['s']];
+            }
+        }
+        return ['found' => false, 'account' => null, 'wallet_id' => null, 'amount' => 0];
+    }
+
     /**
      * Store proofs as unspent for a store
      */

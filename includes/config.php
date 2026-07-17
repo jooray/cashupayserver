@@ -267,7 +267,7 @@ class Config {
     /**
      * Update store settings
      */
-    public static function updateStore(string $storeId, array $data): void {
+    public static function updateStore(string $storeId, array $data, bool $allowMintChange = false): void {
         $store = self::getStore($storeId);
         if (!$store) {
             throw new Exception('Store not found');
@@ -283,7 +283,14 @@ class Config {
                 $new = rtrim($new, '/');
             }
             if ($old !== '' && $old !== $new && self::walletAccountIsInitialized($store)) {
-                throw new Exception('Wallet seed, mint, and unit are immutable after wallet initialization. Create a new store wallet instead.');
+                // The seed is never changeable in place — a different seed can't
+                // derive the existing proofs' secrets and breaks recovery.
+                // The mint/unit MAY be changed with explicit operator consent
+                // ($allowMintChange): the old mint's funds are only stranded, not
+                // lost, and stay recoverable via Invoice::scanStrandedNamespaces().
+                if ($field === 'seed_phrase' || !$allowMintChange) {
+                    throw new Exception('Wallet seed, mint, and unit are immutable after wallet initialization. Create a new store wallet instead.');
+                }
             }
         }
         $allowed = [
@@ -295,6 +302,13 @@ class Config {
         if (!empty($updateData)) {
             Database::update('stores', $updateData, 'id = ?', [$storeId]);
         }
+    }
+
+    /** Whether a store's wallet has been initialized (holds a seed fingerprint
+     *  or proofs) — i.e. changing its mint/unit would strand funds. */
+    public static function isStoreWalletInitialized(string $storeId): bool {
+        $store = self::getStore($storeId);
+        return $store ? self::walletAccountIsInitialized($store) : false;
     }
 
     private static function walletAccountIsInitialized(array $store): bool {

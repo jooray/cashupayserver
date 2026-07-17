@@ -262,4 +262,58 @@ check(
 $rotationAgain = $freshWallet->rotateProofs();
 check($rotationAgain['rotated'] === 0 && $rotationAgain['checked'] === 0, 'second rotation run is a no-op');
 
+// --- Stranded-fund recovery after a mint change ------------------------------
+// Changing a store's mint_url points it at a fresh wallet namespace, stranding
+// the balance held at the old mint. Recovery must find and export it.
+echo "stranded-fund recovery:\n";
+$storeAccount = Database::fetchOne('SELECT wallet_account_id FROM stores WHERE id = ?', [$storeId])['wallet_account_id'];
+$oldMint = rtrim($mintUrl, '/');
+$balBefore = Invoice::getBalance($storeId);
+check($balBefore > 0, "store has a balance before the mint change ($balBefore sat)");
+
+// Feature 1: a mint change on an initialized store is blocked without consent.
+$blocked = false;
+try {
+    Config::updateStore($storeId, ['mint_url' => 'https://some-other-mint.example']);
+} catch (Throwable $e) {
+    $blocked = true;
+}
+check($blocked, 'mint change is refused without explicit consent (immutable guard)');
+
+// With explicit consent it is allowed (this is what strands the funds).
+Config::updateStore($storeId, ['mint_url' => 'https://some-other-mint.example'], true);
+check(Invoice::getBalance($storeId) === 0, 'balance reads 0 after the confirmed mint change (funds stranded)');
+
+$stranded = Invoice::scanStrandedNamespaces();
+$match = null;
+foreach ($stranded as $s) {
+    if ($s['mint_url'] === $oldMint && $s['account'] === $storeAccount) { $match = $s; }
+}
+check($match !== null, 'scan identifies the stranded namespace at the old mint');
+check($match && $match['amount'] === $balBefore, "stranded amount matches the pre-change balance ($balBefore)");
+
+$exp = Invoice::exportNamespaceAsToken($oldMint, 'sat', $storeAccount);
+check($exp['token'] !== null && $exp['amount'] === $balBefore, 'stranded funds export as a token');
+check($exp['token'] !== null && str_starts_with($exp['token'], 'cashu'), 'exported stranded token is a cashu token');
+
+$resolved = Invoice::resolveNamespaceForMint($oldMint, 'sat');
+check($resolved['found'] && $resolved['amount'] === $balBefore && $resolved['account'] === $storeAccount,
+    'manual mint resolution finds the stranded namespace and its account');
+
+// Export is read-only: the funds are still there until explicitly marked recovered.
+$exp2 = Invoice::exportNamespaceAsToken($oldMint, 'sat', $storeAccount);
+check($exp2['amount'] === $balBefore, 're-export before marking recovered still yields the funds (read-only)');
+
+$marked = Invoice::markNamespaceRecovered($oldMint, 'sat', $storeAccount);
+check($marked === $exp['count'], "mark recovered marks all {$exp['count']} exported proofs");
+$strandedAfter = Invoice::scanStrandedNamespaces();
+$stillThere = false;
+foreach ($strandedAfter as $s) {
+    if ($s['mint_url'] === $oldMint && $s['account'] === $storeAccount) { $stillThere = true; }
+}
+check(!$stillThere, 'namespace is no longer stranded after recovery');
+
+// Restore the store's real mint so nothing downstream is surprised.
+Config::updateStore($storeId, ['mint_url' => $oldMint]);
+
 echo "integration_keyset_v2: OK\n";
