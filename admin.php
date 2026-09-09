@@ -101,6 +101,13 @@ function cashupay_diagnostics(?string $storeId): array {
     $background = BackgroundRunner::status();
     $stale = $background['secondsAgo'] === null || $background['secondsAgo'] > 900;
 
+    // Opportunistic background processing needs a trusted origin to call. Without a
+    // configured base_url the trigger refuses to send the internal cron key to a host
+    // derived from the request, so page traffic no longer starts background work at
+    // all. An install upgraded from a version that had no such check would otherwise
+    // just go quiet, with the generic "tasks haven't run" message as the only clue.
+    $needsBaseUrl = !Urls::isWordPress() && !Config::get('base_url');
+
     $pendingTransfers = array_values(array_filter(
         Transfer::getPending(20),
         fn($row) => $storeId === null || $row['store_id'] === $storeId
@@ -138,12 +145,14 @@ function cashupay_diagnostics(?string $storeId): array {
     }
 
     return [
-        'background' => $background + ['stale' => $stale],
+        'background' => $background + ['stale' => $stale, 'needsBaseUrl' => $needsBaseUrl],
+        'suggestedBaseUrl' => $needsBaseUrl ? rtrim(Config::getBaseUrl(), '/') : null,
         'pendingTransfers' => array_map([Transfer::class, 'formatForApi'], $pendingTransfers),
         'stuckInvoices' => $stuckInvoices,
         'failedWebhookDeliveries' => $failedDeliveries,
         'pendingWalletOperations' => $pendingJournals,
         'needsAttention' => $stale
+            || $needsBaseUrl
             || $failedDeliveries > 0
             || !empty($stuckInvoices)
             || !empty($pendingTransfers),
@@ -272,9 +281,13 @@ if (isset($_GET['api'])) {
 
             // If no store selected, return stores list only
             if (!$storeId) {
+                // Server-wide warnings (a missing canonical URL, a stopped background
+                // runner) are not about any one store, so they must reach this branch too.
                 echo json_encode([
                     'stores' => $stores,
                     'noStoreSelected' => true,
+                    'version' => CASHUPAY_VERSION,
+                    'diagnostics' => cashupay_diagnostics(null),
                 ]);
                 break;
             }
@@ -664,6 +677,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (Throwable $e) {
                 http_response_code(500);
                 echo json_encode(['error' => 'Backup failed: ' . $e->getMessage()]);
+            }
+            break;
+
+        case 'save_base_url':
+            // Pins the origin used for generated links and for the credential-bearing
+            // background self-request. Only the operator can set it, and only to a plain
+            // HTTP(S) origin — never to something derived from the request itself.
+            try {
+                $baseUrl = trim((string)($_POST['base_url'] ?? ''));
+                if ($baseUrl === '' || !Security::isSafeAppBaseUrl($baseUrl)) {
+                    http_response_code(400);
+                    echo json_encode(['error' => 'Enter a full http(s) URL for this server']);
+                    break;
+                }
+                Config::set('base_url', rtrim($baseUrl, '/'));
+                Config::clearCache();
+                echo json_encode(['success' => true, 'baseUrl' => rtrim($baseUrl, '/')]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
             }
             break;
 
@@ -4334,7 +4367,25 @@ $isWp = Urls::isWordPress();
             }
 
             const items = [];
+            const actions = [];
             const bg = diag.background || {};
+
+            // Name the actual cause before the generic "tasks are stale" line, so an
+            // upgraded install does not just look broken.
+            if (bg.needsBaseUrl) {
+                items.push('This server has no canonical URL configured, so background tasks '
+                    + 'no longer start from page traffic — sending the internal key to a host '
+                    + 'taken from the request would let a forged Host header steal it. '
+                    + 'Settlement, auto-withdrawal and webhook delivery need either a real cron '
+                    + 'job or this setting.');
+                if (diag.suggestedBaseUrl) {
+                    actions.push({
+                        label: `Use ${diag.suggestedBaseUrl}`,
+                        run: () => saveBaseUrl(diag.suggestedBaseUrl),
+                    });
+                }
+            }
+
             if (bg.stale) {
                 items.push(bg.secondsAgo === null
                     ? 'Background tasks have never run. Settlement, auto-withdrawal and webhook delivery depend on them — add the cron job shown during setup.'
@@ -4364,7 +4415,33 @@ $isWp = Urls::isWordPress();
                 list.appendChild(li);
             });
             body.appendChild(list);
+
+            actions.forEach(action => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-secondary btn-sm';
+                button.style.marginTop = '0.75rem';
+                button.textContent = action.label;
+                button.addEventListener('click', action.run);
+                body.appendChild(button);
+            });
+
             card.style.display = '';
+        }
+
+        /** Pin the canonical origin so credential-bearing self-requests have a target. */
+        async function saveBaseUrl(url) {
+            const response = await postWithCsrf(
+                adminUrl,
+                `action=save_base_url&base_url=${encodeURIComponent(url)}`
+            );
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                showToast(result.error || 'Could not save the server URL', 'error');
+                return;
+            }
+            showToast('Server URL saved. Background tasks will resume.', 'success');
+            loadDashboard();
         }
 
         function renderTransfers(containerId, transfers) {
