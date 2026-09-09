@@ -20,6 +20,8 @@ require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/urls.php';
+require_once __DIR__ . '/includes/security.php';
+require_once __DIR__ . '/includes/setup_ownership.php';
 
 // Initialize session early - needed for storing temp data during setup
 Auth::initSession();
@@ -29,23 +31,31 @@ $isWordPressSetup = Urls::isWordPress();
 // Get mode parameter
 $mode = $_GET['mode'] ?? $_POST['mode'] ?? '';
 
-// If already set up, redirect to admin (unless in add_store mode or finishing step 7)
-$isStep7Post = ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['step'] ?? '') === '7');
-if (Database::isInitialized() && Config::isSetupComplete() && !$isStep7Post) {
-    if ($mode !== 'add_store') {
-        header('Location: ' . Urls::admin());
-        exit;
-    }
-    // Require login for add_store mode
-    if (!Auth::isLoggedIn()) {
-        header('Location: ' . Urls::admin());
-        exit;
-    }
+// A completed installation is administration, not setup: it needs a real session.
+// The step the request claims must not change that — `step=7` used to skip this gate
+// entirely, which let an anonymous POST render the page that prints the cron key.
+$setupComplete = Database::isInitialized() && Config::isSetupComplete();
+if ($setupComplete && !Auth::isLoggedIn()) {
+    header('Location: ' . Urls::admin());
+    exit;
+}
+if ($setupComplete && $mode !== 'add_store' && ($_POST['step'] ?? '') !== '7') {
+    header('Location: ' . Urls::admin());
+    exit;
 }
 
 // Initialize database if needed
 if (!Database::isInitialized()) {
     Database::initialize();
+}
+
+// Ownership of a fresh standalone installation must be proved out of band. Until setup
+// completes, `setup.php` is reachable by anyone who can reach the server, and CSRF only
+// proves the visitor owns the browser session they were just handed.
+$setupTokenRequired = !$setupComplete && !$isWordPressSetup && !Setup::ownershipVerified();
+if ($setupTokenRequired && $_SERVER['REQUEST_METHOD'] === 'POST'
+    && Setup::verifyOwnershipToken((string)($_POST['setup_token'] ?? ''))) {
+    $setupTokenRequired = false;
 }
 
 // Handle form submissions
@@ -63,6 +73,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!Auth::validateCsrfToken((string)($_POST['csrf_token'] ?? ''))) {
         http_response_code(403);
         $error = 'Your setup session expired. Reload this page and try again.';
+    }
+
+    if ($error === null && $setupTokenRequired) {
+        http_response_code(403);
+        $error = 'Enter the installation token to continue.';
     }
 
     if ($error !== null) {
@@ -105,6 +120,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $detectedUrlMode = $_POST['detected_url_mode'] ?? '';
                 if (in_array($detectedUrlMode, ['direct', 'router'], true)) {
                     Config::set('url_mode', $detectedUrlMode);
+                }
+                // Pin the canonical origin now, while a verified operator is here. Without
+                // it the base URL is derived from HTTP_HOST, and background self-requests
+                // that carry the internal key have no trusted destination.
+                if (!Config::get('base_url')) {
+                    $detectedBaseUrl = trim((string)($_POST['detected_base_url'] ?? ''));
+                    if ($detectedBaseUrl !== '' && Security::isSafeAppBaseUrl($detectedBaseUrl)) {
+                        Config::set('base_url', rtrim($detectedBaseUrl, '/'));
+                    }
                 }
                 // Go to password step (standalone) or create store step (WordPress)
                 $step = Urls::isWordPress() ? 4 : 2;
@@ -294,6 +318,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
 
                     Config::set('setup_complete', true);
+                    Setup::clearOwnershipToken();
                     // Generate a cron key so background processing can be scheduled and the
                     // cron endpoint isn't left open. See FABLE-CASHUPAYSERVER-AUDIT (C-CRON-1).
                     if (!Config::get('cron_key')) {
@@ -926,9 +951,34 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     </div>
                     <?php endif; ?>
 
+                    <?php if ($setupTokenRequired): ?>
+                    <h3 style="margin: 1.5rem 0 0.75rem;">Prove you own this installation</h3>
+                    <p style="margin-bottom: 1rem; color: #a0aec0; font-size: 0.9rem;">
+                        Until setup finishes, this page is reachable by anyone who can reach your
+                        server &mdash; and whoever completes it chooses the admin password, the mint
+                        and the wallet seed. Open this file over SFTP or your hosting file manager
+                        and paste its contents below:
+                    </p>
+                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem; margin-bottom: 1rem;"><?= htmlspecialchars(Setup::tokenPath()) ?></code>
+                    <p style="color: #718096; font-size: 0.8rem; margin-bottom: 1rem;">
+                        Alternatively, define <code>CASHUPAY_SETUP_TOKEN</code> in
+                        <code>includes/config.local.php</code>. The token stops working once setup completes.
+                    </p>
+                    <?php endif; ?>
+
                     <form method="post">
                         <input type="hidden" name="step" value="1">
                         <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                        <input type="hidden" name="detected_base_url" id="detected_base_url" value="">
+
+                        <?php if ($setupTokenRequired): ?>
+                        <div class="form-group" style="margin: 1.5rem 0;">
+                            <label for="setup_token">Installation token</label>
+                            <input type="text" id="setup_token" name="setup_token" required
+                                   autocomplete="off" spellcheck="false"
+                                   placeholder="paste the contents of setup-token.txt">
+                        </div>
+                        <?php endif; ?>
 
                         <div class="checkbox-group" style="margin: 1.5rem 0;">
                             <input type="checkbox" id="security_acknowledged" name="security_acknowledged" required>
@@ -936,6 +986,18 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                 I have verified that the database is not accessible from the web
                             </label>
                         </div>
+
+                        <script>
+                            // Record the origin the operator actually reached us on, so
+                            // background self-requests have a trusted destination instead of
+                            // one derived from an attacker-supplied Host header.
+                            (function () {
+                                var field = document.getElementById('detected_base_url');
+                                if (!field) return;
+                                var path = window.location.pathname.replace(/\/[^\/]*$/, '');
+                                field.value = window.location.origin + path;
+                            })();
+                        </script>
 
                         <button type="submit" class="btn" style="width: 100%;">Continue</button>
                     </form>

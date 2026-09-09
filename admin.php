@@ -942,7 +942,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'manual_melt':
             // Serialize withdrawals per store so a double-submit can't pay twice (A4).
             $meltStoreId = $_POST['store_id'] ?? '';
-            $meltLock = $meltStoreId ? cashupay_acquire_lock('melt_' . $meltStoreId) : null;
+            $meltLock = $meltStoreId ? cashupay_acquire_lock('funds_' . $meltStoreId) : null;
             if ($meltStoreId && !$meltLock) {
                 http_response_code(409);
                 echo json_encode(['error' => 'A withdrawal is already in progress for this store. Please wait and check your balance before retrying.']);
@@ -1074,20 +1074,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                // Record the completed withdrawal in the outgoing-transfer ledger
-                // (the donation, if any, is recorded inside Donation::sendToDonationSink).
-                if (!empty($result['success'])) {
-                    Transfer::record(
-                        $storeId,
-                        $isBolt11 ? Transfer::TYPE_LIGHTNING : Transfer::TYPE_LIGHTNING_ADDRESS,
-                        (int)($result['amountPaid'] ?? $amount),
-                        (int)($result['fee'] ?? 0),
-                        $mintUnit,
-                        $destination,
-                        'completed',
-                        $result['preimage'] ?? null
-                    );
-                }
+                // The withdrawal's ledger row is opened before the melt and settled by
+                // LightningAddress::executeMelt(); the donation records its own.
 
                 // Include donation info in response
                 $result['donated'] = $donationAmount;
@@ -1097,7 +1085,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 echo json_encode($result);
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 // If melt failed due to "already spent", sync proof states.
                 // Prefer the standardized numeric code; message match is the
                 // fallback for mints that predate error_codes.md.
@@ -1214,6 +1202,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // 6. Serialize and return token
             // A swap during export contacts the mint and can be slow; keep the request alive.
             @set_time_limit(0);
+            $exportLock = null;
+            $exportTransferId = null;
             try {
                 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
 
@@ -1232,7 +1222,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Amount required');
                 }
 
-                // Resolve any pending proofs first (handles donation proofs marked pending)
+                // Exports move funds, so they take the same per-store lock as withdrawals.
+                // Two tabs otherwise both run the offline selector and hand out overlapping
+                // proofs before either marks them.
+                $exportLock = cashupay_acquire_lock('funds_' . $storeId);
+                if (!$exportLock) {
+                    throw new Exception('Another outgoing operation is in progress for this store. Try again in a moment.');
+                }
+
+                // Reconcile proofs handed out earlier (marks redeemed ones SPENT).
                 Invoice::checkPendingProofs($storeId);
 
                 // 1. Get proofs from local storage (offline-first)
@@ -1291,6 +1289,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $balance = \Cashu\Wallet::sumProofs($proofs);
                         }
 
+                        // Swap only what this export needs. Passing the whole balance
+                        // charged input fees on every proof, reserved all of them for the
+                        // duration (failing a concurrent auto-melt), and left the entire
+                        // balance in a pending swap if the response was lost.
+                        $target = $amount + $donationAmount;
+                        try {
+                            $proofs = $wallet->selectProofsWithFees($proofs, $target);
+                        } catch (\Cashu\InsufficientBalanceException $ie) {
+                            // Keep the full set; the balance checks below report properly.
+                        }
+                        $balance = \Cashu\Wallet::sumProofs($proofs);
                         $fee = $wallet->calculateFee($proofs);
 
                         // Try optimized single swap (export + donation + keep)
@@ -1327,13 +1336,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 // Rest goes to keep (already in storage from swap)
                             }
 
-                            // Send donation
+                            // Send donation. The proofs are reserved and the token stored
+                            // before the POST, so a lost response leaves something to
+                            // retry instead of a token nobody has any more.
                             if (!empty($donationProofs)) {
                                 $donationToken = $wallet->serializeToken($donationProofs);
-                                Donation::postTokenToSink($donationToken);
-                                $donationSuccess = true;
                                 $donationSecrets = array_map(fn($p) => $p->secret, $donationProofs);
-                                Invoice::markProofsSpent($storeId, $donationSecrets);
+                                $donationTransferId = Transfer::open(
+                                    $storeId,
+                                    Transfer::TYPE_DONATION,
+                                    \Cashu\Wallet::sumProofs($donationProofs),
+                                    $wallet->getUnit(),
+                                    Donation::sinkDescription(),
+                                    implode(',', $donationSecrets),
+                                    'Donation with token export',
+                                    $donationToken
+                                );
+                                Invoice::markProofsExported($storeId, $donationSecrets);
+                                if (Donation::postTokenToSink($donationToken)) {
+                                    Transfer::complete($donationTransferId, \Cashu\Wallet::sumProofs($donationProofs));
+                                    Invoice::markProofsSpent($storeId, $donationSecrets);
+                                    $donationSuccess = true;
+                                }
                             }
 
                             $mintUsed = true;
@@ -1398,37 +1422,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $sendProofs = $selected;
                     $amount = $selectedSum; // Update to actual amount
 
-                    // Still try donation even when offline (sink may be reachable)
+                    // Still try donation even when offline (sink may be reachable).
+                    // Without a swap we can only send whole proofs, so the selection has
+                    // to match the authorized amount exactly: the old `>=` test happily
+                    // sent a 32-sat proof for a 1-sat donation.
                     if ($donationAmount > 0) {
-                        $remainingProofs = array_filter($proofs, fn($p) => !in_array($p, $selected, true));
-                        $remainingBalance = \Cashu\Wallet::sumProofs($remainingProofs);
+                        $remainingProofs = array_values(array_filter(
+                            $proofs,
+                            fn($p) => !in_array($p, $selected, true)
+                        ));
+                        $donationSelected = Donation::selectExact($remainingProofs, $donationAmount);
 
-                        if ($remainingBalance >= $donationAmount) {
+                        if ($donationSelected === null) {
+                            $donationAmount = 0; // No exact change offline; skip rather than overpay.
+                        } else {
+                            $donationTransferId = null;
                             try {
-                                $donationSelected = \Cashu\Wallet::selectProofs($remainingProofs, $donationAmount);
-                                $donationSum = \Cashu\Wallet::sumProofs($donationSelected);
+                                $store = Config::getStore($storeId);
+                                $mintUrl = $store['mint_url'];
+                                $mintUnit = $store['mint_unit'] ?? 'sat';
 
-                                if ($donationSum >= $donationAmount) {
-                                    // Serialize and send donation (offline - no swap, send raw proofs)
-                                    $store = Config::getStore($storeId);
-                                    $mintUrl = $store['mint_url'];
-                                    $mintUnit = $store['mint_unit'] ?? 'sat';
+                                $donationToken = \Cashu\TokenSerializer::serializeV4($mintUrl, $donationSelected, $mintUnit);
+                                $donationSecrets = array_map(fn($p) => $p->secret, $donationSelected);
 
-                                    $donationToken = \Cashu\TokenSerializer::serializeV4($mintUrl, $donationSelected, $mintUnit);
-                                    Donation::postTokenToSink($donationToken);
-                                    $donationSuccess = true;
+                                // Record and reserve before disclosure: the proofs must not
+                                // stay spendable once the sink may have them, and a lost
+                                // response must leave a token we can retry or reclaim.
+                                $donationTransferId = Transfer::open(
+                                    $storeId,
+                                    Transfer::TYPE_DONATION,
+                                    $donationAmount,
+                                    $mintUnit,
+                                    Donation::sinkDescription(),
+                                    implode(',', $donationSecrets),
+                                    'Donation with token export',
+                                    $donationToken
+                                );
+                                Invoice::markProofsExported($storeId, $donationSecrets);
 
-                                    // Mark donation proofs as SPENT
-                                    $donationSecrets = array_map(fn($p) => $p->secret, $donationSelected);
+                                if (Donation::postTokenToSink($donationToken)) {
+                                    Transfer::complete($donationTransferId, $donationAmount);
                                     Invoice::markProofsSpent($storeId, $donationSecrets);
+                                    $donationSuccess = true;
                                 }
+                                // A failed post leaves the transfer pending with its token;
+                                // cron retries it rather than losing the only copy.
                             } catch (Exception $de) {
-                                // Donation failed, continue without it
                                 error_log("CashuPayServer: Offline donation failed: " . $de->getMessage());
+                                Transfer::fail($donationTransferId, $de->getMessage());
                                 $donationAmount = 0;
                             }
-                        } else {
-                            $donationAmount = 0; // Not enough remaining for donation
                         }
                     }
                 }
@@ -1460,14 +1503,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         : \Cashu\TokenSerializer::serializeV3($mintUrl, $sendProofs, $mintUnit);
                 }
 
-                // Mark sent proofs as PENDING for claim tracking
+                // Persist the export before disclosing the token, and park its proofs in
+                // EXPORTED so nothing — not a later export, not cron, not a withdrawal —
+                // hands the same bearer proofs to someone else.
                 $sentSecrets = array_map(fn($p) => $p->secret, $sendProofs);
-                Invoice::markProofsPending($storeId, $sentSecrets);
+                $exportedAmount = \Cashu\Wallet::sumProofs($sendProofs);
+                $exportTransferId = Transfer::open(
+                    $storeId,
+                    Transfer::TYPE_TOKEN_EXPORT,
+                    $exportedAmount,
+                    $mintUnit,
+                    null,
+                    implode(',', $sentSecrets),
+                    'Cashu token',
+                    $token
+                );
+                Invoice::markProofsExported($storeId, $sentSecrets);
 
                 $response = [
                     'token' => $token,
-                    'amount' => \Cashu\Wallet::sumProofs($sendProofs),
+                    'amount' => $exportedAmount,
                     'secrets' => $sentSecrets,
+                    'transferId' => $exportTransferId,
                 ];
 
                 if (!$mintUsed) {
@@ -1484,26 +1541,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                // Record the export in the outgoing-transfer ledger.
-                Transfer::record(
-                    $storeId,
-                    Transfer::TYPE_TOKEN_EXPORT,
-                    (int)$response['amount'],
-                    0,
-                    $mintUnit,
-                    null,
-                    'completed',
-                    'Cashu token'
-                );
-
                 echo json_encode($response);
 
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 if (Database::getInstance()->inTransaction()) {
                     Database::rollback();
                 }
+                Transfer::fail($exportTransferId, $e->getMessage());
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
+            } finally {
+                cashupay_release_lock($exportLock);
             }
             break;
 

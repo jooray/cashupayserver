@@ -18,22 +18,33 @@ class Security {
      */
     public static function checkRateLimit(string $action, string $identifier, int $maxAttempts = 60): bool {
         $key = "rate_{$action}_{$identifier}";
-        $data = self::getCache($key);
 
-        if ($data === null) {
-            self::setCache($key, ['count' => 1, 'window_start' => time()], self::RATE_LIMIT_WINDOW);
-            return true;
+        // Read, increment and write under one write transaction: separate read/write
+        // steps lose counts under concurrency, which is exactly when a limit matters.
+        $pdo = Database::getInstance();
+        $ownTransaction = !$pdo->inTransaction();
+        if ($ownTransaction) {
+            $pdo->exec('BEGIN IMMEDIATE');
         }
-
-        // Check if window has expired
-        if (time() - $data['window_start'] > self::RATE_LIMIT_WINDOW) {
-            self::setCache($key, ['count' => 1, 'window_start' => time()], self::RATE_LIMIT_WINDOW);
-            return true;
+        try {
+            $data = self::getCache($key);
+            if ($data === null || time() - ($data['window_start'] ?? 0) > self::RATE_LIMIT_WINDOW) {
+                $data = ['count' => 1, 'window_start' => time()];
+            } else {
+                $data['count']++;
+            }
+            self::setCache($key, $data, self::RATE_LIMIT_WINDOW);
+            if ($ownTransaction) {
+                $pdo->exec('COMMIT');
+            }
+        } catch (Throwable $e) {
+            if ($ownTransaction) {
+                try { $pdo->exec('ROLLBACK'); } catch (Throwable $ignored) {}
+            }
+            // A limiter that cannot record state must not silently allow everything.
+            error_log('CashuPayServer: rate limit storage failed: ' . $e->getMessage());
+            return false;
         }
-
-        // Increment count
-        $data['count']++;
-        self::setCache($key, $data, self::RATE_LIMIT_WINDOW);
 
         // M4: Log rate limit exceeded
         if ($data['count'] > $maxAttempts) {
@@ -196,6 +207,90 @@ class Security {
     }
 
     /**
+     * Resolved addresses for a host, or an empty array when resolution fails.
+     *
+     * @return string[]
+     */
+    public static function resolveHost(string $host): array {
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return [$host];
+        }
+        $ips = @gethostbynamel($host) ?: [];
+        $aaaa = @dns_get_record($host, DNS_AAAA);
+        if ($aaaa) {
+            foreach ($aaaa as $rec) {
+                if (!empty($rec['ipv6'])) {
+                    $ips[] = $rec['ipv6'];
+                }
+            }
+        }
+        return $ips;
+    }
+
+    /**
+     * Pin an already-validated URL to a specific address for the actual request.
+     *
+     * `isSafePublicHttpUrl()` resolves DNS, then cURL resolves again; between the two,
+     * a hostile resolver can answer with an internal address. CURLOPT_RESOLVE makes the
+     * connection use the address we checked.
+     *
+     * @return string[] CURLOPT_RESOLVE entries (may be empty when pinning is impossible)
+     */
+    public static function resolveOptionFor(string $url): array {
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['host'])) {
+            return [];
+        }
+        $host = $parts['host'];
+        if (filter_var($host, FILTER_VALIDATE_IP)) {
+            return [];
+        }
+        $ips = self::resolveHost($host);
+        if (empty($ips)) {
+            return [];
+        }
+        $port = $parts['port'] ?? (strtolower($parts['scheme'] ?? 'https') === 'http' ? 80 : 443);
+
+        return [$host . ':' . $port . ':' . implode(',', $ips)];
+    }
+
+    /**
+     * Whether a URL is acceptable as this application's own base URL.
+     *
+     * Unlike outbound targets, our own origin may legitimately be localhost or a LAN
+     * address; what matters is that it is a plain HTTP(S) URL with no credentials.
+     */
+    public static function isSafeAppBaseUrl(string $url): bool {
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['host']) || empty($parts['scheme'])) {
+            return false;
+        }
+        if (isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
+            return false;
+        }
+        return in_array(strtolower($parts['scheme']), ['http', 'https'], true);
+    }
+
+    /**
+     * Whether a stored URL is safe to hand to a browser as a navigation target.
+     *
+     * Only http(s) and site-relative paths. Notably not `javascript:` (in any casing, or
+     * with control characters mixed in to defeat a naive prefix test) and not `data:`.
+     * HTML-escaping does not help here: the value becomes an anchor href and a
+     * `window.location` assignment, both of which honour the scheme.
+     */
+    public static function isSafeBrowserRedirect(string $url): bool {
+        $candidate = strtolower(preg_replace('/[\x00-\x20]/', '', $url) ?? '');
+        if ($candidate === '') {
+            return false;
+        }
+        if (str_starts_with($candidate, '/') && !str_starts_with($candidate, '//')) {
+            return true; // site-relative
+        }
+        return str_starts_with($candidate, 'http://') || str_starts_with($candidate, 'https://');
+    }
+
+    /**
      * Constant-time string comparison
      */
     public static function secureCompare(string $a, string $b): bool {
@@ -303,67 +398,67 @@ class Security {
              . "object-src 'none'; base-uri 'self'; frame-ancestors 'self'";
     }
 
-    // Simple file-based cache for rate limiting
-    private static function getCacheDir(): string {
-        $dir = __DIR__ . '/../data/cache';
-        if (!is_dir($dir)) {
-            mkdir($dir, 0750, true);
+    /**
+     * Rate-limit and lockout state, kept in SQLite next to the rest of the data.
+     *
+     * It used to live in files under the *code* tree (`includes/../data/cache`), which
+     * ignores CASHUPAY_DATA_DIR and is read-only on some deployments — a silently
+     * disabled limiter. Reads and writes were also separate operations, so concurrent
+     * requests lost counts.
+     */
+    private static function ensureCacheTable(): void {
+        static $ready = false;
+        if ($ready) {
+            return;
         }
-        return $dir;
-    }
-
-    private static function getCacheFile(string $key): string {
-        return self::getCacheDir() . '/' . md5($key) . '.cache';
+        Database::getInstance()->exec(
+            "CREATE TABLE IF NOT EXISTS rate_limits (
+                key TEXT PRIMARY KEY,
+                data TEXT NOT NULL,
+                expires INTEGER NOT NULL
+            )"
+        );
+        $ready = true;
     }
 
     private static function getCache(string $key): ?array {
-        $file = self::getCacheFile($key);
-
-        if (!file_exists($file)) {
+        self::ensureCacheTable();
+        $row = Database::fetchOne(
+            'SELECT data, expires FROM rate_limits WHERE key = ?',
+            [$key]
+        );
+        if (!$row || (int)$row['expires'] < time()) {
             return null;
         }
-
-        $data = file_get_contents($file);
-        $decoded = json_decode($data, true);
-
-        if ($decoded === null || !isset($decoded['expires']) || $decoded['expires'] < time()) {
-            @unlink($file);
-            return null;
-        }
-
-        return $decoded['data'];
+        $decoded = json_decode((string)$row['data'], true);
+        return is_array($decoded) ? $decoded : null;
     }
 
     private static function setCache(string $key, array $data, int $ttl): void {
-        $file = self::getCacheFile($key);
-        $content = json_encode([
-            'data' => $data,
-            'expires' => time() + $ttl,
-        ]);
-        file_put_contents($file, $content, LOCK_EX);
+        self::ensureCacheTable();
+        Database::query(
+            "INSERT INTO rate_limits (key, data, expires) VALUES (?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET data = excluded.data, expires = excluded.expires",
+            [$key, json_encode($data), time() + $ttl]
+        );
     }
 
     private static function deleteCache(string $key): void {
-        $file = self::getCacheFile($key);
-        if (file_exists($file)) {
-            @unlink($file);
-        }
+        self::ensureCacheTable();
+        Database::query('DELETE FROM rate_limits WHERE key = ?', [$key]);
     }
 
     /**
      * Clean expired cache files
      */
     public static function cleanCache(): void {
-        $dir = self::getCacheDir();
-        if (!is_dir($dir)) {
-            return;
-        }
+        self::ensureCacheTable();
+        Database::query('DELETE FROM rate_limits WHERE expires < ?', [time()]);
 
-        foreach (glob($dir . '/*.cache') as $file) {
-            $data = file_get_contents($file);
-            $decoded = json_decode($data, true);
-
-            if ($decoded === null || !isset($decoded['expires']) || $decoded['expires'] < time()) {
+        // Sweep the pre-SQLite file cache away on first run after an upgrade.
+        $legacyDir = __DIR__ . '/../data/cache';
+        if (is_dir($legacyDir)) {
+            foreach (glob($legacyDir . '/*.cache') ?: [] as $file) {
                 @unlink($file);
             }
         }

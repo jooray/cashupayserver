@@ -31,13 +31,13 @@ add_action('cashupay_poll_quotes', 'cashupay_cron_poll');
 function cashupay_cron_poll(): void {
     require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
     require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
-    require_once CASHUPAY_PLUGIN_DIR . '/includes/invoice.php';
-    require_once CASHUPAY_PLUGIN_DIR . '/includes/webhook_sender.php';
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/background_runner.php';
 
     if (Database::isInitialized() && Config::isSetupComplete()) {
-        Invoice::recoverPendingWalletOperations();
-        Invoice::pollPendingQuotes();
-        WebhookSender::deliverPending();
+        // The same task list as the HTTP cron endpoint. Running only a subset here left
+        // WordPress installs without auto-withdrawal, expired-payment recovery or keyset
+        // rotation, and those gaps are invisible until funds are already stuck.
+        BackgroundRunner::run();
     }
 }
 

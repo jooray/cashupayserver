@@ -340,6 +340,9 @@ if (preg_match('#^/v1/melt/quote/bolt11/([0-9a-f]+)$#', $uri, $m)) {
     $quote ? respond($quote) : respond(['detail' => 'unknown melt quote', 'code' => 20005], 404);
 }
 
+/** Routing fee the mock mint actually pays, always below the quoted fee_reserve. */
+const MOCK_MELT_FEE_PAID = 0;
+
 if ($uri === '/v1/melt/bolt11' && $method === 'POST') {
     $quoteId = (string)($body['quote'] ?? '');
     $quote = $state['melt_quotes'][$quoteId] ?? null;
@@ -359,7 +362,24 @@ if ($uri === '/v1/melt/bolt11' && $method === 'POST') {
         $inputSum += (int)$input['amount'];
     }
 
-    $change = array_map(fn($output) => sign_output($output, $state), $body['outputs'] ?? []);
+    // NUT-08: blank outputs arrive with amount 0; the mint decomposes the overpayment
+    // into powers of two, assigns them to as many supplied outputs as it can, and drops
+    // the rest. Mirrors nutshell's _generate_change_promises.
+    $feePaid = MOCK_MELT_FEE_PAID;
+    $overpaid = $inputSum - (int)$quote['amount'] - $feePaid;
+    $returnAmounts = [];
+    for ($bit = 1; $bit <= $overpaid; $bit <<= 1) {
+        if ($overpaid & $bit) {
+            $returnAmounts[] = $bit;
+        }
+    }
+    rsort($returnAmounts);
+    $blankOutputs = $body['outputs'] ?? [];
+    $change = [];
+    foreach (array_slice($returnAmounts, 0, count($blankOutputs)) as $i => $amount) {
+        $blankOutputs[$i]['amount'] = $amount;
+        $change[] = sign_output($blankOutputs[$i], $state);
+    }
     foreach ($Ys as $Y) {
         $state['spent'][$Y] = true;
     }

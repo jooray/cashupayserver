@@ -65,7 +65,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $requestId = $data['id'] ?? null;
     $tokenString = $data['token'] ?? null;
-    $storeId = $data['store_id'] ?? null;
+    // NUT-18 senders POST the payload to the transport target verbatim, so the store
+    // arrives in the query string of the URL we published, not in the body.
+    $storeId = $data['store_id'] ?? ($_GET['store_id'] ?? null);
 
     if (!$storeId) {
         http_response_code(400);
@@ -114,7 +116,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'proofs_count' => count($proofs)
         ]);
 
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
+        // This endpoint is public and its input is a stranger's token. Anything the
+        // parser or the mint throws must become a 400, never a PHP fatal (which, with
+        // display_errors on, prints a stack trace to that stranger).
+        error_log('CashuPayServer: receive failed: ' . $e->getMessage());
         http_response_code(400);
         echo json_encode(['error' => $e->getMessage()]);
     }
@@ -365,7 +371,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     try {
         // Initialize wallet with store's configuration
         // Create payment request with HTTP transport to this endpoint
-        $receiveUrl = Urls::receive();
+        // The sender POSTs straight to this URL, and the handler needs to know which
+        // store's wallet receives the proofs, so the store must be in the target.
+        $receiveUrl = Urls::receive()
+            . (str_contains(Urls::receive(), '?') ? '&' : '?')
+            . 'store_id=' . urlencode($storeId);
 
         $wallet = new Wallet($mintUrl, $unit);
         $wallet->loadMint();
@@ -504,7 +514,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 </body>
 </html>
         <?php
-    } catch (Exception $e) {
+    } catch (Throwable $e) {
+        error_log('CashuPayServer: payment request generation failed: ' . $e->getMessage());
         if ($format === 'json') {
             http_response_code(500);
             header('Content-Type: application/json');

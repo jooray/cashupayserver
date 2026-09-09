@@ -69,6 +69,17 @@ $checkoutConfig = $invoice['checkout_config'] ? json_decode($invoice['checkout_c
 $redirectUrl = $checkoutConfig['redirectURL'] ?? null;
 $redirectAuto = $checkoutConfig['redirectAutomatically'] ?? true;
 
+// Re-check the stored redirect before handing it to the browser. Creation-time
+// validation does not cover invoices written by an earlier version, and this value
+// becomes both an anchor href and a window.location assignment — where escaping does
+// nothing against a `javascript:` scheme.
+if ($redirectUrl !== null) {
+    if (!is_string($redirectUrl) || !Security::isSafeBrowserRedirect($redirectUrl)) {
+        error_log('CashuPayServer: dropped unsafe redirectURL on invoice ' . $invoice['id']);
+        $redirectUrl = null;
+    }
+}
+
 // Format amount for display - use store's mint unit
 $mintUnit = Config::getStoreMintUnit($invoice['store_id']);
 $displayAmount = $invoice['amount'] . ' ' . strtoupper($invoice['currency']);

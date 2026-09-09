@@ -227,12 +227,26 @@ file_get_contents("$mintUrl/__control/next_melt_ambiguous", false, stream_contex
 ]));
 $meltQuote = $wallet->requestMeltQuote('lnbcmockmelt5');
 $meltProofs = Wallet::selectProofs(Invoice::getUnspentProofs($storeId), $meltQuote->amount + $meltQuote->feeReserve);
+$meltInput = Wallet::sumProofs($meltProofs);
 $meltResult = $wallet->melt($meltQuote->quote, $meltProofs);
 check($meltResult['paid'] === true, 'melt reports paid after POST failed but quote reconciled as PAID');
 check($meltResult['preimage'] !== null, 'reconciled melt returns payment preimage');
 check($wallet->getStorage()->getPendingOperationById('melt:' . $meltQuote->quote) === null, 'reconciled melt clears pending journal');
 $balanceAfterMelt = Invoice::getBalance($storeId);
-check($balanceAfterMelt === $balanceBeforeMelt - 6, "reconciled melt preserves change (balance $balanceAfterMelt = $balanceBeforeMelt - 6)");
+
+// NUT-08 conservation: only the amount plus the routing fee the mint actually paid may
+// leave the wallet. Inputs are selected to exactly amount + fee_reserve, so before the
+// blank-output fix the whole unused reserve stayed at the mint on every withdrawal.
+$meltChange = Wallet::sumProofs($meltResult['change'] ?? []);
+$expectedAfterMelt = $balanceBeforeMelt - $meltInput + $meltChange;
+check(
+    $balanceAfterMelt === $expectedAfterMelt,
+    "melt change is credited back (balance $balanceAfterMelt = $balanceBeforeMelt - $meltInput + $meltChange)"
+);
+check(
+    $meltInput - $meltChange === $meltQuote->amount,
+    "unused fee reserve is refunded (cost " . ($meltInput - $meltChange) . " = amount {$meltQuote->amount})"
+);
 
 // --- Keyset rotation ---------------------------------------------------------
 echo "keyset rotation:\n";

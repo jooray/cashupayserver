@@ -64,86 +64,79 @@ function cashupay_register_webhook(string $store_id): array {
     // Build the webhook callback URL (same as WC()->api_request_url('btcpaygf_default'))
     $webhookUrl = site_url('/?wc-api=btcpaygf_default');
 
-    // CashuPayServer database path
-    $dataDir = defined('CASHUPAY_DATA_DIR') ? CASHUPAY_DATA_DIR : ABSPATH . 'cashupay/data';
-    $dbPath = rtrim($dataDir, '/') . '/cashupay.sqlite';
-
-    if (!file_exists($dbPath)) {
-        return [
-            'success' => false,
-            'error' => 'Database not found at: ' . $dbPath
-        ];
-    }
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/webhook_sender.php';
 
     try {
-        $pdo = new PDO('sqlite:' . $dbPath);
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        // Go through Database, not a private PDO handle: that bypassed WAL mode, the busy
+        // timeout and the schema check, and wrote rows the delivery code would then refuse.
+        Database::ensureCurrentSchema();
 
-        // Check if webhook already exists for this store and URL
-        $stmt = $pdo->prepare("SELECT id, secret FROM webhooks WHERE store_id = ? AND url = ? AND deleted_at IS NULL");
-        $stmt->execute([$store_id, $webhookUrl]);
-        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!WebhookSender::isAllowedTarget($webhookUrl)) {
+            return [
+                'success' => false,
+                'error' => 'This site\'s own URL (' . $webhookUrl . ') is not an allowed webhook target.',
+            ];
+        }
+
+        $existing = Database::fetchOne(
+            "SELECT id, secret FROM webhooks WHERE store_id = ? AND url = ? AND deleted_at IS NULL",
+            [$store_id, $webhookUrl]
+        );
 
         if ($existing) {
-            // Webhook already exists, store secret in WooCommerce options
             update_option('btcpay_gf_webhook', [
                 'id' => $existing['id'],
                 'url' => $webhookUrl,
-                'secret' => $existing['secret']
+                'secret' => $existing['secret'],
             ]);
 
             return [
                 'success' => true,
                 'webhook_id' => $existing['id'],
-                'existing' => true
+                'existing' => true,
             ];
         }
 
-        // Generate webhook ID and secret
-        $webhookId = 'wh_' . bin2hex(random_bytes(12));
+        $webhookId = Database::generateId('wh');
         $secret = bin2hex(random_bytes(32));
 
-        // Events that BTCPay WooCommerce plugin expects
+        // Events the BTCPay WooCommerce plugin subscribes to.
         $events = json_encode([
             'InvoiceCreated',
             'InvoiceReceivedPayment',
             'InvoiceProcessing',
             'InvoiceSettled',
             'InvoiceExpired',
-            'InvoiceInvalid'
+            'InvoiceInvalid',
         ]);
 
-        // Insert webhook into CashuPayServer database
-        $stmt = $pdo->prepare("
-            INSERT INTO webhooks (id, store_id, url, secret, events, enabled, created_at)
-            VALUES (?, ?, ?, ?, ?, 1, ?)
-        ");
-        $stmt->execute([
-            $webhookId,
-            $store_id,
-            $webhookUrl,
-            $secret,
-            $events,
-            time()
+        Database::insert('webhooks', [
+            'id' => $webhookId,
+            'store_id' => $store_id,
+            'url' => $webhookUrl,
+            'secret' => $secret,
+            'events' => $events,
+            'enabled' => 1,
+            'created_at' => time(),
         ]);
 
-        // Store webhook info in WooCommerce options (BTCPay plugin expects this)
         update_option('btcpay_gf_webhook', [
             'id' => $webhookId,
             'url' => $webhookUrl,
-            'secret' => $secret
+            'secret' => $secret,
         ]);
 
         return [
             'success' => true,
             'webhook_id' => $webhookId,
-            'existing' => false
+            'existing' => false,
         ];
 
-    } catch (PDOException $e) {
+    } catch (Throwable $e) {
         return [
             'success' => false,
-            'error' => 'Database error: ' . $e->getMessage()
+            'error' => 'Database error: ' . $e->getMessage(),
         ];
     }
 }

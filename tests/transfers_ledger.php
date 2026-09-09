@@ -39,11 +39,22 @@ $hasTransfers = $pdo->query("SELECT 1 FROM sqlite_master WHERE type='table' AND 
 check(!$hasTransfers, 'v5 database starts without a transfers table');
 $pdo = null;
 
-// --- Open through Database: migration must create the table and bump to v6 ---
+// --- Open through Database: migration must create the table and reach the current schema ---
 $migrated = Database::getInstance();
-check((int)$migrated->query('PRAGMA user_version')->fetchColumn() === 6, 'migration bumps schema to v6');
+$version = (int)$migrated->query('PRAGMA user_version')->fetchColumn();
+check($version >= 6, "migration bumps schema past v6 (now v{$version})");
 $hasTransfers = $migrated->query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='transfers'")->fetchColumn();
 check((bool)$hasTransfers, 'v6 migration creates the transfers table');
+
+// v7 turns transfers into recoverable operations: the bearer token of an export has to
+// survive a lost response, and `reference` links a withdrawal to its melt quote.
+$transferColumns = array_column(
+    $migrated->query('PRAGMA table_info(transfers)')->fetchAll(PDO::FETCH_ASSOC),
+    'name'
+);
+foreach (['token', 'reference', 'updated_at'] as $column) {
+    check(in_array($column, $transferColumns, true), "v7 migration adds transfers.$column");
+}
 
 // --- Record + read back ------------------------------------------------------
 Transfer::record('store_x', Transfer::TYPE_LIGHTNING, 1000, 3, 'sat', 'user@wallet.com', 'completed', 'preimage123');

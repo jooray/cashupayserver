@@ -10,29 +10,74 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/urls.php';
 
 class Background {
+    /** Shortest interval between two API-triggered background runs. */
+    const TRIGGER_INTERVAL = 30;
+
     /**
-     * Trigger background processing without blocking the current request
+     * Trigger background processing without blocking the current request.
      *
-     * Fires a non-blocking self-request to cron.php to process background tasks.
-     * Uses a short timeout (100ms) so the calling request doesn't wait.
+     * Fires a non-blocking self-request to cron.php. Uses a short timeout (100ms) so
+     * the calling request doesn't wait, and is coalesced so a busy checkout does not
+     * start a full cron run per poll.
      */
     public static function trigger(): void {
-        $url = Urls::cron() . '?internal=1&key=' . urlencode(self::getInternalKey());
+        // WooCommerce polls invoice status every few seconds during checkout, and each
+        // poll used to fire a full cron run. Coalesce them.
+        $last = (int)Config::get('last_background_trigger', '0');
+        if (time() - $last < self::TRIGGER_INTERVAL) {
+            return;
+        }
+        Config::set('last_background_trigger', (string)time());
+
+        $url = self::selfCronUrl();
+        if ($url === null) {
+            // No trusted origin to call. Without one, a poisoned Host header would send
+            // the internal key to whatever host the attacker named.
+            return;
+        }
 
         // Fire-and-forget curl (100ms timeout - enough for localhost self-request)
-        $ch = curl_init($url);
+        $ch = curl_init($url . '?internal=1&key=' . urlencode(self::getInternalKey()));
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT_MS => 100,
             CURLOPT_NOSIGNAL => 1,
-            CURLOPT_SSL_VERIFYPEER => false, // For local development
+            // Verify TLS unless the target is loopback, where a self-signed development
+            // certificate is normal and there is no network to intercept.
+            CURLOPT_SSL_VERIFYPEER => !self::isLoopbackUrl($url),
+            CURLOPT_SSL_VERIFYHOST => self::isLoopbackUrl($url) ? 0 : 2,
             // Do NOT follow redirects: this request carries the internal key, and a
             // redirect could leak it to another host. See FABLE-SECURITY-AUDIT (HIGH-5).
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_PROTOCOLS_STR => 'https,http',
         ]);
         @curl_exec($ch);
         // Note: curl_close() is a no-op since PHP 8.0, handle is auto-closed
+    }
+
+    /**
+     * The cron URL to call with the internal key, or null when no origin is trusted.
+     *
+     * Only a configured `base_url` (or WordPress's own `site_url()`) counts. Deriving it
+     * from HTTP_HOST means an unauthenticated request with a forged Host header can make
+     * this server post its internal credential to the attacker's origin.
+     */
+    private static function selfCronUrl(): ?string {
+        if (Urls::isWordPress()) {
+            return Urls::cron();
+        }
+        if (!Config::get('base_url')) {
+            return null;
+        }
+        return Urls::cron();
+    }
+
+    private static function isLoopbackUrl(string $url): bool {
+        $host = strtolower((string)parse_url($url, PHP_URL_HOST));
+        return $host === 'localhost'
+            || $host === '127.0.0.1'
+            || $host === '::1'
+            || str_ends_with($host, '.localhost');
     }
 
     /**

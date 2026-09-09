@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 6;
+    private const SCHEMA_VERSION = 7;
 
     private static ?PDO $instance = null;
     private static ?string $dbPath = null;
@@ -294,11 +294,15 @@ HTACCESS;
             destination TEXT,
             status TEXT NOT NULL DEFAULT 'completed',
             detail TEXT,
+            token TEXT,
+            reference TEXT,
+            updated_at INTEGER,
             created_at INTEGER NOT NULL,
             FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
         );
 
         -- Indexes for performance
+        CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_invoices_store ON invoices(store_id);
         CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
         CREATE INDEX IF NOT EXISTS idx_invoices_quote ON invoices(quote_id);
@@ -396,6 +400,18 @@ HTACCESS;
                 $pdo->exec("CREATE INDEX IF NOT EXISTS idx_transfers_store ON transfers(store_id, created_at)");
                 $pdo->exec('PRAGMA user_version = 6');
             }
+            if ($version < 7) {
+                // Outgoing transfers become recoverable operations: the bearer token is
+                // kept so an export can be re-displayed or reclaimed, and `reference`
+                // links the row to the melt quote or proof set it owns.
+                self::addColumnIfMissing($pdo, 'transfers', 'token', 'TEXT');
+                self::addColumnIfMissing($pdo, 'transfers', 'reference', 'TEXT');
+                self::addColumnIfMissing($pdo, 'transfers', 'updated_at', 'INTEGER');
+                $pdo->exec('UPDATE transfers SET updated_at = created_at WHERE updated_at IS NULL');
+                $pdo->exec('CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status, created_at)');
+                self::migrateExportedProofs($pdo);
+                $pdo->exec('PRAGMA user_version = 7');
+            }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()
             // and rollBack() would throw "There is no active transaction".
@@ -407,6 +423,43 @@ HTACCESS;
                 // No transaction left to roll back (e.g. the failure was the COMMIT).
             }
             throw $e;
+        }
+    }
+
+    /**
+     * Reclassify proofs left PENDING by an earlier export.
+     *
+     * PENDING used to mean two different things: "reserved by an in-flight mint
+     * operation" and "handed to someone as a token". Recovery code reads the first
+     * meaning, so an unredeemed exported token was returned to the spendable pool and
+     * could be exported a second time. Anything PENDING that no journal owns was an
+     * export, and becomes EXPORTED — a state nothing reclaims automatically.
+     */
+    private static function migrateExportedProofs(\PDO $pdo): void {
+        if (!self::tableExists($pdo, 'cashu_proofs') || !self::tableExists($pdo, 'cashu_pending_operations')) {
+            return;
+        }
+
+        $reserved = [];
+        $rows = $pdo->query("SELECT data FROM cashu_pending_operations")->fetchAll(\PDO::FETCH_COLUMN);
+        foreach ($rows as $json) {
+            $data = json_decode((string)$json, true);
+            foreach ($data['input_secrets'] ?? [] as $secret) {
+                $reserved[$secret] = true;
+            }
+        }
+
+        $pending = $pdo->query(
+            "SELECT secret FROM cashu_proofs WHERE state = 'PENDING'"
+        )->fetchAll(\PDO::FETCH_COLUMN);
+        $orphaned = array_values(array_filter($pending, fn($secret) => !isset($reserved[$secret])));
+        if (empty($orphaned)) {
+            return;
+        }
+
+        $update = $pdo->prepare("UPDATE cashu_proofs SET state = 'EXPORTED' WHERE secret = ? AND state = 'PENDING'");
+        foreach ($orphaned as $secret) {
+            $update->execute([$secret]);
         }
     }
 

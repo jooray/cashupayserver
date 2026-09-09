@@ -54,47 +54,98 @@ class LightningAddress {
      * @param int $amountSats Amount in SATOSHIS (Lightning is always sats)
      * @param string|null $comment Optional comment
      */
-    public static function meltToAddress(string $storeId, string $address, int $amountSats, ?string $comment = null): array {
-        // Get invoice from Lightning address (via library)
+    public static function meltToAddress(
+        string $storeId,
+        string $address,
+        int $amountSats,
+        ?string $comment = null,
+        string $transferType = Transfer::TYPE_LIGHTNING_ADDRESS
+    ): array {
+        // Get invoice from Lightning address. The library verifies that the returned
+        // invoice is for the amount we asked for.
         $bolt11 = CashuLightningAddress::getInvoice($address, $amountSats, $comment);
 
-        // Get wallet for this store
+        return self::executeMelt($storeId, $bolt11, $address, $transferType);
+    }
+
+    /**
+     * Request a melt quote, record the intent, and pay it.
+     *
+     * The ledger row is written *before* the melt, because a Lightning payment can
+     * complete after its HTTP response is lost. Recording only on success meant a
+     * settled withdrawal could vanish from accounting while the operator saw an error
+     * and retried — paying twice.
+     */
+    private static function executeMelt(
+        string $storeId,
+        string $bolt11,
+        ?string $destination,
+        string $transferType
+    ): array {
         $wallet = Invoice::getWalletInstance($storeId);
-
-        // Request melt quote
         $meltQuote = $wallet->requestMeltQuote($bolt11);
-
         $totalNeeded = $meltQuote->amount + $meltQuote->feeReserve;
 
-        // Get unspent proofs for this store
         $proofs = Invoice::getUnspentProofs($storeId);
         $balance = Wallet::sumProofs($proofs);
-
         $mintUnit = Config::getStoreMintUnit($storeId);
 
         if ($balance < $totalNeeded) {
             throw new Exception("Insufficient balance. Have: {$balance} {$mintUnit}, Need: {$totalNeeded} {$mintUnit}");
         }
 
-        // Select proofs
-        $selectedProofs = Wallet::selectProofs($proofs, $totalNeeded);
+        // Cover the NUT-02 input fee the selection itself incurs, not just the quote.
+        $selectedProofs = $wallet->selectProofsWithFees($proofs, $totalNeeded);
+        $inputAmount = Wallet::sumProofs($selectedProofs);
 
-        // Execute melt
-        $result = $wallet->melt($meltQuote->quote, $selectedProofs);
+        $transferId = Transfer::open(
+            $storeId,
+            $transferType,
+            $meltQuote->amount,
+            $mintUnit,
+            $destination,
+            $meltQuote->quote,
+            'Melt quote ' . $meltQuote->quote
+        );
+
+        try {
+            $result = $wallet->melt($meltQuote->quote, $selectedProofs);
+        } catch (Throwable $e) {
+            // The quote stays in the library journal; recovery decides its fate. Leave
+            // the ledger row pending rather than calling an ambiguous melt a failure.
+            Transfer::note($transferId, $e->getMessage());
+            throw $e;
+        }
 
         if (!$result['paid']) {
-            if ($result['pending'] ?? false) {
-                throw new Exception("Lightning payment pending - proofs marked as pending for recovery");
-            }
-            throw new Exception("Lightning payment failed");
+            // Pending or unpaid: the row stays pending and names the quote, so recovery
+            // (and the operator) can resume this payment instead of starting a new one.
+            throw new Exception(
+                "Lightning payment did not complete (melt quote {$meltQuote->quote}). "
+                . "It is recorded as pending; do not retry until it resolves."
+            );
         }
+
+        $changeAmount = Wallet::sumProofs($result['change'] ?? []);
+        // Real cost = what left minus what came back. feeReserve - change went negative
+        // whenever proof denominations over-covered the target.
+        $fee = $inputAmount - $changeAmount - $meltQuote->amount;
+
+        Transfer::complete(
+            $transferId,
+            $meltQuote->amount,
+            max(0, $fee),
+            $result['preimage'] ?? null
+        );
 
         return [
             'success' => true,
             'preimage' => $result['preimage'],
             'amountPaid' => $meltQuote->amount,
-            'fee' => $meltQuote->feeReserve - Wallet::sumProofs($result['change'] ?? []),
-            'changeAmount' => Wallet::sumProofs($result['change'] ?? []),
+            'fee' => $fee,
+            'changeAmount' => $changeAmount,
+            'quote' => $meltQuote->quote,
+            'transferId' => $transferId,
         ];
     }
 
@@ -167,20 +218,11 @@ class LightningAddress {
                             $store['id'],
                             $store['auto_melt_address'],
                             $meltAmountSats,
-                            'CashuPayServer auto-withdrawal'
+                            'CashuPayServer auto-withdrawal',
+                            Transfer::TYPE_AUTO_WITHDRAW
                         );
 
-                        // Record the auto-withdrawal in the outgoing-transfer ledger.
-                        Transfer::record(
-                            $store['id'],
-                            Transfer::TYPE_AUTO_WITHDRAW,
-                            (int)($result['amountPaid'] ?? $meltAmountInMintUnit),
-                            (int)($result['fee'] ?? 0),
-                            $mintUnit,
-                            $store['auto_melt_address'],
-                            'completed',
-                            $result['preimage'] ?? null
-                        );
+                        // The ledger row was opened before the melt and settled by it.
 
                         // Send donation if configured (in mint units)
                         if ($donationAmount > 0) {
@@ -339,43 +381,17 @@ class LightningAddress {
      * @param int|null $expectedAmount Optional expected amount (for amountless invoices)
      */
     public static function meltToBolt11(string $storeId, string $bolt11, ?int $expectedAmount = null): array {
-        $wallet = Invoice::getWalletInstance($storeId);
-
-        // Request melt quote
-        $meltQuote = $wallet->requestMeltQuote($bolt11);
-
-        $totalNeeded = $meltQuote->amount + $meltQuote->feeReserve;
-
-        // Get unspent proofs for this store
-        $proofs = Invoice::getUnspentProofs($storeId);
-        $balance = Wallet::sumProofs($proofs);
-
-        $mintUnit = Config::getStoreMintUnit($storeId);
-
-        if ($balance < $totalNeeded) {
-            throw new Exception("Insufficient balance. Have: {$balance} {$mintUnit}, Need: {$totalNeeded} {$mintUnit}");
+        // Amountless invoices need NUT-23 `options.amountless`, which the wallet does not
+        // send; the mint answers 11011. Reject them here with a message the operator can
+        // act on rather than surfacing a protocol error code.
+        if (\Cashu\Bolt11::amountSats($bolt11) === 0) {
+            throw new Exception(
+                'This invoice has no amount. Amountless invoices are not supported yet — '
+                . 'please request an invoice for a specific amount.'
+            );
         }
 
-        // Select proofs
-        $selectedProofs = Wallet::selectProofs($proofs, $totalNeeded);
-
-        // Execute melt
-        $result = $wallet->melt($meltQuote->quote, $selectedProofs);
-
-        if (!$result['paid']) {
-            if ($result['pending'] ?? false) {
-                throw new Exception("Lightning payment pending - proofs marked as pending for recovery");
-            }
-            throw new Exception("Lightning payment failed");
-        }
-
-        return [
-            'success' => true,
-            'preimage' => $result['preimage'],
-            'amountPaid' => $meltQuote->amount,
-            'fee' => $meltQuote->feeReserve - Wallet::sumProofs($result['change'] ?? []),
-            'changeAmount' => Wallet::sumProofs($result['change'] ?? []),
-        ];
+        return self::executeMelt($storeId, $bolt11, $bolt11, Transfer::TYPE_LIGHTNING);
     }
 }
 
@@ -440,30 +456,38 @@ class Donation {
 
             $result = $wallet->split($proofs, $amount);
             $donationProofs = $result['send'];
-
-            // Mark donation proofs as SPENT immediately - they're sent to the sink and gone from our wallet
-            // Using PENDING causes race conditions: the mint may report different states depending on
-            // when the sink processes the token, causing "proofs are pending" errors on exports
             $donationSecrets = array_map(fn($p) => $p->secret, $donationProofs);
-            $wallet->getStorage()->updateProofsState($donationSecrets, ProofState::SPENT);
-
             $token = $wallet->serializeToken($donationProofs);
 
-            self::postTokenToSink($token);
-
-            // Record the donation in the outgoing-transfer ledger.
-            Transfer::record(
+            // Record the intent and its token, then move the proofs to EXPORTED — not
+            // SPENT. Marking them spent before the POST destroyed the only copy whenever
+            // the sink was unreachable; EXPORTED keeps them out of the spendable pool
+            // while leaving something to retry.
+            $transferId = Transfer::open(
                 $storeId,
                 Transfer::TYPE_DONATION,
                 (int)$amount,
-                0,
                 Config::getStoreMintUnit($storeId),
-                'CashuPayServer donation',
-                'completed',
-                null
+                self::sinkDescription(),
+                implode(',', $donationSecrets),
+                null,
+                $token
             );
+            Invoice::markProofsExported($storeId, $donationSecrets);
 
-            return ['success' => true, 'token' => $token, 'error' => null];
+            if (!self::postTokenToSink($token)) {
+                return [
+                    'success' => false,
+                    'token' => $token,
+                    'transferId' => $transferId,
+                    'error' => 'Donation sink did not acknowledge; the token is stored and will be retried',
+                ];
+            }
+
+            Transfer::complete($transferId, (int)$amount);
+            $wallet->getStorage()->updateProofsState($donationSecrets, ProofState::SPENT);
+
+            return ['success' => true, 'token' => $token, 'transferId' => $transferId, 'error' => null];
 
         } catch (Exception $e) {
             error_log("Donation error: " . $e->getMessage());
@@ -472,12 +496,58 @@ class Donation {
     }
 
     /**
-     * POST token to donation sink (fire and forget)
+     * Select proofs summing to exactly $amount, or null when no exact subset exists.
+     *
+     * Offline donations cannot make change, so "close enough" means overpaying with
+     * whatever proof happened to be next: a 1 % donation on a 64-sat export used to
+     * send a whole 32-sat proof.
+     *
+     * @param \Cashu\Proof[] $proofs
+     * @return \Cashu\Proof[]|null
      */
-    public static function postTokenToSink(string $token): void {
+    public static function selectExact(array $proofs, int $amount): ?array {
+        if ($amount < 1) {
+            return null;
+        }
+
+        // Denominations are powers of two and donations are small, so a greedy
+        // largest-first pass over proofs no larger than the target is exact whenever an
+        // exact subset exists.
+        $candidates = array_values(array_filter($proofs, fn($p) => $p->amount <= $amount));
+        usort($candidates, fn($a, $b) => $b->amount <=> $a->amount);
+
+        $selected = [];
+        $remaining = $amount;
+        foreach ($candidates as $proof) {
+            if ($proof->amount <= $remaining) {
+                $selected[] = $proof;
+                $remaining -= $proof->amount;
+                if ($remaining === 0) {
+                    return $selected;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /** Human-readable destination recorded in the transfer ledger. */
+    public static function sinkDescription(): string {
+        return defined('CASHUPAY_DONATION_SINK_URL')
+            ? (string)CASHUPAY_DONATION_SINK_URL
+            : 'CashuPayServer donation';
+    }
+
+    /**
+     * POST a token to the donation sink.
+     *
+     * @return bool True only when the sink acknowledged with 2xx. A false result means
+     *              the token may or may not have arrived, so the caller must keep it.
+     */
+    public static function postTokenToSink(string $token): bool {
         if (!defined('CASHUPAY_DONATION_SINK_URL')) {
             error_log("Donation sink URL not configured");
-            return;
+            return false;
         }
 
         try {
@@ -497,14 +567,17 @@ class Donation {
 
             if (curl_errno($ch)) {
                 error_log("Donation sink POST failed: " . curl_error($ch));
-            } elseif ($httpCode >= 400) {
-                error_log("Donation sink returned HTTP {$httpCode}: {$response}");
-            } else {
-                error_log("Donation sent successfully to sink");
+                return false;
             }
+            if ($httpCode < 200 || $httpCode >= 300) {
+                error_log("Donation sink returned HTTP {$httpCode}: {$response}");
+                return false;
+            }
+            return true;
 
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             error_log("Donation sink error: " . $e->getMessage());
+            return false;
         }
     }
 

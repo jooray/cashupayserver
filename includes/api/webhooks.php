@@ -27,7 +27,7 @@ function handleCreateWebhook(array $auth, array $params, array $body): void {
     }
 
     // Anti-SSRF: only allow public http(s) targets (blocks file://, internal IPs, metadata).
-    if (!Security::isSafePublicHttpUrl($url)) {
+    if (!WebhookSender::isAllowedTarget($url)) {
         errorResponse('validation-error', 'Webhook URL must be a public http(s) URL');
     }
 
@@ -106,7 +106,7 @@ function handleUpdateWebhook(array $auth, array $params, array $body): void {
     $updates = [];
 
     if (isset($body['url'])) {
-        if (!Security::isSafePublicHttpUrl($body['url'])) {
+        if (!WebhookSender::isAllowedTarget($body['url'])) {
             errorResponse('validation-error', 'Webhook URL must be a public http(s) URL');
         }
         $updates['url'] = $body['url'];

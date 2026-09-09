@@ -7,9 +7,20 @@
 
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/urls.php';
 
 class WebhookSender {
-    private const MAX_ATTEMPTS = 4;
+    /**
+     * Retry for about three days.
+     *
+     * The old value of 4 attempts over ~3.5 minutes meant a shop that was down for a
+     * five-minute deploy never learned its invoice settled, with nothing in the UI to
+     * say so. With the backoff below (30s doubling to a 1h ceiling) 80 attempts span
+     * roughly 72 hours.
+     */
+    private const MAX_ATTEMPTS = 80;
+    private const MAX_BACKOFF = 3600;
     private const TIMEOUT = 10;
     private const LEASE_SECONDS = 30;
 
@@ -96,6 +107,39 @@ class WebhookSender {
     }
 
     /**
+     * Whether a webhook may be delivered to this URL.
+     *
+     * Public HTTP(S) targets are always allowed. In addition, the application's *own*
+     * origin is allowed even when it resolves to a private address: in WordPress plugin
+     * mode the WooCommerce webhook is `site_url('/?wc-api=btcpaygf_default')`, and on a
+     * LAN, in Docker, or behind split-horizon DNS that is exactly the case the plain
+     * anti-SSRF rule refused — payments settled and orders stayed unpaid, silently.
+     *
+     * Operators with other internal receivers can opt in with the
+     * `webhook_allow_private_targets` config flag.
+     */
+    public static function isAllowedTarget(string $url): bool {
+        if (Security::isSafePublicHttpUrl($url)) {
+            return true;
+        }
+        if (Config::get('webhook_allow_private_targets')) {
+            return Security::isSafeAppBaseUrl($url);
+        }
+        return self::isOwnOrigin($url);
+    }
+
+    /** True when the URL points at this installation's own host. */
+    private static function isOwnOrigin(string $url): bool {
+        $host = strtolower((string)parse_url($url, PHP_URL_HOST));
+        if ($host === '' || !Security::isSafeAppBaseUrl($url)) {
+            return false;
+        }
+
+        $ownHost = strtolower((string)parse_url(Urls::siteBase(), PHP_URL_HOST));
+        return $ownHost !== '' && $host === $ownHost;
+    }
+
+    /**
      * Calculate HMAC signature (BTCPay format)
      */
     private static function calculateSignature(string $payload, string $secret): string {
@@ -109,31 +153,41 @@ class WebhookSender {
     private static function sendRequest(string $url, string $payload, string $signature): array {
         // Anti-SSRF: refuse non-public / non-http(s) targets at delivery time too
         // (defence in depth; the create/update handlers validate as well).
-        if (!Security::isSafePublicHttpUrl($url)) {
+        if (!self::isAllowedTarget($url)) {
             return [
                 'status_code' => 0,
-                'response' => 'blocked: webhook URL is not a public http(s) URL',
+                'response' => 'blocked: webhook URL is not an allowed target',
             ];
         }
 
         $ch = curl_init($url);
 
-        curl_setopt_array($ch, [
+        $options = [
             CURLOPT_POST => true,
             CURLOPT_POSTFIELDS => $payload,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => self::TIMEOUT,
+            CURLOPT_CONNECTTIMEOUT => 10,
             // Restrict protocols and forbid redirects so a target cannot bounce us to
             // file:// / gopher:// / an internal host. See FABLE-SECURITY-AUDIT (CRIT-4).
-            CURLOPT_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
-            CURLOPT_REDIR_PROTOCOLS => CURLPROTO_HTTP | CURLPROTO_HTTPS,
+            CURLOPT_PROTOCOLS_STR => 'https,http',
+            CURLOPT_REDIR_PROTOCOLS_STR => 'https,http',
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'BTCPay-Sig: ' . $signature,
                 'User-Agent: CashuPayServer/1.0',
             ],
-        ]);
+        ];
+
+        // Connect to the address the safety check approved. Validating DNS and then
+        // letting cURL resolve again leaves a rebinding window.
+        $resolve = Security::resolveOptionFor($url);
+        if (!empty($resolve)) {
+            $options[CURLOPT_RESOLVE] = $resolve;
+        }
+
+        curl_setopt_array($ch, $options);
 
         $response = curl_exec($ch);
         $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -176,7 +230,7 @@ class WebhookSender {
             $attempts = (int)$delivery['attempts'] + 1;
             $nextAttempt = $success || $attempts >= self::MAX_ATTEMPTS
                 ? 0
-                : $now + min(3600, 30 * (2 ** ($attempts - 1)));
+                : $now + (int)min(self::MAX_BACKOFF, 30 * (2 ** min($attempts - 1, 20)));
 
             Database::query(
                 "UPDATE webhook_deliveries

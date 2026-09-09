@@ -785,6 +785,32 @@ class Invoice {
     }
 
     /**
+     * Mark proofs as handed to a third party (exported token, donation).
+     *
+     * Distinct from PENDING on purpose: the mint reporting an exported proof UNSPENT
+     * only means the recipient has not redeemed it yet, so recovery must never take it
+     * back. Reclaiming an export is an explicit operator action that swaps the proofs.
+     */
+    public static function markProofsExported(string $storeId, array $secrets): void {
+        if (empty($secrets)) {
+            return;
+        }
+
+        $store = Config::getStore($storeId);
+        if (!$store || empty($store['mint_url'])) {
+            return;
+        }
+
+        $storage = new WalletStorage(
+            Database::getDbPath(),
+            $store['mint_url'],
+            $store['mint_unit'] ?? 'sat',
+            $store['wallet_account_id']
+        );
+        $storage->updateProofsState($secrets, ProofState::EXPORTED);
+    }
+
+    /**
      * Mark proofs as pending for a store (updates local storage)
      *
      * Marks proofs as PENDING in local storage. Used when proofs are sent
@@ -1018,38 +1044,43 @@ class Invoice {
             $client = new \Cashu\MintClient($store['mint_url']);
             $response = $client->post('checkstate', ['Ys' => $Ys]);
 
-            // Separate into spent and unspent
+            $states = $response['states'] ?? null;
+            if (!is_array($states) || count($states) !== count($Ys)) {
+                throw new \Exception('Mint returned an incomplete proof state response');
+            }
+
+            // Only the SPENT transition is applied. Returning a proof to the spendable
+            // pool because the mint says UNSPENT is exactly how the same bearer proofs
+            // used to be handed out twice: "not redeemed yet" is not "still ours".
             $spentSecrets = [];
-            $unspentSecrets = [];
-            foreach ($response['states'] ?? [] as $i => $state) {
-                $mintState = $state['state'] ?? ProofState::UNSPENT;
+            $stillPending = 0;
+            foreach ($states as $i => $state) {
                 $YHex = $Ys[$i];
+                if (isset($state['Y']) && !hash_equals($YHex, strtolower((string)$state['Y']))) {
+                    throw new \Exception('Mint returned proof states in an unexpected order');
+                }
                 if (!isset($proofMap[$YHex])) continue;
 
-                if ($mintState === ProofState::SPENT) {
+                if (strtoupper($state['state'] ?? '') === ProofState::SPENT) {
                     $spentSecrets[] = $proofMap[$YHex];
                 } else {
-                    $unspentSecrets[] = $proofMap[$YHex];
+                    $stillPending++;
                 }
             }
 
-            // Update database
             if (!empty($spentSecrets)) {
                 $wallet->getStorage()->updateProofsState($spentSecrets, ProofState::SPENT);
-            }
-
-            if (!empty($unspentSecrets)) {
-                $wallet->getStorage()->updateProofsState($unspentSecrets, ProofState::UNSPENT);
             }
 
             return [
                 'checked' => count($rows),
                 'spent' => count($spentSecrets),
-                'recovered' => count($unspentSecrets)
+                'pending' => $stillPending,
+                'recovered' => 0,
             ];
-        } catch (\Exception $e) {
+        } catch (\Throwable $e) {
             error_log("CashuPayServer: Error checking pending proofs: " . $e->getMessage());
-            return ['checked' => 0, 'spent' => 0, 'recovered' => 0, 'error' => $e->getMessage()];
+            return ['checked' => 0, 'spent' => 0, 'pending' => 0, 'recovered' => 0, 'error' => $e->getMessage()];
         }
     }
 
