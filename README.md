@@ -228,7 +228,7 @@ git clone --recurse-submodules https://github.com/jooray/cashupayserver.git
 cd cashupayserver
 
 docker build -f docker/Dockerfile.standalone -t cashupayserver-standalone .
-docker run -p 80:80 -p 8080:8080 cashupayserver-standalone
+docker run -p 127.0.0.1:80:80 -p 127.0.0.1:8080:8080 cashupayserver-standalone
 ```
 
 This starts:
@@ -239,7 +239,7 @@ This starts:
 
 ```bash
 docker build -f docker/Dockerfile.wordpress -t cashupayserver-wordpress .
-docker run -p 80:80 cashupayserver-wordpress
+docker run -p 127.0.0.1:80:80 cashupayserver-wordpress
 ```
 
 This starts:

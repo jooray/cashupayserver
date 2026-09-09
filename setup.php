@@ -16,6 +16,7 @@
  * for backwards compatibility, but step 3 is no longer used.
  */
 
+require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';

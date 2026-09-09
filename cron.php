@@ -12,6 +12,7 @@
  * * * * * * curl -s https://your-domain.com/cron.php?key=YOUR_CRON_KEY
  */
 
+require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/invoice.php';

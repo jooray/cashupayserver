@@ -92,6 +92,22 @@ class Auth {
     }
 
     /**
+     * Re-check the admin password without touching the session.
+     *
+     * Used to gate a re-display of the wallet seed, so an unattended dashboard is not
+     * enough to walk away with the keys to the money.
+     */
+    public static function verifyAdminPassword(string $password): bool {
+        $hash = Config::getAdminPasswordHash();
+        if ($hash === null) {
+            // WordPress mode has no standalone password; manage_options is the gate.
+            return Urls::isWordPress() && function_exists('current_user_can')
+                && current_user_can('manage_options');
+        }
+        return password_verify($password, $hash);
+    }
+
+    /**
      * Logout admin
      */
     public static function logout(): void {

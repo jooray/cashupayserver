@@ -15,6 +15,8 @@
  * Both modes work simultaneously.
  */
 
+require_once __DIR__ . '/includes/entrypoint_guard.php';
+
 // =============================================================================
 // SECURITY: Block access to sensitive paths
 // =============================================================================

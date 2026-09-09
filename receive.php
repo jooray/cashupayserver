@@ -8,6 +8,7 @@
  * - Can be used as the transport target for payment requests
  */
 
+require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -162,8 +163,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     // ("1.23"), and an integer cast turned that into 1 cent.
     $amount = 0;
 
-    // Get list of stores for selector
-    $stores = Database::fetchAll("SELECT id, name, mint_unit FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL ORDER BY created_at DESC");
+    // The store list is only for the operator's own convenience. This page is public,
+    // so an anonymous visitor gets the picker only when the operator has opted in with
+    // `receive_public_store_list`; otherwise they need a link that names the store.
+    $showStoreList = Auth::isLoggedIn() || (bool)Config::get('receive_public_store_list');
+    $stores = $showStoreList
+        ? Database::fetchAll("SELECT id, name, mint_unit FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL ORDER BY created_at DESC")
+        : [];
+
+    if (!$storeId && !$showStoreList) {
+        http_response_code(400);
+        if ($format === 'json') {
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'store_id required. Use ?store_id=X&amount=Y']);
+        } else {
+            echo 'Error: this link is incomplete. Ask the merchant for a payment-request link that names the store.';
+        }
+        exit;
+    }
 
     // If no store_id provided, show store selector
     if (!$storeId) {

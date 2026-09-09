@@ -5,6 +5,7 @@
  * Modern PWA admin dashboard with PIN access.
  */
 
+require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
@@ -591,6 +592,79 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'logout':
             Auth::logout();
             echo json_encode(['success' => true]);
+            break;
+
+        case 'reveal_seed':
+            // The seed is the wallet. A lost note otherwise means lost funds, so it can
+            // be shown again — but only behind a fresh password check, never on the
+            // strength of an unattended logged-in dashboard.
+            try {
+                $storeId = $_POST['store_id'] ?? '';
+                $password = (string)($_POST['password'] ?? '');
+
+                if (!Security::checkRateLimit('reveal_seed', Security::getClientIp(), 5)) {
+                    http_response_code(429);
+                    echo json_encode(['error' => 'Too many attempts. Please wait a minute.']);
+                    break;
+                }
+                if (!Auth::verifyAdminPassword($password)) {
+                    // Deliberately slow and vague.
+                    usleep(500000);
+                    http_response_code(403);
+                    echo json_encode(['error' => 'Incorrect password']);
+                    break;
+                }
+
+                $store = Config::getStore($storeId);
+                if (!$store || empty($store['seed_phrase'])) {
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Store not found or has no wallet']);
+                    break;
+                }
+
+                error_log("CashuPayServer: seed phrase revealed for store {$storeId} from " . Security::getClientIp());
+                echo json_encode(['seedPhrase' => $store['seed_phrase']]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'download_backup':
+            // A consistent snapshot of a WAL-mode database. Copying the .sqlite file
+            // alone can miss recent writes still in the -wal sidecar, and the seed alone
+            // does not restore invoices, keys, webhooks, journals or configuration.
+            try {
+                if (!Security::checkRateLimit('backup', Security::getClientIp(), 3)) {
+                    http_response_code(429);
+                    echo json_encode(['error' => 'Too many backup requests. Please wait.']);
+                    break;
+                }
+                if (!Auth::verifyAdminPassword((string)($_POST['password'] ?? ''))) {
+                    usleep(500000);
+                    http_response_code(403);
+                    echo json_encode(['error' => 'Incorrect password']);
+                    break;
+                }
+
+                @set_time_limit(0);
+                $snapshot = Database::getDataDir() . '/backup-' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.sqlite';
+                Database::getInstance()->exec('VACUUM INTO ' . Database::getInstance()->quote($snapshot));
+                @chmod($snapshot, 0600);
+
+                $name = 'cashupay-backup-' . date('Ymd-His') . '.sqlite';
+                header_remove('Content-Type');
+                header('Content-Type: application/octet-stream');
+                header('Content-Disposition: attachment; filename="' . $name . '"');
+                header('Content-Length: ' . (string)filesize($snapshot));
+                header('X-Content-Type-Options: nosniff');
+                readfile($snapshot);
+                @unlink($snapshot); // it holds spendable proofs; do not leave it lying around
+                exit;
+            } catch (Throwable $e) {
+                http_response_code(500);
+                echo json_encode(['error' => 'Backup failed: ' . $e->getMessage()]);
+            }
             break;
 
         case 'run_background':
@@ -3138,6 +3212,31 @@ $isWp = Urls::isWordPress();
 
             <!-- Settings View (Global) -->
             <div class="view" id="view-settings">
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Wallet backup</div>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-help" style="margin-bottom: 0.75rem;">
+                            The seed phrase restores the wallet's funds. It does <em>not</em> restore
+                            invoices, API keys, webhooks, transfers or settings &mdash; download the
+                            database for that.
+                        </p>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <button class="btn btn-secondary" type="button" id="reveal-seed-btn">Show seed phrase</button>
+                            <button class="btn btn-secondary" type="button" id="download-backup-btn">Download database backup</button>
+                        </div>
+                        <div id="seed-reveal-box" style="display: none; margin-top: 1rem; padding: 1rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px;">
+                            <p style="color: var(--danger); font-size: 0.85rem; margin-bottom: 0.5rem;">
+                                Anyone with these words can spend this store's funds. Write them down
+                                offline and never enter them into another wallet while this store is in use.
+                            </p>
+                            <code id="seed-reveal-text" style="display: block; word-break: break-word; user-select: all; line-height: 1.7;"></code>
+                            <button class="btn btn-secondary" type="button" id="hide-seed-btn" style="margin-top: 0.75rem;">Hide</button>
+                        </div>
+                    </div>
+                </div>
+
                 <?php if (!Urls::isWordPress()): ?>
                 <div class="card">
                     <div class="card-header">
@@ -3689,6 +3788,7 @@ $isWp = Urls::isWordPress();
 
             // Header buttons
             document.getElementById('refresh-btn').addEventListener('click', loadDashboard);
+            initBackupControls();
 
             const runBackgroundBtn = document.getElementById('run-background-btn');
             if (runBackgroundBtn) {
@@ -5196,6 +5296,69 @@ $isWp = Urls::isWordPress();
             localStorage.setItem(STORAGE_PIN, newPin);
             showToast('PIN saved!', 'success');
             closeModal('modal-pin-setup');
+        }
+
+        function initBackupControls() {
+            const revealBtn = document.getElementById('reveal-seed-btn');
+            const hideBtn = document.getElementById('hide-seed-btn');
+            const backupBtn = document.getElementById('download-backup-btn');
+            const box = document.getElementById('seed-reveal-box');
+            const text = document.getElementById('seed-reveal-text');
+
+            if (revealBtn) {
+                revealBtn.addEventListener('click', async () => {
+                    if (!currentStoreId) {
+                        showToast('Select a store first', 'error');
+                        return;
+                    }
+                    const password = prompt('Re-enter your admin password to show the seed phrase:');
+                    if (!password) return;
+
+                    const response = await postWithCsrf(
+                        adminUrl,
+                        `action=reveal_seed&store_id=${encodeURIComponent(currentStoreId)}`
+                        + `&password=${encodeURIComponent(password)}`
+                    );
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) {
+                        showToast(result.error || 'Could not show the seed phrase', 'error');
+                        return;
+                    }
+                    text.textContent = result.seedPhrase;
+                    box.style.display = 'block';
+                });
+            }
+
+            if (hideBtn) {
+                hideBtn.addEventListener('click', () => {
+                    text.textContent = '';
+                    box.style.display = 'none';
+                });
+            }
+
+            if (backupBtn) {
+                backupBtn.addEventListener('click', async () => {
+                    const password = prompt('Re-enter your admin password to download a backup:');
+                    if (!password) return;
+
+                    // The response is a file, so post a real form rather than fetch().
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = adminUrl;
+                    form.style.display = 'none';
+                    [['action', 'download_backup'], ['password', password], ['csrf_token', getCsrfToken()]]
+                        .forEach(([name, value]) => {
+                            const field = document.createElement('input');
+                            field.type = 'hidden';
+                            field.name = name;
+                            field.value = value;
+                            form.appendChild(field);
+                        });
+                    document.body.appendChild(form);
+                    form.submit();
+                    form.remove();
+                });
+            }
         }
 
         async function logout() {

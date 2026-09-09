@@ -15,12 +15,12 @@ CashuPayServer runs as a separate PHP app on port 8080. WordPress on port 80.
 docker build -f docker/Dockerfile.standalone -t cashupayserver-standalone .
 
 # Run
-docker run -d --name cashupay-standalone -p 80:80 -p 8080:8080 cashupayserver-standalone
+docker run -d --name cashupay-standalone -p 127.0.0.1:80:80 -p 127.0.0.1:8080:8080 cashupayserver-standalone
 
 # Rebuild fresh
 docker stop cashupay-standalone && docker rm cashupay-standalone
 docker build --no-cache -f docker/Dockerfile.standalone -t cashupayserver-standalone .
-docker run -d --name cashupay-standalone -p 80:80 -p 8080:8080 cashupayserver-standalone
+docker run -d --name cashupay-standalone -p 127.0.0.1:80:80 -p 127.0.0.1:8080:8080 cashupayserver-standalone
 ```
 
 ### Setup
@@ -40,12 +40,12 @@ CashuPayServer runs as a WordPress plugin. Everything on port 80.
 docker build -f docker/Dockerfile.wordpress -t cashupayserver-wordpress .
 
 # Run
-docker run -d --name cashupay-wordpress -p 80:80 cashupayserver-wordpress
+docker run -d --name cashupay-wordpress -p 127.0.0.1:80:80 cashupayserver-wordpress
 
 # Rebuild fresh
 docker stop cashupay-wordpress && docker rm cashupay-wordpress
 docker build --no-cache -f docker/Dockerfile.wordpress -t cashupayserver-wordpress .
-docker run -d --name cashupay-wordpress -p 80:80 cashupayserver-wordpress
+docker run -d --name cashupay-wordpress -p 127.0.0.1:80:80 cashupayserver-wordpress
 ```
 
 ### Setup
@@ -76,13 +76,13 @@ Data is lost when the container stops. To persist data, mount volumes:
 
 ```bash
 # Standalone: persist both WordPress and CashuPayServer data
-docker run -d --name cashupay-standalone -p 80:80 -p 8080:8080 \
+docker run -d --name cashupay-standalone -p 127.0.0.1:80:80 -p 127.0.0.1:8080:8080 \
   -v wp_data:/var/www/html \
   -v cashupay_data:/opt/cashupayserver/data \
   cashupayserver-standalone
 
 # WordPress plugin: persist WordPress (includes plugin data)
-docker run -d --name cashupay-wordpress -p 80:80 \
+docker run -d --name cashupay-wordpress -p 127.0.0.1:80:80 \
   -v wp_data:/var/www/html \
   cashupayserver-wordpress
 ```

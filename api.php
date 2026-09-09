@@ -5,6 +5,7 @@
  * BTCPay Server Greenfield API compatible endpoints.
  */
 
+require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
