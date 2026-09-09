@@ -1209,7 +1209,7 @@ class Invoice {
 
     /** Recover ambiguous outgoing operations for primary and disabled backup mints. */
     public static function recoverPendingWalletOperations(): array {
-        $result = ['accounts' => 0, 'melts' => 0, 'swaps' => 0, 'errors' => []];
+        $result = ['accounts' => 0, 'melts' => 0, 'swaps' => 0, 'mints' => 0, 'recovered_amount' => 0, 'errors' => []];
         $stores = Database::fetchAll(
             "SELECT id FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL AND wallet_account_id IS NOT NULL"
         );
@@ -1220,11 +1220,26 @@ class Invoice {
                     $wallet = self::getWalletForStore($store['id'], $account['mint_url'], $account['unit']);
                     $melts = $wallet->recoverPendingMelts();
                     $swaps = $wallet->recoverPendingSwaps();
+                    // A mint whose response was lost leaves proofs the mint already
+                    // signed and we never received; nothing used to look for them.
+                    $mints = $wallet->recoverPendingMints();
                     $result['accounts']++;
                     $result['melts'] += (int)($melts['paid'] ?? 0) + (int)($melts['restored'] ?? 0);
                     $result['swaps'] += (int)($swaps['recovered'] ?? 0) + (int)($swaps['released'] ?? 0);
-                    if (!empty($melts['errors']) || !empty($swaps['errors'])) {
-                        $result['errors'][$label] = array_merge($melts['errors'] ?? [], $swaps['errors'] ?? []);
+                    $result['mints'] += (int)($mints['recovered'] ?? 0) + (int)($mints['retired'] ?? 0);
+                    $result['recovered_amount'] += (int)($mints['amount'] ?? 0);
+                    if ((int)($mints['recovered'] ?? 0) > 0) {
+                        error_log(
+                            "CashuPayServer: recovered {$mints['recovered']} unfinished mint(s) "
+                            . "worth {$mints['amount']} for store {$store['id']}"
+                        );
+                    }
+                    if (!empty($melts['errors']) || !empty($swaps['errors']) || !empty($mints['errors'])) {
+                        $result['errors'][$label] = array_merge(
+                            $melts['errors'] ?? [],
+                            $swaps['errors'] ?? [],
+                            $mints['errors'] ?? []
+                        );
                     }
                 } catch (Throwable $e) {
                     $result['errors'][$label] = $e->getMessage();

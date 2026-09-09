@@ -195,8 +195,11 @@ function cashupay_diagnostics(?string $storeId): array {
         'stuckInvoices' => $stuckInvoices,
         'failedWebhookDeliveries' => $failedDeliveries,
         'pendingWalletOperations' => $pendingJournals,
+        // A missing server address only *breaks* something when nothing else is
+        // driving background work. With a real cron job running every minute the
+        // installation is healthy, and shouting "needs attention" at an operator
+        // whose site is fine teaches them to ignore the card.
         'needsAttention' => $stale
-            || $needsBaseUrl
             || $failedDeliveries > 0
             || !empty($stuckInvoices)
             || !empty($pendingTransfers),
@@ -3120,7 +3123,7 @@ $isWp = Urls::isWordPress();
 
                 <div class="card" id="diagnostics-card" style="display: none;">
                     <div class="card-header">
-                        <div class="card-title">Needs attention</div>
+                        <div class="card-title" id="diagnostics-title">Needs attention</div>
                         <button class="btn btn-secondary btn-sm" id="run-background-btn" type="button">Run background tasks now</button>
                     </div>
                     <div id="diagnostics-body"></div>
@@ -4468,7 +4471,7 @@ $isWp = Urls::isWordPress();
             const body = document.getElementById('diagnostics-body');
             if (!card || !body) return;
 
-            if (!diag || !diag.needsAttention) {
+            if (!diag || (!diag.needsAttention && !diag.background?.needsBaseUrl)) {
                 card.style.display = 'none';
                 return;
             }
@@ -4478,13 +4481,18 @@ $isWp = Urls::isWordPress();
             const bg = diag.background || {};
 
             // Name the actual cause before the generic "tasks are stale" line, so an
-            // upgraded install does not just look broken.
+            // upgraded install does not just look broken. Only urgent when nothing else
+            // is running background work: with a cron job the site is healthy and this
+            // is merely a setting worth filling in.
             if (bg.needsBaseUrl) {
-                items.push('This server has no canonical URL configured, so background tasks '
-                    + 'no longer start from page traffic — sending the internal key to a host '
-                    + 'taken from the request would let a forged Host header steal it. '
-                    + 'Settlement, auto-withdrawal and webhook delivery need either a real cron '
-                    + 'job or this setting.');
+                items.push(bg.stale
+                    ? 'This server does not know its own web address, so it cannot run '
+                      + 'background work on its own. Payments will not be marked paid, and '
+                      + 'automatic withdrawals will not happen, until you set it below or '
+                      + 'add the scheduled task shown during setup.'
+                    : 'This server does not know its own web address. Everything is running '
+                      + '(your scheduled task is working), but setting it makes payment links '
+                      + 'and background work more reliable.');
                 if (diag.suggestedBaseUrl) {
                     actions.push({
                         label: `Use ${diag.suggestedBaseUrl}`,
@@ -4504,7 +4512,14 @@ $isWp = Urls::isWordPress();
                     + '. Do not retry it; it will be reconciled automatically.');
             });
             (diag.pendingWalletOperations || []).forEach(op => {
-                items.push(`Wallet operation ${op.type} (${op.id}) has been pending for ${Math.round(op.ageSeconds / 60)} min.`);
+                const age = op.ageSeconds >= 86400
+                    ? `${Math.round(op.ageSeconds / 86400)} day(s)`
+                    : `${Math.round(op.ageSeconds / 60)} minute(s)`;
+                const kind = { mint: 'An incoming payment', melt: 'A withdrawal', swap: 'A token exchange' }[op.type]
+                    || 'An operation';
+                items.push(`${kind} has been unfinished for ${age}. `
+                    + 'CashuPayServer keeps checking with the mint and will finish or retire it '
+                    + 'automatically — no action needed unless this persists for weeks.');
             });
             if (diag.failedWebhookDeliveries > 0) {
                 items.push(`${diag.failedWebhookDeliveries} webhook ${diag.failedWebhookDeliveries === 1 ? 'delivery has' : 'deliveries have'} not been acknowledged by the shop.`);
@@ -4521,6 +4536,11 @@ $isWp = Urls::isWordPress();
                 li.textContent = text; // text node: these strings include server data
                 list.appendChild(li);
             });
+            const title = document.getElementById('diagnostics-title');
+            if (title) {
+                title.textContent = diag.needsAttention ? 'Needs attention' : 'Suggested setting';
+            }
+
             body.appendChild(list);
 
             actions.forEach(action => {
