@@ -3,7 +3,7 @@
  * Plugin Name: CashuPay - Lightning Payments via Cashu
  * Plugin URI: https://github.com/jooray/cashupayserver
  * Description: Accept Lightning payments through a Cashu mint. BTCPay Server API compatible.
- * Version: 0.4.1-alpha
+ * Version: 0.5.0-alpha
  * Requires PHP: 8.1
  * Author: CashuPayServer
  * License: MIT
