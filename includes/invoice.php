@@ -375,12 +375,12 @@ class Invoice {
              WHERE status IN ('New', 'Processing')
              AND quote_id IS NOT NULL
              AND (status = 'Processing' OR expiration_time > ?)
-             AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+             AND (last_polled_at IS NULL OR last_polled_at <= ?)
              ORDER BY
                  CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
                  last_polled_at ASC
              LIMIT ?",
-            [$now, $now, $minInterval, $batchLimit]
+            [$now, $now - $minInterval, $batchLimit]
         );
 
         if (empty($pendingInvoices)) {
@@ -630,8 +630,8 @@ class Invoice {
         if (!$force) {
             $claimed = Database::query(
                 "UPDATE invoices SET last_polled_at = ?
-                 WHERE id = ? AND (last_polled_at IS NULL OR ? - last_polled_at >= ?)",
-                [$now, $invoiceId, $now, self::MIN_POLL_INTERVAL]
+                 WHERE id = ? AND (last_polled_at IS NULL OR last_polled_at <= ?)",
+                [$now, $invoiceId, $now - self::MIN_POLL_INTERVAL]
             )->rowCount();
             if ($claimed === 0) {
                 return; // another request checked this quote moments ago
@@ -785,10 +785,10 @@ class Invoice {
             "SELECT * FROM invoices
              WHERE status IN ('Expired', 'Invalid')
              AND quote_id IS NOT NULL
-             AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+             AND (last_polled_at IS NULL OR last_polled_at <= ?)
              ORDER BY (expiration_time > ?) DESC, last_polled_at ASC
              LIMIT ?",
-            [$now, $minInterval, $now - self::EXPIRY_RECOVERY_GRACE, $batchLimit]
+            [$now - $minInterval, $now - self::EXPIRY_RECOVERY_GRACE, $batchLimit]
         );
 
         // Anything past the frequent window is only re-checked once a day.

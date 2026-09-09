@@ -791,7 +791,22 @@ HTACCESS;
      */
     public static function query(string $sql, array $params = []): PDOStatement {
         $stmt = self::getInstance()->prepare($sql);
-        $stmt->execute($params);
+
+        // Bind by type rather than letting PDO send everything as text. SQLite orders
+        // values by storage class before value — every INTEGER is less than every TEXT —
+        // so a comparison whose left side is an *expression* (no column affinity to
+        // convert the parameter) silently inverts: `6 >= '5'` is false. That broke every
+        // repeat poll of an invoice and stopped payments being marked paid.
+        foreach (array_values($params) as $i => $value) {
+            $type = match (true) {
+                is_int($value), is_bool($value) => PDO::PARAM_INT,
+                is_null($value) => PDO::PARAM_NULL,
+                default => PDO::PARAM_STR,
+            };
+            $stmt->bindValue($i + 1, $value, $type);
+        }
+        $stmt->execute();
+
         return $stmt;
     }
 
