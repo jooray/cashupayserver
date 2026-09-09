@@ -20,6 +20,7 @@ require_once __DIR__ . '/invoice.php';
 require_once __DIR__ . '/lightning_address.php';
 require_once __DIR__ . '/security.php';
 require_once __DIR__ . '/transfer.php';
+require_once __DIR__ . '/payment_request.php';
 require_once __DIR__ . '/webhook_sender.php';
 
 class BackgroundRunner {
@@ -78,6 +79,12 @@ class BackgroundRunner {
             'cleanup_invoices' => fn() => self::cleanupInvoices(),
             'cleanup_pending_ops' => fn() => self::cleanupPendingOperations(),
             'cleanup_webhooks' => fn() => self::cleanupWebhooks(),
+            'cleanup_payment_requests' => function () {
+                // Only unpaid ones: a paid request keeps its stored result so a sender
+                // retrying after a lost response gets the original answer back.
+                $removed = PaymentRequest::cleanup();
+                return $removed > 0 ? "removed {$removed} unpaid requests" : 'none';
+            },
         ];
     }
 

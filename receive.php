@@ -12,6 +12,7 @@ require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
+require_once __DIR__ . '/includes/payment_request.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
@@ -64,11 +65,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ];
     }
 
-    $requestId = $data['id'] ?? null;
+    $requestId = $data['id'] ?? ($_GET['request_id'] ?? null);
     $tokenString = $data['token'] ?? null;
-    // NUT-18 senders POST the payload to the transport target verbatim, so the store
-    // arrives in the query string of the URL we published, not in the body.
+    // NUT-18 senders POST the payload to the transport target verbatim, so the store and
+    // the request id arrive in the query string of the URL we published, not in the body.
     $storeId = $data['store_id'] ?? ($_GET['store_id'] ?? null);
+
+    // A request id makes this a payment *for something*: it fixes the store, amount and
+    // unit at publication time, and a retry after a lost response replays the original
+    // result instead of crediting the same payment twice.
+    $paymentRequest = null;
+    if ($requestId !== null && is_string($requestId)) {
+        $paymentRequest = PaymentRequest::getById($requestId);
+        if ($paymentRequest === null) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Unknown payment request']);
+            exit;
+        }
+
+        $replay = PaymentRequest::storedResult($paymentRequest);
+        if ($replay !== null) {
+            echo json_encode($replay);
+            exit;
+        }
+
+        if (PaymentRequest::isExpired($paymentRequest)) {
+            http_response_code(410);
+            echo json_encode(['error' => 'This payment request has expired']);
+            exit;
+        }
+
+        $storeId = $paymentRequest['store_id'];
+    }
 
     if (!$storeId) {
         http_response_code(400);
@@ -124,21 +152,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $wallet->loadMint();
         $wallet->initFromMnemonic($seed);
 
+        // Check the payment against what was actually requested, before swapping. The
+        // token's own amount is net of nothing yet, so compare on what the sender sent;
+        // underpayment is refused rather than silently credited as a partial payment.
+        if ($paymentRequest !== null) {
+            if (strtolower($paymentRequest['unit']) !== strtolower($unit)) {
+                throw new Exception('This payment request is for a different currency');
+            }
+            if ($parsed->getAmount() < (int)$paymentRequest['amount']) {
+                throw new Exception(
+                    'This token is for ' . $parsed->getAmount() . ' ' . $unit
+                    . ', but the request asks for ' . $paymentRequest['amount'] . ' ' . $unit
+                );
+            }
+        }
+
         // Receive the token
         $proofs = $wallet->receive($tokenString);
         $amount = Wallet::sumProofs($proofs);
 
-        // Log the receipt if we have a request ID
-        if ($requestId) {
-            error_log("Payment received for request $requestId: $amount $unit");
-        }
-
-        echo json_encode([
+        $response = [
             'success' => true,
             'amount' => $amount,
             'unit' => $unit,
-            'proofs_count' => count($proofs)
-        ]);
+            'proofs_count' => count($proofs),
+        ];
+
+        if ($paymentRequest !== null) {
+            $response['id'] = $paymentRequest['id'];
+            // Store the result before returning it: if this write fails the proofs are
+            // already ours, and a retry replaying the stored response is the only way the
+            // sender can tell the difference between "lost response" and "not paid".
+            PaymentRequest::markPaid($paymentRequest, $amount, $response);
+            error_log("CashuPayServer: payment request {$paymentRequest['id']} paid: $amount $unit");
+        }
+
+        echo json_encode($response);
 
     } catch (Throwable $e) {
         // This endpoint is public and its input is a stranger's token. Anything the
@@ -424,16 +473,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     try {
         // Initialize wallet with store's configuration
         // Create payment request with HTTP transport to this endpoint
-        // The sender POSTs straight to this URL, and the handler needs to know which
-        // store's wallet receives the proofs, so the store must be in the target.
+        // Persist the request before publishing it. The row fixes the store, amount and
+        // unit the QR code promised, so the receiving endpoint can check a payment
+        // against what was actually asked for rather than accepting whatever arrives.
+        $stored = PaymentRequest::create($storeId, $amount, $unit, $mintUrl, $memo);
+
+        // The sender POSTs straight to this URL, so it has to carry the request id.
         $receiveUrl = Urls::receive()
             . (str_contains(Urls::receive(), '?') ? '&' : '?')
-            . 'store_id=' . urlencode($storeId);
+            . 'request_id=' . urlencode($stored['id']);
 
         $wallet = new Wallet($mintUrl, $unit);
         $wallet->loadMint();
 
         $pr = $wallet->createHttpPaymentRequest($amount, $receiveUrl, $memo);
+        // Publish our own request id rather than the library's random one, so the id in
+        // the QR is the id this server can resolve.
+        $pr->id = $stored['id'];
         $prString = $pr->serialize();
 
         // Return based on format
@@ -446,6 +502,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'memo' => $pr->memo,
                 'mint' => $mintUrl,
                 'store_id' => $storeId,
+                'expiresAt' => (int)$stored['expires_at'],
                 'request' => $prString
             ]);
             exit;

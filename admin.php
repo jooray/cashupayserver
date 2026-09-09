@@ -31,6 +31,50 @@ function cashupay_public_store(array $store): array {
 }
 
 /**
+ * What a backup mint account still holds, in plain language.
+ *
+ * @return array{reasons: string[]}|null Null when the row is unknown or unreadable
+ */
+function cashupay_backup_mint_holdings(int $backupMintId): ?array {
+    $row = Database::fetchOne('SELECT store_id, mint_url, unit FROM store_mints WHERE id = ?', [$backupMintId]);
+    if (!$row) {
+        return null;
+    }
+    $store = Config::getStore($row['store_id']);
+    if (!$store || empty($store['wallet_account_id'])) {
+        return null;
+    }
+
+    try {
+        $storage = new \Cashu\WalletStorage(
+            Database::getDbPath(),
+            $row['mint_url'],
+            $row['unit'],
+            $store['wallet_account_id']
+        );
+
+        $reasons = [];
+        $balance = $storage->getBalance();
+        if ($balance > 0) {
+            $reasons[] = "{$balance} {$row['unit']} of ecash";
+        }
+        $exported = \Cashu\Wallet::sumProofs($storage->getProofsAsObjects(\Cashu\ProofState::EXPORTED));
+        if ($exported > 0) {
+            $reasons[] = "{$exported} {$row['unit']} in exported tokens nobody has cashed in";
+        }
+        $journals = count($storage->getPendingOperations());
+        if ($journals > 0) {
+            $reasons[] = "{$journals} transfer(s) still in progress";
+        }
+
+        return ['reasons' => $reasons];
+    } catch (Throwable $e) {
+        // Cannot verify: treat as "holds something" rather than silently allowing removal.
+        return ['reasons' => ['funds that could not be checked (' . $e->getMessage() . ')']];
+    }
+}
+
+/**
  * Reasons a store is not safe to delete, in plain language.
  *
  * @return string[] Empty when nothing is outstanding
@@ -932,6 +976,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     && strtolower((string)$updates['mint_unit']) !== strtolower((string)($store['mint_unit'] ?? 'sat'));
                 $confirmStranding = isset($_POST['confirm_stranding']) && $_POST['confirm_stranding'] === '1';
                 $wouldStrand = ($mintChanged || $unitChanged) && Config::isStoreWalletInitialized($storeId);
+
+                // A zero balance does not mean nothing is outstanding. Recovery only
+                // visits the account a store currently points at, so switching away
+                // while a payment may still arrive, a withdrawal is in flight, or an
+                // exported token is unredeemed leaves that work with no owner. Those
+                // are blocked outright rather than offered as a choice: an operator
+                // cannot be expected to weigh "an in-flight melt journal" against a
+                // mint change.
+                if ($mintChanged || $unitChanged) {
+                    $blockers = cashupay_store_deletion_blockers($storeId);
+                    if (!empty($blockers)) {
+                        http_response_code(409);
+                        echo json_encode([
+                            'error' => 'mint_change_blocked',
+                            'blockers' => $blockers,
+                            'message' => 'This store still has payments or transfers in progress: '
+                                . implode('; ', $blockers)
+                                . '. Switching mints now would leave them with nowhere to go. '
+                                . 'Wait until they finish, then try again.',
+                        ]);
+                        break;
+                    }
+                }
 
                 if ($wouldStrand && !$confirmStranding) {
                     $strandedBalance = 0;
@@ -1963,9 +2030,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'remove_backup_mint':
             try {
                 $id = (int)($_POST['id'] ?? 0);
+
+                // Recovery only visits accounts a store currently lists, so removing a
+                // backup mint that still holds anything strands it: the funds stay in the
+                // database but nothing looks for them any more.
+                $held = cashupay_backup_mint_holdings($id);
+                if ($held !== null && !empty($held['reasons'])) {
+                    http_response_code(409);
+                    echo json_encode([
+                        'error' => 'backup_mint_not_empty',
+                        'reasons' => $held['reasons'],
+                        'message' => 'This backup mint still holds ' . implode(' and ', $held['reasons'])
+                            . '. Removing it now would hide that from this store. Withdraw or export it first.',
+                    ]);
+                    break;
+                }
+
                 Config::removeStoreBackupMint($id);
                 echo json_encode(['success' => true]);
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
             }
@@ -5899,7 +5982,14 @@ $isWp = Urls::isWordPress();
             if (!confirm('Remove this backup mint?')) return;
 
             try {
-                await postWithCsrf(adminUrl, `action=remove_backup_mint&id=${mintId}`);
+                // The old code ignored the response, so a refusal looked like a success
+                // and the operator believed a mint holding funds had been removed.
+                const response = await postWithCsrf(adminUrl, `action=remove_backup_mint&id=${mintId}`);
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    alert(result.message || result.error || 'Failed to remove backup mint');
+                    return;
+                }
                 showToast('Backup mint removed', 'success');
                 showStoreDetails(storeId, storeName);
             } catch (e) {
@@ -6131,6 +6221,19 @@ $isWp = Urls::isWordPress();
                 if (confirmStranding) params += '&confirm_stranding=1';
                 const response = await postWithCsrf(adminUrl, params);
                 const result = await response.json().catch(() => ({}));
+
+                // Work in progress is a hard stop, not a choice: the operator cannot
+                // weigh "an in-flight withdrawal" against changing mints, and there is
+                // no safe way to proceed while it is unresolved.
+                if (response.status === 409 && result.error === 'mint_change_blocked') {
+                    const list = (result.blockers || []).map(b => `\u2022 ${b}`).join('\n');
+                    alert('Cannot change the mint yet\n\n'
+                        + 'This store still has payments or transfers in progress:\n\n'
+                        + list
+                        + '\n\nSwitching mints now would leave them with nowhere to go. '
+                        + 'Wait until they finish, then try again.');
+                    return;
+                }
 
                 if (response.status === 409 && result.error === 'mint_change_strands_funds') {
                     // Big warning + offer to export first; proceed only if confirmed.

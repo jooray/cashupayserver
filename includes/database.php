@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 7;
+    private const SCHEMA_VERSION = 8;
 
     /** Set when ensureCurrentSchema() failed, so callers can tell "broken" from "new". */
     private static ?string $migrationError = null;
@@ -400,6 +400,23 @@ HTACCESS;
         );
 
         -- Indexes for performance
+        CREATE TABLE IF NOT EXISTS payment_requests (
+            id TEXT PRIMARY KEY,
+            store_id TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            unit TEXT NOT NULL,
+            mint_url TEXT NOT NULL,
+            memo TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            received_amount INTEGER,
+            received_at INTEGER,
+            result TEXT,
+            expires_at INTEGER NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_payment_requests_store ON payment_requests(store_id, created_at);
         CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status, created_at);
         CREATE INDEX IF NOT EXISTS idx_invoices_store ON invoices(store_id);
         CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
@@ -519,6 +536,28 @@ HTACCESS;
                 $pdo->exec('CREATE INDEX IF NOT EXISTS idx_transfers_status ON transfers(status, created_at)');
                 self::migrateExportedProofs($pdo);
                 $pdo->exec('PRAGMA user_version = 7');
+            }
+            if ($version < 8) {
+                // NUT-18 payment requests become real records: a receipt has to be bound
+                // to the amount, unit and store that were actually requested, and a lost
+                // response has to have something to return on retry.
+                $pdo->exec("CREATE TABLE IF NOT EXISTS payment_requests (
+                    id TEXT PRIMARY KEY,
+                    store_id TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    unit TEXT NOT NULL,
+                    mint_url TEXT NOT NULL,
+                    memo TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    received_amount INTEGER,
+                    received_at INTEGER,
+                    result TEXT,
+                    expires_at INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
+                )");
+                $pdo->exec("CREATE INDEX IF NOT EXISTS idx_payment_requests_store ON payment_requests(store_id, created_at)");
+                $pdo->exec('PRAGMA user_version = 8');
             }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()
