@@ -38,8 +38,17 @@ function handleCreateInvoice(array $auth, array $params, array $body): void {
     }
 
     $metadata = $body['metadata'] ?? null;
-    if ($metadata !== null && (!is_array($metadata) || strlen((string)json_encode($metadata)) > 16384)) {
-        errorResponse('validation-error', 'Metadata must be an object of at most 16 KiB');
+    if ($metadata !== null) {
+        if (is_string($metadata)) {
+            $decoded = json_decode($metadata, true);
+            if (!is_array($decoded)) {
+                errorResponse('validation-error', 'Metadata must be an object');
+            }
+            $metadata = $decoded;
+        }
+        if (!is_array($metadata) || strlen((string)json_encode($metadata)) > 16384) {
+            errorResponse('validation-error', 'Metadata must be an object of at most 16 KiB');
+        }
     }
 
     $checkout = $body['checkout'] ?? null;
@@ -141,7 +150,16 @@ function handleUpdateInvoiceStatus(array $auth, array $params, array $body): voi
         errorResponse('validation-error', 'Can only invalidate New or Processing invoices');
     }
 
-    Invoice::updateStatus($invoiceId, 'Invalid');
+    // Conditional: another worker may have settled this invoice between the read above
+    // and here. Reporting success then would tell the shop an order was cancelled while
+    // its payment was in fact received.
+    if (!Invoice::updateStatus($invoiceId, 'Invalid', null, ['New', 'Processing'])) {
+        $current = Invoice::getById($invoiceId);
+        errorResponse(
+            'validation-error',
+            'Invoice is now ' . ($current['status'] ?? 'unknown') . ' and can no longer be invalidated'
+        );
+    }
 
     $invoice = Invoice::getById($invoiceId);
     jsonResponse(Invoice::formatForApi($invoice));

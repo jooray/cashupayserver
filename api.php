@@ -222,8 +222,13 @@ function requirePermission(array $auth, string $permission): void {
  */
 function handleServerInfo(): void {
     jsonResponse([
-        // BTCPay clients read this; report our real version, not a placeholder.
-        'version' => CASHUPAY_VERSION,
+        // This field is read as *BTCPay's* version: clients gate features on it with
+        // version comparisons, and a plugin that requires a minimum BTCPay version will
+        // refuse to talk to a server reporting "0.4.1-alpha". So it stays a
+        // BTCPay-compatible number — the value the official WooCommerce plugin has been
+        // tested against — and CashuPayServer's own version gets its own field.
+        'version' => BTCPAY_COMPAT_VERSION,
+        'cashuPayServerVersion' => CASHUPAY_VERSION,
         'serverTime' => time(),
         'supportedPaymentMethods' => ['BTC-LightningNetwork'],
         // Greenfield clients check these before deciding a server is usable.

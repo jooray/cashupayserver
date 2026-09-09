@@ -882,6 +882,32 @@ class Invoice {
     }
 
     /**
+     * Value sitting in tokens this store handed out that nobody has redeemed yet.
+     *
+     * Shown next to the balance so the money is visibly accounted for. Without it, an
+     * operator upgrading from a version that counted exported tokens as spendable simply
+     * sees their balance drop and assumes funds were lost.
+     */
+    public static function getExportedBalance(string $storeId): int {
+        $store = Config::getStore($storeId);
+        if (!$store || empty($store['mint_url'])) {
+            return 0;
+        }
+
+        $total = 0;
+        foreach (Config::getStoreWalletAccounts($storeId) as $account) {
+            $storage = new WalletStorage(
+                Database::getDbPath(),
+                $account['mint_url'],
+                $account['unit'],
+                $store['wallet_account_id']
+            );
+            $total += \Cashu\Wallet::sumProofs($storage->getProofsAsObjects(ProofState::EXPORTED));
+        }
+        return $total;
+    }
+
+    /**
      * Mark proofs as handed to a third party (exported token, donation).
      *
      * Distinct from PENDING on purpose: the mint reporting an exported proof UNSPENT

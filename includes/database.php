@@ -109,22 +109,80 @@ class Database {
             self::createDataDirectory($dir);
         }
 
+        // Whether this call is creating the database, decided before opening it.
+        $creating = !file_exists(self::getDbPath());
+
         $pdo = new PDO('sqlite:' . self::getDbPath());
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         $pdo->exec('PRAGMA foreign_keys = ON');
         $pdo->exec('PRAGMA journal_mode = WAL');
-        $pdo->exec('PRAGMA busy_timeout = 5000'); // Wait up to 5 seconds for locks
+        // The wallet library keeps its own handle to this same file, so the two
+        // connections serialize their writes. 15s absorbs a slow mint round-trip held
+        // inside the other connection's transaction; at 5s ordinary contention surfaced
+        // to the operator as "database is locked".
+        $pdo->exec('PRAGMA busy_timeout = 15000');
+
+        if ($creating) {
+            // Created with the process umask, commonly 0644 — world-readable spend
+            // credentials on shared hosting. Only at creation: a mode the operator
+            // widened later (a deploy user and the web-server user sharing this file)
+            // is a deliberate choice we must not undo on every request.
+            self::restrictDatabaseModes();
+        }
 
         return $pdo;
+    }
+
+    /** Remove group/other access from a freshly created database and its sidecars. */
+    private static function restrictDatabaseModes(): void {
+        $dbPath = self::getDbPath();
+        foreach ([$dbPath, $dbPath . '-wal', $dbPath . '-shm'] as $file) {
+            if (!is_file($file)) {
+                continue;
+            }
+            $mode = @fileperms($file);
+            if ($mode === false || ($mode & 0077) === 0) {
+                continue;
+            }
+            @chmod($file, $mode & 0777 & ~0077);
+        }
+    }
+
+    /**
+     * Effective permissions of the database and its WAL sidecars.
+     *
+     * Surfaced during setup and in the dashboard: the sidecars hold recently written
+     * proofs, so a rule that protects only the main file protects nothing.
+     *
+     * @return array<int, array{path: string, mode: string, exposed: bool}>
+     */
+    public static function inspectStoragePermissions(): array {
+        $dbPath = self::getDbPath();
+        $result = [];
+        foreach ([$dbPath, $dbPath . '-wal', $dbPath . '-shm', self::getDataDir()] as $file) {
+            if (!file_exists($file)) {
+                continue;
+            }
+            $mode = @fileperms($file);
+            if ($mode === false) {
+                continue;
+            }
+            $result[] = [
+                'path' => $file,
+                'mode' => substr(sprintf('%o', $mode), -4),
+                'exposed' => ($mode & 0007) !== 0, // world access is never intended
+            ];
+        }
+        return $result;
     }
 
     /**
      * Create data directory with .htaccess protection
      */
     private static function createDataDirectory(string $dir): void {
-        // Create directory
-        if (!mkdir($dir, 0750, true)) {
+        // 0700: the directory holds spendable ecash and the seed phrases that derive it.
+        if (!mkdir($dir, 0700, true)) {
             throw new Exception("Failed to create data directory: $dir");
         }
 

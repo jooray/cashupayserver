@@ -10,6 +10,16 @@ require_once __DIR__ . '/database.php';
 // Version
 define('CASHUPAY_VERSION', '0.4.1-alpha');
 
+/**
+ * The BTCPay Server version reported to Greenfield clients.
+ *
+ * E-commerce plugins treat /server/info `version` as BTCPay's version and gate features
+ * on it, so it must look like a BTCPay release rather than ours. Bump it only after
+ * testing the clients that care; CashuPayServer's own version travels alongside it as
+ * `cashuPayServerVersion`.
+ */
+define('BTCPAY_COMPAT_VERSION', '1.0.0');
+
 // Donation settings for supporting CashuPayServer development
 define('CASHUPAY_DONATION_PERCENT', 1); // 1% donation
 define('CASHUPAY_DONATION_SINK_URL', 'https://cypherpunk.today/donation-sink/donation-sink.php');

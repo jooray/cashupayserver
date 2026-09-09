@@ -304,6 +304,7 @@ if (isset($_GET['api'])) {
             $balance = 0;
             $swapFee = 0;
             $exportAvailable = 0;
+            $exportedBalance = 0;
             $mintUnit = Config::getStoreMintUnit($storeId);
 
             // Dashboard uses LOCAL balance (no mint contact) for fast loading
@@ -316,6 +317,7 @@ if (isset($_GET['api'])) {
                 // User can click "Refresh" to contact mint and verify proof states
                 $balance = Invoice::getBalance($storeId);
                 $balanceCached = true;
+                $exportedBalance = Invoice::getExportedBalance($storeId);
 
                 // When using offline balance, set exportAvailable = balance
                 // This allows Max button to work even without mint contact
@@ -370,6 +372,7 @@ if (isset($_GET['api'])) {
                 'exportAvailable' => $exportAvailable,
                 'mintUnit' => $mintUnit,
                 'balanceCached' => $balanceCached,
+                'exportedBalance' => $exportedBalance,
                 'invoices' => array_map([Invoice::class, 'formatForApi'], $recentInvoices),
                 'transfers' => array_map([Transfer::class, 'formatForApi'], $recentTransfers),
                 'stores' => $stores,
@@ -4136,6 +4139,27 @@ $isWp = Urls::isWordPress();
                 document.getElementById('balance-amount').textContent =
                     formatAmount(dashboardData.balance ?? 0, mintUnit);
                 document.getElementById('balance-unit').textContent = unitLabel;
+
+                // Money handed out as tokens is not spendable, but it is not lost either.
+                // Say so on the balance card: an operator upgrading from a version that
+                // counted exported tokens as available otherwise just sees the number
+                // drop and assumes something went wrong.
+                let exportedNote = document.getElementById('exported-balance-note');
+                if (!exportedNote) {
+                    exportedNote = document.createElement('div');
+                    exportedNote.id = 'exported-balance-note';
+                    exportedNote.style.cssText = 'margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-secondary);';
+                    document.querySelector('.balance-label')?.parentNode?.appendChild(exportedNote);
+                }
+                const exported = dashboardData.exportedBalance ?? 0;
+                if (exported > 0) {
+                    exportedNote.textContent =
+                        `Plus ${formatAmount(exported, mintUnit)} ${unitLabel} in tokens you exported `
+                        + 'that nobody has cashed in yet. It is still yours — see Transfers.';
+                    exportedNote.style.display = '';
+                } else {
+                    exportedNote.style.display = 'none';
+                }
 
                 // Show mint status warning if unreachable
                 const balanceLabel = document.querySelector('.balance-label');

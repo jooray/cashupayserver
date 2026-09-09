@@ -50,12 +50,13 @@ if (!Database::isInitialized()) {
     Database::initialize();
 }
 
-// Ownership of a fresh standalone installation must be proved out of band. Until setup
-// completes, `setup.php` is reachable by anyone who can reach the server, and CSRF only
-// proves the visitor owns the browser session they were just handed.
+// Until setup completes, this page is reachable by anyone who can reach the server, and
+// CSRF only proves the visitor owns the session they were just handed. The first browser
+// to arrive claims the installation automatically (no extra step for the merchant); any
+// other browser has to present the recovery code from the data directory.
 $setupTokenRequired = !$setupComplete && !$isWordPressSetup && !Setup::ownershipVerified();
-if ($setupTokenRequired && $_SERVER['REQUEST_METHOD'] === 'POST'
-    && Setup::verifyOwnershipToken((string)($_POST['setup_token'] ?? ''))) {
+if ($setupTokenRequired
+    && Setup::verifyOwnershipToken((string)($_POST['setup_token'] ?? $_GET['setup_token'] ?? ''))) {
     $setupTokenRequired = false;
 }
 
@@ -78,7 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($error === null && $setupTokenRequired) {
         http_response_code(403);
-        $error = 'Enter the installation token to continue.';
+        $error = 'Enter the recovery code to continue setting up this server.';
     }
 
     if ($error !== null) {
@@ -973,17 +974,29 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <?php endif; ?>
 
                     <?php if ($setupTokenRequired): ?>
-                    <h3 style="margin: 1.5rem 0 0.75rem;">Prove you own this installation</h3>
-                    <p style="margin-bottom: 1rem; color: #a0aec0; font-size: 0.9rem;">
-                        Until setup finishes, this page is reachable by anyone who can reach your
-                        server &mdash; and whoever completes it chooses the admin password, the mint
-                        and the wallet seed. Open this file over SFTP or your hosting file manager
-                        and paste its contents below:
+                    <div class="error" style="margin: 1.5rem 0;">
+                        <strong>Someone has already started setting up this server</strong>
+                        <p style="margin-top: 0.5rem;">
+                            Setup was started from a different browser. If that was you &mdash; on
+                            another device, or before you cleared your cookies &mdash; just finish
+                            there and you can ignore this page.
+                        </p>
+                        <p style="margin-top: 0.5rem;">
+                            <strong>If it wasn't you, act now.</strong> Whoever finishes setup chooses
+                            the password and the wallet, so they would control your payments. Take
+                            back control by entering the recovery code below.
+                        </p>
+                    </div>
+
+                    <h3 style="margin: 1.5rem 0 0.5rem;">Where to find your recovery code</h3>
+                    <p style="margin-bottom: 0.75rem; color: #a0aec0; font-size: 0.9rem;">
+                        It is in a small text file on your server. Open your hosting file manager
+                        (or the FTP program you used to upload CashuPayServer) and open this file:
                     </p>
-                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem; margin-bottom: 1rem;"><?= htmlspecialchars(Setup::tokenPath()) ?></code>
+                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; margin-bottom: 0.75rem;"><?= htmlspecialchars(Setup::tokenPathForDisplay()) ?></code>
                     <p style="color: #718096; font-size: 0.8rem; margin-bottom: 1rem;">
-                        Alternatively, define <code>CASHUPAY_SETUP_TOKEN</code> in
-                        <code>includes/config.local.php</code>. The token stops working once setup completes.
+                        It contains one short line, like <code>A1B2C3D4E5</code>. Copy it in below.
+                        The code stops working as soon as setup is finished.
                     </p>
                     <?php endif; ?>
 
@@ -994,10 +1007,10 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                         <?php if ($setupTokenRequired): ?>
                         <div class="form-group" style="margin: 1.5rem 0;">
-                            <label for="setup_token">Installation token</label>
+                            <label for="setup_token">Recovery code</label>
                             <input type="text" id="setup_token" name="setup_token" required
-                                   autocomplete="off" spellcheck="false"
-                                   placeholder="paste the contents of setup-token.txt">
+                                   autocomplete="off" spellcheck="false" autocapitalize="characters"
+                                   placeholder="A1B2C3D4E5">
                         </div>
                         <?php endif; ?>
 
