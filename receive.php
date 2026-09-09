@@ -132,9 +132,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  */
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $storeId = $_GET['store_id'] ?? null;
-    $amount = (int)($_GET['amount'] ?? 0);
+    $rawAmount = trim((string)($_GET['amount'] ?? ''));
     $memo = $_GET['memo'] ?? null;
     $format = $_GET['format'] ?? 'html';
+    // Resolved once the store's unit is known: the form asks fiat stores for major units
+    // ("1.23"), and an integer cast turned that into 1 cent.
+    $amount = 0;
 
     // Get list of stores for selector
     $stores = Database::fetchAll("SELECT id, name, mint_unit FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL ORDER BY created_at DESC");
@@ -276,6 +279,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     // Get store config
     $mintUrl = Config::getStoreMintUrl($storeId);
     $unit = Config::getStoreMintUnit($storeId);
+
+    // Parse the amount in the store's own unit. A fiat store's form asks for major units
+    // ("1.23"), which must become 123 cents, not 1.
+    if ($rawAmount !== '') {
+        try {
+            $amount = \Cashu\Unit::fromCode($unit)->parse($rawAmount);
+        } catch (Throwable $e) {
+            $amount = 0;
+        }
+    }
 
     if ($amount <= 0) {
         // Show form if no amount specified

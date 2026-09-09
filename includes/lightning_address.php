@@ -179,6 +179,9 @@ class LightningAddress {
                 $balance = Invoice::getBalance($store['id']);
                 $mintUnit = strtolower($store['mint_unit'] ?? 'sat');
                 $isFiatMint = !in_array($mintUnit, ['sat', 'sats', 'msat']);
+                // msat is not sats. Treating an msat balance as sats requested a
+                // Lightning payment 1000x the merchant's actual balance.
+                $isMsatMint = $mintUnit === 'msat';
 
                 if ($balance >= $store['auto_melt_threshold']) {
                     // Calculate donation (in mint units)
@@ -198,6 +201,9 @@ class LightningAddress {
                             $store['price_provider_primary'] ?? null,
                             $store['price_provider_secondary'] ?? null
                         );
+                    } elseif ($isMsatMint) {
+                        // Round down: we must not ask for more than the balance covers.
+                        $meltAmountSats = intdiv($meltAmountInMintUnit, 1000);
                     } else {
                         $meltAmountSats = $meltAmountInMintUnit;
                     }

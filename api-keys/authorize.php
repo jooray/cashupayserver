@@ -82,7 +82,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
         // Get selected store and permissions
         $selectedStoreId = $_POST['store_id'] ?? null;
-        $approvedPermissions = $_POST['approved_permissions'] ?? $permissions;
+
+        // Unchecking every box omits the field entirely, and falling back to the
+        // requested list then granted exactly what the operator just declined. An
+        // explicitly empty approval is a refusal, and each value must be one the
+        // request actually asked for.
+        $approvedRaw = $_POST['approved_permissions'] ?? null;
+        if ($approvedRaw === null) {
+            $approvedPermissions = [];
+        } elseif (!is_array($approvedRaw)) {
+            $approvedPermissions = [];
+        } else {
+            $approvedPermissions = array_values(array_intersect(
+                array_filter($approvedRaw, 'is_string'),
+                $permissions
+            ));
+        }
+
+        // A request that asked for nothing legitimately pairs with no permissions; a
+        // request that asked for some and got none is a refusal, not a full grant.
+        if (!empty($permissions) && empty($approvedPermissions)) {
+            $error = 'Select at least one permission to grant, or cancel the pairing.';
+            $selectedStoreId = null;
+        }
 
         // The API key is POSTed to `redirect` on success — only allow safe http(s)
         // destinations so a malicious pairing link cannot exfiltrate the key to any host

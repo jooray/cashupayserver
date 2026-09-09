@@ -24,7 +24,16 @@ class Invoice {
      * late payment (a quote paid in the last seconds, or while cron was down). A quote
      * paid within this window is still minted and settled instead of being lost.
      */
-    const EXPIRY_RECOVERY_GRACE = 259200; // 72h
+    const EXPIRY_RECOVERY_GRACE = 259200; // 72h of frequent re-checks
+
+    /**
+     * After the frequent window, unresolved quotes are still re-checked, just rarely.
+     *
+     * A quote paid before expiry while cron was down is mintable long afterwards; giving
+     * up at 72 hours made those sats unrecoverable for no reason. Checks continue daily
+     * until the mint gives a terminal answer.
+     */
+    const EXPIRY_RECOVERY_SLOW_INTERVAL = 86400; // 24h
 
     /** Cooldown before a stuck 'Processing' invoice may be re-claimed for minting. */
     const MINT_RETRY_COOLDOWN = 120; // 2 min
@@ -225,7 +234,28 @@ class Invoice {
     /**
      * Update invoice status
      */
-    public static function updateStatus(string $invoiceId, string $status, ?string $additionalStatus = null): void {
+    /**
+     * Statuses that may still change. Anything else is a claim we have already resolved.
+     */
+    private const MUTABLE_STATUSES = ['New', 'Processing'];
+
+    /**
+     * Move an invoice to a new status and emit its event in the same transaction.
+     *
+     * The transition is conditional on the invoice still being in a mutable state.
+     * Without that, an expiry poller that read `New` before another worker minted and
+     * settled would afterwards write `Expired` over the settlement — funds held, order
+     * shown as expired, and a contradictory event already delivered.
+     *
+     * @param string[]|null $expectedStatuses Apply only from one of these (default: any mutable one)
+     * @return bool True when this call performed the transition
+     */
+    public static function updateStatus(
+        string $invoiceId,
+        string $status,
+        ?string $additionalStatus = null,
+        ?array $expectedStatuses = null
+    ): bool {
         $updates = ['status' => $status];
 
         if ($additionalStatus !== null) {
@@ -240,14 +270,28 @@ class Invoice {
             default => null,
         };
 
+        $expected = $expectedStatuses ?? self::MUTABLE_STATUSES;
+        $placeholders = implode(',', array_fill(0, count($expected), '?'));
+
         Database::beginTransaction();
         try {
-            Database::update('invoices', $updates, 'id = ?', [$invoiceId]);
+            $set = implode(' = ?, ', array_keys($updates)) . ' = ?';
+            $stmt = Database::query(
+                "UPDATE invoices SET {$set} WHERE id = ? AND status IN ({$placeholders})",
+                array_merge(array_values($updates), [$invoiceId], $expected)
+            );
+            if ($stmt->rowCount() === 0) {
+                // Someone else already moved it somewhere this call may not overwrite.
+                Database::commit();
+                return false;
+            }
+
             $invoice = self::getById($invoiceId);
             if ($eventType && $invoice) {
                 WebhookSender::fireEvent($invoice['store_id'], $eventType, $invoice);
             }
             Database::commit();
+            return true;
         } catch (Throwable $e) {
             Database::rollback();
             throw $e;
@@ -264,22 +308,28 @@ class Invoice {
         // Capture which invoices are transitioning so we can fire InvoiceExpired for each
         // (the bulk UPDATE alone emitted no webhook, so shops never learned of expiry).
         // See FABLE-CASHUPAYSERVER-AUDIT (C-WH-1).
-        $expiring = Database::fetchAll(
-            "SELECT id, store_id FROM invoices WHERE status = 'New' AND expiration_time < ?",
-            [$now]
-        );
-
         Database::beginTransaction();
         try {
-            $stmt = Database::query(
-                "UPDATE invoices SET status = 'Expired'
-                 WHERE status = 'New' AND expiration_time < ?",
+            // Select and update inside the transaction, and update exactly the ids
+            // selected: reading first and then updating a broader predicate expired
+            // invoices that were never in the list (and skipped events for them).
+            $expiring = Database::fetchAll(
+                "SELECT id, store_id FROM invoices WHERE status = 'New' AND expiration_time < ?",
                 [$now]
             );
-            $count = $stmt->rowCount();
+
+            $count = 0;
             foreach ($expiring as $row) {
+                $stmt = Database::query(
+                    "UPDATE invoices SET status = 'Expired' WHERE id = ? AND status = 'New'",
+                    [$row['id']]
+                );
+                if ($stmt->rowCount() === 0) {
+                    continue; // settled by another worker in the meantime
+                }
+                $count++;
                 $invoice = self::getById($row['id']);
-                if ($invoice && $invoice['status'] === 'Expired') {
+                if ($invoice) {
                     WebhookSender::fireEvent($row['store_id'], 'InvoiceExpired', $invoice);
                 }
             }
@@ -670,16 +720,29 @@ class Invoice {
         $recovered = [];
         $now = time();
 
+        // Two windows, not a cutoff: frequent checks right after expiry, then a daily
+        // re-check that continues indefinitely. A quote paid before expiry while cron was
+        // down stays mintable, so abandoning it after 72 hours simply lost the money.
+        // `Invalid` is included: a merchant cancelling an order does not revoke the
+        // Lightning invoice a customer may still pay.
         $rows = Database::fetchAll(
             "SELECT * FROM invoices
-             WHERE status = 'Expired'
+             WHERE status IN ('Expired', 'Invalid')
              AND quote_id IS NOT NULL
-             AND expiration_time > ?
              AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
-             ORDER BY last_polled_at ASC
+             ORDER BY (expiration_time > ?) DESC, last_polled_at ASC
              LIMIT ?",
-            [$now - self::EXPIRY_RECOVERY_GRACE, $now, $minInterval, $batchLimit]
+            [$now, $minInterval, $now - self::EXPIRY_RECOVERY_GRACE, $batchLimit]
         );
+
+        // Anything past the frequent window is only re-checked once a day.
+        $rows = array_values(array_filter($rows, function (array $invoice) use ($now): bool {
+            if ((int)$invoice['expiration_time'] > $now - self::EXPIRY_RECOVERY_GRACE) {
+                return true;
+            }
+            $last = (int)($invoice['last_polled_at'] ?? 0);
+            return $now - $last >= self::EXPIRY_RECOVERY_SLOW_INTERVAL;
+        }));
 
         foreach ($rows as $invoice) {
             try {
@@ -700,8 +763,13 @@ class Invoice {
                     if (self::getById($invoice['id'])['status'] === 'Settled') {
                         $recovered[] = $invoice['id'];
                     }
+                } elseif ($quoteStatus->expiry !== null && $quoteStatus->expiry < $now
+                          && !$quoteStatus->isPaid()) {
+                    // The mint's own quote has expired unpaid: this claim is finally
+                    // resolved and the row may be cleaned up by age from now on.
+                    Database::update('invoices', ['quote_id' => null], 'id = ?', [$invoice['id']]);
                 }
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 error_log("CashuPayServer: Error recovering expired invoice {$invoice['id']}: " . $e->getMessage());
             }
         }

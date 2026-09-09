@@ -176,6 +176,15 @@ class KrakenProvider implements PriceProvider {
  * Exchange rates manager
  */
 class ExchangeRates {
+    /**
+     * Working precision for intermediate conversions.
+     *
+     * Wide enough that a chain of divisions and multiplications rounds only once, at the
+     * end, in toSmallestUnit(). At 8 decimals the BTC intermediate truncated first and
+     * the final ceiling had nothing left to round up.
+     */
+    private const SCALE = 16;
+
     private const CACHE_TTL = 300; // 5 minutes
     private const STALE_TTL = 3600; // 1 hour (warn if older)
 
@@ -294,7 +303,7 @@ class ExchangeRates {
 
         // Apply exchange fee (positive = user pays more)
         if ($exchangeFeePercent != 0) {
-            $mintAmount = bcmul($mintAmount, (string)(1 + $exchangeFeePercent / 100), 8);
+            $mintAmount = bcmul($mintAmount, (string)(1 + $exchangeFeePercent / 100), self::SCALE);
         }
 
         // Round UP to the mint's smallest unit for invoice pricing, so rounding never
@@ -314,11 +323,11 @@ class ExchangeRates {
         }
 
         if ($currency === 'SAT' || $currency === 'SATS') {
-            return bcdiv($amount, '100000000', 8);
+            return bcdiv($amount, '100000000', self::SCALE);
         }
 
         if ($currency === 'MSAT') {
-            return bcdiv($amount, '100000000000', 11);
+            return bcdiv($amount, '100000000000', self::SCALE);
         }
 
         // Fiat currency - divide by BTC price
@@ -327,7 +336,7 @@ class ExchangeRates {
             throw new Exception("Cannot get exchange rate for {$currency}");
         }
 
-        return bcdiv($amount, (string)$btcPrice, 8);
+        return bcdiv($amount, (string)$btcPrice, self::SCALE);
     }
 
     /**
@@ -341,11 +350,11 @@ class ExchangeRates {
         }
 
         if ($currency === 'SAT' || $currency === 'SATS') {
-            return bcmul($btcAmount, '100000000', 0);
+            return bcmul($btcAmount, '100000000', self::SCALE);
         }
 
         if ($currency === 'MSAT') {
-            return bcmul($btcAmount, '100000000000', 0);
+            return bcmul($btcAmount, '100000000000', self::SCALE);
         }
 
         // Fiat currency - multiply by BTC price
@@ -354,7 +363,7 @@ class ExchangeRates {
             throw new Exception("Cannot get exchange rate for {$currency}");
         }
 
-        return bcmul($btcAmount, (string)$btcPrice, 8);
+        return bcmul($btcAmount, (string)$btcPrice, self::SCALE);
     }
 
     /**
@@ -364,21 +373,35 @@ class ExchangeRates {
         $currency = strtoupper($currency);
 
         if ($currency === 'SAT' || $currency === 'SATS') {
-            return $roundUp ? (int)ceil((float)$amount) : (int)$amount;
+            return self::toInt($amount, $roundUp);
         }
 
         if ($currency === 'MSAT') {
-            return (int)ceil((float)$amount / 1000);
+            // msat IS the smallest unit of an msat mint. Dividing by 1000 here quoted
+            // 1000 msat as 1 msat and made every msat-denominated amount 1000x too small.
+            return self::toInt($amount, $roundUp);
         }
 
         if ($currency === 'BTC') {
-            $sats = bcmul($amount, '100000000', 8);
-            return $roundUp ? (int)ceil((float)$sats) : (int)$sats;
+            return self::toInt(bcmul($amount, '100000000', self::SCALE), $roundUp);
         }
 
         // Fiat currencies - convert to cents (multiply by 100)
-        $cents = bcmul($amount, '100', 8);
-        return $roundUp ? (int)ceil((float)$cents) : (int)$cents;
+        return self::toInt(bcmul($amount, '100', self::SCALE), $roundUp);
+    }
+
+    /**
+     * Convert a decimal string to an integer, truncating or rounding up.
+     *
+     * Everything stays in BCMath: casting through float lost precision on large amounts
+     * and `ceil((float)$s)` disagreed with the exact value near a boundary.
+     */
+    private static function toInt(string $amount, bool $roundUp): int {
+        $truncated = bcadd($amount, '0', 0);
+        if ($roundUp && bccomp($amount, $truncated, self::SCALE) > 0) {
+            $truncated = bcadd($truncated, '1', 0);
+        }
+        return (int)$truncated;
     }
 
     /**

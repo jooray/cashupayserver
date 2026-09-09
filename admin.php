@@ -639,14 +639,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                // Check for duplicate seed phrase (critical - same seed with different units = lost funds)
+                // Check for duplicate seed phrase (critical - same seed with different units = lost funds).
+                // Compare canonically: the wallet normalizes case and whitespace before
+                // deriving, so "abandon  ABOUT" and "abandon about" are the same wallet
+                // even though the raw strings differ. Two stores on one seed do not have
+                // separate funds — only separate bookkeeping for the same money.
                 if ($seedPhrase) {
-                    $existing = Database::fetchOne(
-                        "SELECT id, name FROM stores WHERE seed_phrase = ? AND id != ?",
-                        [$seedPhrase, $existingStore['id'] ?? '']
-                    );
-                    if ($existing) {
-                        throw new Exception("This seed phrase is already used by store: {$existing['name']}. Using the same seed for multiple stores can result in lost funds.");
+                    require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
+                    $canonical = static fn(string $seed): string =>
+                        preg_replace('/\s+/', ' ', mb_strtolower(trim($seed)));
+                    $candidate = $canonical($seedPhrase);
+                    foreach (Database::fetchAll("SELECT id, name, seed_phrase FROM stores WHERE seed_phrase IS NOT NULL") as $row) {
+                        if ($row['id'] === ($existingStore['id'] ?? '')) {
+                            continue;
+                        }
+                        if (hash_equals($canonical((string)$row['seed_phrase']), $candidate)) {
+                            throw new Exception("This seed phrase is already used by store: {$row['name']}. Using the same seed for multiple stores can result in lost funds.");
+                        }
                     }
                 }
 
@@ -802,11 +811,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Seed phrase required');
                 }
 
-                // Check for duplicate seed phrase
-                $existing = Database::fetchOne(
-                    "SELECT id, name FROM stores WHERE seed_phrase = ?",
-                    [$seedPhrase]
-                );
+                // Check for duplicate seed phrase, canonically (see create_store).
+                $canonical = static fn(string $seed): string =>
+                    preg_replace('/\s+/', ' ', mb_strtolower(trim($seed)));
+                $candidate = $canonical($seedPhrase);
+                $existing = null;
+                foreach (Database::fetchAll("SELECT id, name, seed_phrase FROM stores WHERE seed_phrase IS NOT NULL") as $row) {
+                    if (hash_equals($canonical((string)$row['seed_phrase']), $candidate)) {
+                        $existing = $row;
+                        break;
+                    }
+                }
 
                 if ($existing) {
                     echo json_encode([
@@ -909,11 +924,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $response = $client->post('checkstate', ['Ys' => $Ys]);
 
 
+                // "All spent" is a claim that the recipient redeemed the token, so it must
+                // be proved, not assumed. Starting from true meant an empty or truncated
+                // states array confirmed redemption of proofs the mint never answered for.
+                $states = $response['states'] ?? null;
+                if (!is_array($states) || count($states) !== count($Ys)) {
+                    throw new Exception('Mint returned an incomplete proof state response');
+                }
+
                 $allSpent = true;
-                foreach ($response['states'] ?? [] as $state) {
-                    // Normalize case - mints may return lowercase states
-                    $mintState = strtoupper($state['state'] ?? ProofState::UNSPENT);
-                    if ($mintState !== ProofState::SPENT) {
+                foreach ($states as $i => $state) {
+                    if (isset($state['Y']) && !hash_equals($Ys[$i], strtolower((string)$state['Y']))) {
+                        throw new Exception('Mint returned proof states in an unexpected order');
+                    }
+                    if (strtoupper($state['state'] ?? '') !== ProofState::SPENT) {
                         $allSpent = false;
                         break;
                     }
@@ -925,7 +949,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 echo json_encode(['spent' => $allSpent, 'source' => 'mint']);
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 error_log("CashuPayServer: check_proofs_spent error: " . $e->getMessage());
                 echo json_encode(['spent' => false, 'error' => $e->getMessage()]);
             }
@@ -5199,8 +5223,13 @@ $isWp = Urls::isWordPress();
         }
 
         function getUnitsFromMintInfo(info) {
-            if (!info?.nuts?.[4]?.methods) return [];
-            return [...new Set(info.nuts[4].methods.map(m => m.unit).filter(Boolean))];
+            if (!Array.isArray(info?.nuts?.[4]?.methods)) return [];
+            // Mint-supplied; keep only short plain strings so a "unit" cannot smuggle markup.
+            return [...new Set(
+                info.nuts[4].methods
+                    .map(m => m?.unit)
+                    .filter(u => typeof u === 'string' && /^[a-z0-9]{1,16}$/i.test(u))
+            )];
         }
 
         function renderDiscoveryStars(rating) {
@@ -5217,54 +5246,93 @@ $isWp = Urls::isWordPress();
             renderDiscoveredMints();
         }
 
+        /**
+         * Build the discovery list as DOM nodes.
+         *
+         * Every field here comes from a mint announced over Nostr — a stranger — so none
+         * of it may reach innerHTML. Uppercasing a unit does not sanitize it (numeric
+         * character references and attribute-less handlers survive the transform), and
+         * an escaped URL inside an inline onclick is still inside a JavaScript string.
+         */
         function renderDiscoveredMints() {
             const listEl = document.getElementById('mint-discovery-list');
             const filterUnit = document.getElementById('mint-discovery-unit-filter').value;
             const searchText = document.getElementById('mint-discovery-search').value.toLowerCase().trim();
 
             let filtered = discoveredMints.filter(m => {
+                if (typeof m?.url !== 'string') return false;
                 if (filterUnit) {
                     const units = getUnitsFromMintInfo(m.info);
                     if (!units.includes(filterUnit)) return false;
                 }
                 if (searchText) {
-                    const name = (m.info?.name || '').toLowerCase();
+                    const name = (typeof m.info?.name === 'string' ? m.info.name : '').toLowerCase();
                     const url = m.url.toLowerCase();
                     if (!name.includes(searchText) && !url.includes(searchText)) return false;
                 }
                 return true;
             });
 
+            listEl.textContent = '';
+
             if (filtered.length === 0) {
-                listEl.innerHTML = '<p style="color: var(--text-secondary); text-align: center; padding: 2rem;">No mints found</p>';
+                const empty = document.createElement('p');
+                empty.style.cssText = 'color: var(--text-secondary); text-align: center; padding: 2rem;';
+                empty.textContent = 'No mints found';
+                listEl.appendChild(empty);
                 return;
             }
 
-            listEl.innerHTML = filtered.map(m => {
-                const name = m.info?.name || 'Unknown Mint';
+            filtered.forEach(m => {
+                const name = typeof m.info?.name === 'string' ? m.info.name : 'Unknown Mint';
                 const isOnline = !m.error && m.info;
                 const units = getUnitsFromMintInfo(m.info);
 
-                return `
-                    <div style="background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <div style="font-size: 0.9rem;">
-                                ${renderDiscoveryStars(m.averageRating)}
-                                <span style="color: var(--text-secondary); font-size: 0.8rem; margin-left: 0.25rem;">(${m.reviewsCount || 0})</span>
-                            </div>
-                            <span style="font-size: 0.8rem; color: ${isOnline ? 'var(--accent)' : 'var(--danger)'};">
-                                ${isOnline ? '\u25CF Online' : '\u25CB Offline'}
-                            </span>
-                        </div>
-                        <h4 style="margin: 0 0 0.25rem 0; font-size: 1rem;">${escapeHtml(name)}</h4>
-                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin: 0 0 0.5rem 0; word-break: break-all;">${escapeHtml(m.url)}</p>
-                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;">
-                            ${units.length > 0 ? units.map(u => u.toUpperCase()).join(' \u2022 ') : 'Unknown units'}
-                        </div>
-                        <button type="button" class="btn btn-full" style="font-size: 0.85rem;" data-mint-url="${escapeHtml(m.url)}" onclick="selectDiscoveredMint(this.dataset.mintUrl)">Select</button>
-                    </div>
-                `;
-            }).join('');
+                const card = document.createElement('div');
+                card.style.cssText = 'background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;';
+
+                const header = document.createElement('div');
+                header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;';
+
+                const rating = document.createElement('div');
+                rating.style.fontSize = '0.9rem';
+                // Stars are our own markup with a numeric rating, never mint-supplied text.
+                rating.innerHTML = renderDiscoveryStars(m.averageRating);
+                const reviews = document.createElement('span');
+                reviews.style.cssText = 'color: var(--text-secondary); font-size: 0.8rem; margin-left: 0.25rem;';
+                reviews.textContent = `(${Number(m.reviewsCount) || 0})`;
+                rating.appendChild(reviews);
+
+                const status = document.createElement('span');
+                status.style.cssText = `font-size: 0.8rem; color: ${isOnline ? 'var(--accent)' : 'var(--danger)'};`;
+                status.textContent = isOnline ? '\u25CF Online' : '\u25CB Offline';
+
+                header.append(rating, status);
+
+                const title = document.createElement('h4');
+                title.style.cssText = 'margin: 0 0 0.25rem 0; font-size: 1rem;';
+                title.textContent = name;
+
+                const url = document.createElement('p');
+                url.style.cssText = 'font-size: 0.8rem; color: var(--text-secondary); margin: 0 0 0.5rem 0; word-break: break-all;';
+                url.textContent = m.url;
+
+                const unitsEl = document.createElement('div');
+                unitsEl.style.cssText = 'font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.75rem;';
+                unitsEl.textContent = units.length > 0
+                    ? units.map(u => String(u).toUpperCase()).join(' \u2022 ')
+                    : 'Unknown units';
+
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'btn btn-full';
+                button.style.fontSize = '0.85rem';
+                button.textContent = 'Select';
+                button.addEventListener('click', () => selectDiscoveredMint(m.url));
+
+                card.append(header, title, url, unitsEl, button);
+                listEl.appendChild(card);
+            });
 
             const statusEl = document.getElementById('mint-discovery-status');
             statusEl.textContent = `Showing ${filtered.length} of ${discoveredMints.length} mints`;
@@ -5336,13 +5404,15 @@ $isWp = Urls::isWordPress();
                                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem; background: rgba(0,0,0,0.2); border-radius: 4px; margin-bottom: 0.5rem;">
                                         <div style="flex: 1; overflow: hidden;">
                                             <code style="font-size: 0.7rem; word-break: break-all;">${escapeHtml(m.mint_url)}</code>
-                                            <span style="opacity: 0.6; font-size: 0.75rem; margin-left: 0.5rem;">(${m.unit.toUpperCase()})</span>
+                                            <span style="opacity: 0.6; font-size: 0.75rem; margin-left: 0.5rem;">(${escapeHtml(String(m.unit || '').toUpperCase())})</span>
                                         </div>
                                         <div style="display: flex; gap: 0.35rem; margin-left: 0.5rem;">
                                             ${Number(m.enabled) === 1 ? '' : `<button class="btn btn-secondary" style="padding: 0.2rem 0.4rem; font-size: 0.7rem;"
-                                                    onclick="retryBackupMint(${m.id}, '${storeId}', '${escapeHtml(storeName)}')">Retry recovery</button>`}
+                                                    data-mint-id="${Number(m.id)}" data-store-id="${escapeHtml(storeId)}" data-store-name="${escapeHtml(storeName)}"
+                                                    onclick="retryBackupMint(Number(this.dataset.mintId), this.dataset.storeId, this.dataset.storeName)">Retry recovery</button>`}
                                             <button class="btn btn-danger" style="padding: 0.2rem 0.4rem; font-size: 0.7rem;"
-                                                    onclick="removeBackupMint(${m.id}, '${storeId}', '${escapeHtml(storeName)}')">Remove</button>
+                                                    data-mint-id="${Number(m.id)}" data-store-id="${escapeHtml(storeId)}" data-store-name="${escapeHtml(storeName)}"
+                                                    onclick="removeBackupMint(Number(this.dataset.mintId), this.dataset.storeId, this.dataset.storeName)">Remove</button>
                                         </div>
                                     </div>
                                 `).join('')

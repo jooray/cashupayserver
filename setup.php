@@ -1400,7 +1400,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     CashuPayServer is ready to accept payments.
                 </div>
 
-                <?php $cronUrl = rtrim(Config::getBaseUrl(), '/') . '/cron.php?key=' . htmlspecialchars(Config::get('cron_key', '')); ?>
+                <?php
+                // Urls::cron() honours the configured URL mode (and WordPress routing);
+                // hardcoding /cron.php produced a command that 404s in router mode.
+                $cronEndpoint = Urls::cron();
+                $cronKeyValue = (string)Config::get('cron_key', '');
+                ?>
                 <div style="background: rgba(247, 147, 26, 0.08); border: 1px solid rgba(247, 147, 26, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
                     <p style="margin-bottom: 0.5rem; font-weight: 600; color: #f7931a;">Recommended: set up a cron job</p>
                     <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 0.5rem;">
@@ -1409,8 +1414,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         even with no traffic. In your hosting control panel (cPanel &rarr; Cron Jobs),
                         add a job that runs every minute:
                     </p>
-                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem;">* * * * * curl -s "<?= $cronUrl ?>" &gt;/dev/null 2&gt;&amp;1</code>
-                    <p style="color: #718096; font-size: 0.8rem; margin-top: 0.5rem;">Keep this URL private — it authorizes background processing.</p>
+                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem;">* * * * * curl -s -H "X-Cron-Key: <?= htmlspecialchars($cronKeyValue) ?>" "<?= htmlspecialchars($cronEndpoint) ?>" &gt;/dev/null 2&gt;&amp;1</code>
+                    <p style="color: #718096; font-size: 0.8rem; margin-top: 0.5rem;">
+                        The key travels in a header, not the URL, so it does not end up in web-server
+                        or CDN access logs. If your host cannot send headers, the query form
+                        <code>?key=…</code> also works — keep that URL private.
+                    </p>
                 </div>
 
                 <?php
@@ -1825,8 +1834,11 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
     }
 
     function getUnitsFromInfo(info) {
-        if (!info || !info.nuts || !info.nuts[4] || !info.nuts[4].methods) return [];
-        var units = info.nuts[4].methods.map(function(m) { return m.unit; }).filter(Boolean);
+        if (!info || !info.nuts || !info.nuts[4] || !Array.isArray(info.nuts[4].methods)) return [];
+        // Mint-supplied; keep only short plain strings so a "unit" cannot smuggle markup.
+        var units = info.nuts[4].methods
+            .map(function(m) { return m && m.unit; })
+            .filter(function(u) { return typeof u === 'string' && /^[a-z0-9]{1,16}$/i.test(u); });
         return units.filter(function(u, i, arr) { return arr.indexOf(u) === i; });
     }
 
@@ -1851,51 +1863,97 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
         renderMintList();
     }
 
+    /**
+     * Build the discovery list as DOM nodes.
+     *
+     * Every field here is announced by a stranger over Nostr, so none of it may reach
+     * innerHTML. Uppercasing a unit does not sanitize it, and an HTML-escaped URL
+     * interpolated into an inline onclick is still inside a JavaScript string.
+     */
     function renderMintList() {
         var listEl = document.getElementById('mint-discovery-list');
         var filterUnit = document.getElementById('mint-unit-filter').value;
         var searchText = document.getElementById('mint-search').value.toLowerCase().trim();
 
         var filtered = discoveredMints.filter(function(m) {
+            if (!m || typeof m.url !== 'string') return false;
             if (filterUnit) {
                 var units = getUnitsFromInfo(m.info);
                 if (units.indexOf(filterUnit) === -1) return false;
             }
             if (searchText) {
-                var name = (m.info && m.info.name) ? m.info.name.toLowerCase() : '';
+                var name = (m.info && typeof m.info.name === 'string') ? m.info.name.toLowerCase() : '';
                 var url = m.url.toLowerCase();
                 if (name.indexOf(searchText) === -1 && url.indexOf(searchText) === -1) return false;
             }
             return true;
         });
 
+        listEl.textContent = '';
+
         if (filtered.length === 0) {
-            listEl.innerHTML = '<p style="color: #a0aec0; text-align: center; padding: 2rem;">No mints found matching your criteria</p>';
+            var empty = document.createElement('p');
+            empty.style.cssText = 'color: #a0aec0; text-align: center; padding: 2rem;';
+            empty.textContent = 'No mints found matching your criteria';
+            listEl.appendChild(empty);
             return;
         }
 
-        var html = filtered.map(function(m) {
-            var name = (m.info && m.info.name) ? m.info.name : 'Unknown Mint';
+        filtered.forEach(function(m) {
+            var name = (m.info && typeof m.info.name === 'string') ? m.info.name : 'Unknown Mint';
             var isOnline = !m.error && m.info;
             var units = getUnitsFromInfo(m.info);
 
-            return '<div style="background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;">' +
-                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">' +
-                    '<div style="font-size: 0.9rem;">' + renderStars(m.averageRating) +
-                        ' <span style="color: #a0aec0; font-size: 0.8rem;">(' + (m.reviewsCount || 0) + ' reviews)</span></div>' +
-                    '<span style="font-size: 0.8rem; color: ' + (isOnline ? '#48bb78' : '#e53e3e') + ';">' +
-                        (isOnline ? '\u25CF Online' : '\u25CB Offline') + '</span>' +
-                '</div>' +
-                '<h4 style="margin: 0 0 0.25rem 0; font-size: 1rem;">' + escapeHtml(name) + '</h4>' +
-                '<p style="font-size: 0.8rem; color: #a0aec0; margin: 0 0 0.5rem 0; word-break: break-all;">' + escapeHtml(m.url) + '</p>' +
-                '<div style="font-size: 0.8rem; color: #a0aec0; margin-bottom: 0.75rem;">' +
-                    (units.length > 0 ? units.map(function(u) { return u.toUpperCase(); }).join(' \u2022 ') : 'Unknown units') +
-                '</div>' +
-                '<button type="button" class="btn" style="width: 100%;" onclick="selectDiscoveredMint(\'' + escapeHtml(m.url) + '\')">Select</button>' +
-            '</div>';
-        }).join('');
+            var card = document.createElement('div');
+            card.style.cssText = 'background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 1rem; margin-bottom: 0.75rem;';
 
-        listEl.innerHTML = html;
+            var header = document.createElement('div');
+            header.style.cssText = 'display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;';
+
+            var rating = document.createElement('div');
+            rating.style.fontSize = '0.9rem';
+            // Our own markup around a numeric rating, never mint-supplied text.
+            rating.innerHTML = renderStars(m.averageRating);
+            var reviews = document.createElement('span');
+            reviews.style.cssText = 'color: #a0aec0; font-size: 0.8rem;';
+            reviews.textContent = ' (' + (Number(m.reviewsCount) || 0) + ' reviews)';
+            rating.appendChild(reviews);
+
+            var status = document.createElement('span');
+            status.style.cssText = 'font-size: 0.8rem; color: ' + (isOnline ? '#48bb78' : '#e53e3e') + ';';
+            status.textContent = isOnline ? '\u25CF Online' : '\u25CB Offline';
+
+            header.appendChild(rating);
+            header.appendChild(status);
+
+            var title = document.createElement('h4');
+            title.style.cssText = 'margin: 0 0 0.25rem 0; font-size: 1rem;';
+            title.textContent = name;
+
+            var url = document.createElement('p');
+            url.style.cssText = 'font-size: 0.8rem; color: #a0aec0; margin: 0 0 0.5rem 0; word-break: break-all;';
+            url.textContent = m.url;
+
+            var unitsEl = document.createElement('div');
+            unitsEl.style.cssText = 'font-size: 0.8rem; color: #a0aec0; margin-bottom: 0.75rem;';
+            unitsEl.textContent = units.length > 0
+                ? units.map(function(u) { return String(u).toUpperCase(); }).join(' \u2022 ')
+                : 'Unknown units';
+
+            var button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'btn';
+            button.style.width = '100%';
+            button.textContent = 'Select';
+            button.addEventListener('click', function() { selectDiscoveredMint(m.url); });
+
+            card.appendChild(header);
+            card.appendChild(title);
+            card.appendChild(url);
+            card.appendChild(unitsEl);
+            card.appendChild(button);
+            listEl.appendChild(card);
+        });
 
         var statusEl = document.getElementById('mint-discovery-status');
         statusEl.textContent = 'Showing ' + filtered.length + ' of ' + discoveredMints.length + ' mints';
