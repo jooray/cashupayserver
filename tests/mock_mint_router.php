@@ -23,6 +23,14 @@
 
 declare(strict_types=1);
 
+// This is a disposable mock mint served by PHP's built-in server during tests. It must
+// never run under a real web server, where it would be an unauthenticated endpoint that
+// mints tokens on request.
+if (!in_array(PHP_SAPI, ['cli', 'cli-server'], true)) {
+    http_response_code(403);
+    exit('This script runs under the test server only.');
+}
+
 require_once dirname(__DIR__) . '/cashu-wallet-php/CashuWallet.php';
 
 use Cashu\BigInt;

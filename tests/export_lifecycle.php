@@ -12,6 +12,13 @@
 
 declare(strict_types=1);
 
+// Tests create disposable databases and spawn helper processes; they must never be
+// reachable over HTTP, even on a deployment that serves this directory.
+if (PHP_SAPI !== 'cli') {
+    http_response_code(403);
+    exit('This script runs from the command line only.');
+}
+
 $dataDir = sys_get_temp_dir() . '/cashupay-export-' . bin2hex(random_bytes(8));
 mkdir($dataDir, 0700, true);
 define('CASHUPAY_DATA_DIR', $dataDir);

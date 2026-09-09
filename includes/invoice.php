@@ -86,6 +86,13 @@ class Invoice {
             $settled = self::markSettledOnce($invoiceId);
             if ($settled) {
                 $invoice = self::getById($invoiceId);
+                // BTCPay emits the payment-received and processing events before settling,
+                // and clients may subscribe to only those. Recovery paths reached
+                // settlement without them, so a shop listening for InvoiceProcessing
+                // never heard about a recovered payment. The outbox deduplicates on a
+                // logical key, so emitting them here is a no-op when they already went out.
+                WebhookSender::fireEvent($invoice['store_id'], 'InvoiceReceivedPayment', $invoice);
+                WebhookSender::fireEvent($invoice['store_id'], 'InvoiceProcessing', $invoice);
                 WebhookSender::fireEvent($invoice['store_id'], 'InvoiceSettled', $invoice);
             }
             Database::commit();

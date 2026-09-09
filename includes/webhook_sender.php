@@ -21,6 +21,13 @@ class WebhookSender {
      */
     private const MAX_ATTEMPTS = 80;
     private const MAX_BACKOFF = 3600;
+
+    /**
+     * How long past expiry a payment is still watched for, in the sense BTCPay's
+     * `monitoringExpiration` means. Mirrors Invoice::EXPIRY_RECOVERY_GRACE; kept local
+     * because invoice.php requires this file, so the dependency cannot go the other way.
+     */
+    private const MONITORING_GRACE = 259200;
     private const TIMEOUT = 10;
     private const LEASE_SECONDS = 30;
 
@@ -66,6 +73,17 @@ class WebhookSender {
             'invoiceId' => $invoiceData['id'],
         ];
 
+        // Flags the official event schemas define. The WooCommerce gateway reads
+        // afterExpiration/partiallyPaid/manuallyMarked/overPaid directly and emits PHP
+        // warnings (and, for InvoiceInvalid, a wrong "manually marked" note) when they
+        // are missing. CashuPayServer never partially pays, never overpays a Lightning
+        // invoice, and only marks Invalid manually.
+        $expiration = (int)($invoiceData['expiration_time'] ?? 0);
+        $payload['afterExpiration'] = $expiration > 0 && $now > $expiration;
+        $payload['partiallyPaid'] = false;
+        $payload['overPaid'] = false;
+        $payload['manuallyMarked'] = $eventType === 'InvoiceInvalid';
+
         // M5: Add full invoice data (BTCPay compatible)
         $payload['invoice'] = [
             'id' => $invoiceData['id'],
@@ -77,6 +95,12 @@ class WebhookSender {
             'amountSats' => $invoiceData['amount_sats'] ?? null,
             'createdTime' => $invoiceData['created_at'],
             'expirationTime' => $invoiceData['expiration_time'],
+            // Fields BTCPay clients read off the invoice object.
+            'monitoringExpiration' => $expiration + self::MONITORING_GRACE,
+            'archived' => false,
+            'availableStatusesForManualMarking' => in_array($invoiceData['status'], ['New', 'Processing'], true)
+                ? ['Invalid']
+                : [],
         ];
 
         // Add invoice metadata for certain events

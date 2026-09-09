@@ -48,7 +48,11 @@
     RewriteRule ^scripts/ - [F,L]
     RewriteRule ^docker/ - [F,L]
     RewriteRule ^docs/ - [F,L]
-    RewriteRule ^\.claude/ - [F,L]
+    RewriteRule ^tests/ - [F,L]
+    RewriteRule ^wordpress/ - [F,L]
+    # The FilesMatch above only covers dotted *basenames*, so a request for
+    # .git/config was allowed through as a normal path.
+    RewriteRule (^|/)\.(git|svn|hg|env|claude)(/|$) - [F,L]
 </IfModule>
 
 # PHP settings (if allowed)

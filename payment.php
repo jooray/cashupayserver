@@ -461,12 +461,21 @@ $baseUrl = Config::getBaseUrl();
                 <?php endif; ?>
             </div>
 
-            <div id="payment-expired" class="<?= $invoice['status'] === 'Expired' ? '' : 'hidden' ?>">
-                <div class="status-badge expired">
-                    Invoice Expired
+            <?php
+            // An invoice loaded directly (or reloaded) in Invalid state had no card at
+            // all: the pending card was hidden, polling exited, and the customer saw an
+            // empty page. Invalid is a cancellation, not an expiry, so say so.
+            $isClosed = in_array($invoice['status'], ['Expired', 'Invalid'], true);
+            $isInvalid = $invoice['status'] === 'Invalid';
+            ?>
+            <div id="payment-expired" class="<?= $isClosed ? '' : 'hidden' ?>">
+                <div class="status-badge expired" id="closed-badge">
+                    <?= $isInvalid ? 'Payment Cancelled' : 'Invoice Expired' ?>
                 </div>
-                <p style="color: var(--text-secondary); margin-top: 1rem;">
-                    This invoice has expired. Please request a new one.
+                <p style="color: var(--text-secondary); margin-top: 1rem;" id="closed-message">
+                    <?= $isInvalid
+                        ? 'This payment was cancelled and can no longer be paid. Please start a new order.'
+                        : 'This invoice has expired. Please request a new one.' ?>
                 </p>
                 <?php if ($redirectUrl): ?>
                     <a href="<?= htmlspecialchars($redirectUrl) ?>" class="btn" style="margin-top: 1.5rem;">
@@ -602,6 +611,13 @@ $baseUrl = Config::getBaseUrl();
                     break;
                 case 'Expired':
                 case 'Invalid':
+                    document.getElementById('closed-badge').textContent =
+                        status === 'Invalid' ? 'Payment Cancelled' : 'Invoice Expired';
+                    document.getElementById('closed-message').textContent =
+                        status === 'Invalid'
+                            ? 'This payment was cancelled and can no longer be paid. Please start a new order.'
+                            : 'This invoice has expired. Please request a new one.';
+                    document.getElementById('payment-pending').classList.add('hidden');
                     document.getElementById('payment-expired').classList.remove('hidden');
                     break;
             }

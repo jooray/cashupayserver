@@ -30,6 +30,65 @@ function cashupay_public_store(array $store): array {
 }
 
 /**
+ * Reasons a store is not safe to delete, in plain language.
+ *
+ * @return string[] Empty when nothing is outstanding
+ */
+function cashupay_store_deletion_blockers(string $storeId): array {
+    $blockers = [];
+
+    $unresolvedQuotes = (int)(Database::fetchOne(
+        "SELECT COUNT(*) AS cnt FROM invoices
+         WHERE store_id = ? AND quote_id IS NOT NULL AND status IN ('New', 'Processing', 'Expired', 'Invalid')",
+        [$storeId]
+    )['cnt'] ?? 0);
+    if ($unresolvedQuotes > 0) {
+        $blockers[] = "{$unresolvedQuotes} invoice(s) whose Lightning quote may still be paid";
+    }
+
+    $pendingTransfers = (int)(Database::fetchOne(
+        "SELECT COUNT(*) AS cnt FROM transfers WHERE store_id = ? AND status = ?",
+        [$storeId, Transfer::STATUS_PENDING]
+    )['cnt'] ?? 0);
+    if ($pendingTransfers > 0) {
+        $blockers[] = "{$pendingTransfers} outgoing transfer(s) with an unknown outcome";
+    }
+
+    $undelivered = (int)(Database::fetchOne(
+        "SELECT COUNT(*) AS cnt FROM webhook_deliveries d
+         JOIN webhooks w ON w.id = d.webhook_id
+         WHERE w.store_id = ? AND d.delivered_at IS NULL",
+        [$storeId]
+    )['cnt'] ?? 0);
+    if ($undelivered > 0) {
+        $blockers[] = "{$undelivered} webhook event(s) the shop has not acknowledged";
+    }
+
+    if (Config::isStoreConfigured($storeId)) {
+        try {
+            $wallet = Invoice::getWalletInstance($storeId);
+            $storage = $wallet->getStorage();
+
+            $journals = count($storage->getPendingOperations());
+            if ($journals > 0) {
+                $blockers[] = "{$journals} in-flight wallet operation(s)";
+            }
+
+            $exported = \Cashu\Wallet::sumProofs(
+                $storage->getProofsAsObjects(\Cashu\ProofState::EXPORTED)
+            );
+            if ($exported > 0) {
+                $blockers[] = "{$exported} in exported tokens that have not been redeemed";
+            }
+        } catch (Throwable $e) {
+            $blockers[] = 'the wallet could not be inspected (' . $e->getMessage() . ')';
+        }
+    }
+
+    return $blockers;
+}
+
+/**
  * Everything an operator needs to answer "why wasn't my order marked paid?".
  *
  * Background heartbeat, unresolved outgoing operations, stuck invoices and failed
@@ -864,6 +923,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
                 break;
             }
+
+            // Spendable balance is not the whole story. A zero-balance store can still
+            // own a paid-but-unminted quote, an in-flight melt or swap, exported tokens
+            // nobody has redeemed, or a settlement webhook that never reached the shop —
+            // and deletion cascades all of it away.
+            $blockers = cashupay_store_deletion_blockers($storeId);
+            if (!empty($blockers) && !$confirmLoss) {
+                http_response_code(409);
+                echo json_encode([
+                    'error' => 'store_has_unresolved_state',
+                    'blockers' => $blockers,
+                    'message' => 'This store has unresolved work: ' . implode('; ', $blockers)
+                        . '. Let it settle first, or confirm you accept losing it.'
+                ]);
+                break;
+            }
+
             Database::delete('stores', 'id = ?', [$storeId]);
             echo json_encode(['success' => true]);
             break;
@@ -2756,6 +2832,10 @@ $isWp = Urls::isWordPress();
         <div class="lock-logo">&#9889;</div>
         <div class="lock-title">CashuPayServer</div>
         <div class="lock-subtitle">Enter PIN to unlock</div>
+        <div class="lock-note" id="lock-note" style="display: none; max-width: 22rem; margin: 0 auto 1rem; font-size: 0.8rem; color: #a0aec0; line-height: 1.5;">
+            The PIN hides this screen on your device. It does not end your server session —
+            use <strong>Log out</strong> for that.
+        </div>
 
         <div class="pin-dots" id="pin-dots">
             <div class="pin-dot"></div>
@@ -3400,6 +3480,11 @@ $isWp = Urls::isWordPress();
 
         // Server URL for e-commerce integration
         let serverUrl = <?= json_encode(Urls::server()) ?>;
+
+        // WordPress logout destination, when running as a plugin.
+        const WP_LOGOUT_URL = <?= json_encode(
+            Urls::isWordPress() && function_exists('wp_logout_url') ? wp_logout_url() : null
+        ) ?>;
 
         // Helper for POST requests with CSRF token
         async function postWithCsrf(url, body) {
@@ -5118,12 +5203,24 @@ $isWp = Urls::isWordPress();
 
             localStorage.removeItem(STORAGE_AUTH);
             localStorage.removeItem(STORAGE_PIN);
+
+            // In WordPress mode the standalone PHP session is not what authorizes the
+            // operator — the WP cookie is. Destroying only the former let a reload walk
+            // straight back in, so finish the job through WordPress's own logout.
+            if (WP_LOGOUT_URL) {
+                window.location.href = WP_LOGOUT_URL;
+                return;
+            }
             location.reload();
         }
 
         function lock() {
             document.getElementById('app').classList.remove('visible');
             document.getElementById('lock-screen').classList.remove('hidden');
+            // Be honest about what this does: the server session is still open, so
+            // another tab or a direct request can still perform admin operations.
+            const note = document.getElementById('lock-note');
+            if (note) note.style.display = 'block';
             pin = '';
             document.querySelectorAll('.pin-dot').forEach(dot => {
                 dot.classList.remove('filled');
@@ -5635,6 +5732,20 @@ $isWp = Urls::isWordPress();
                 if (confirm(`This store still holds ${bal} (mint units) of ecash.\n\nDeleting it destroys the seed phrase and those funds are lost forever.\n\nOnly continue if you have backed up the seed phrase. Delete anyway?`)) {
                     return deleteStore(storeId, true);
                 }
+                return;
+            }
+
+            // Zero balance is not the same as nothing outstanding.
+            if (response.status === 409 && result.error === 'store_has_unresolved_state') {
+                const list = (result.blockers || []).map(b => `\u2022 ${b}`).join('\n');
+                if (confirm(`This store has unresolved work:\n\n${list}\n\nDeleting it discards all of it, including any payment that arrives later. Delete anyway?`)) {
+                    return deleteStore(storeId, true);
+                }
+                return;
+            }
+
+            if (!response.ok) {
+                showToast(result.message || result.error || 'Failed to delete store', 'error');
                 return;
             }
 
