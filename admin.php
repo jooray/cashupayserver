@@ -170,6 +170,24 @@ function cashupay_diagnostics(?string $storeId): array {
         $storeId ? [time() - 3600, $storeId] : [time() - 3600]
     );
 
+    // Accounts the last background run could not reach. A backup mint being down is not
+    // an emergency, but a *primary* mint being down means payments stop — and until now
+    // neither appeared anywhere the operator would look.
+    $unreachableAccounts = [];
+    $lastResult = BackgroundRunner::status()['lastResult'] ?? null;
+    foreach (($lastResult['tasks']['recover_wallet_operations']['errors'] ?? []) as $label => $error) {
+        $parts = explode('|', (string)$label);
+        $mint = $parts[1] ?? $label;
+        $isPrimary = false;
+        foreach (Database::fetchAll('SELECT mint_url FROM stores WHERE mint_url IS NOT NULL') as $row) {
+            if (rtrim((string)$row['mint_url'], '/') === rtrim($mint, '/')) {
+                $isPrimary = true;
+                break;
+            }
+        }
+        $unreachableAccounts[] = ['mint' => $mint, 'primary' => $isPrimary];
+    }
+
     $failedDeliveries = (int)(Database::fetchOne(
         "SELECT COUNT(*) AS cnt FROM webhook_deliveries
          WHERE delivered_at IS NULL AND attempts > 0"
@@ -200,6 +218,7 @@ function cashupay_diagnostics(?string $storeId): array {
         'stuckInvoices' => $stuckInvoices,
         'failedWebhookDeliveries' => $failedDeliveries,
         'pendingWalletOperations' => $pendingJournals,
+        'unreachableAccounts' => $unreachableAccounts,
         // A missing server address only *breaks* something when nothing else is
         // driving background work. With a real cron job running every minute the
         // installation is healthy, and shouting "needs attention" at an operator
@@ -207,6 +226,7 @@ function cashupay_diagnostics(?string $storeId): array {
         // An exported token nobody has cashed in yet is normal, not a fault, so it does
         // not raise an alarm on its own — it is listed so the operator can act on it.
         'needsAttention' => $stale
+            || !empty(array_filter($unreachableAccounts, fn($a) => $a['primary']))
             || $failedDeliveries > 0
             || !empty($stuckInvoices)
             || !empty(array_filter(
@@ -874,6 +894,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // "Run now": the same leased runner cron uses, so what an operator triggers
             // here is exactly what a scheduled tick does.
             require_once __DIR__ . '/includes/background_runner.php';
+            // Finish even if the browser goes away: these tasks move money, and an
+            // abandoned run would also leave its lease held until it expires.
+            ignore_user_abort(true);
             @set_time_limit(0);
             echo json_encode(BackgroundRunner::run(20));
             break;
@@ -4062,10 +4085,25 @@ $isWp = Urls::isWordPress();
                     const label = runBackgroundBtn.textContent;
                     runBackgroundBtn.textContent = 'Running…';
                     try {
-                        await postWithCsrf(adminUrl + '?api=run_background', '');
+                        const response = await postWithCsrf(adminUrl + '?api=run_background', '');
+                        if (!response.ok) {
+                            const body = await response.json().catch(() => ({}));
+                            showToast(body.error || `Background tasks failed (HTTP ${response.status})`, 'error');
+                        } else {
+                            showToast('Background tasks finished', 'success');
+                        }
+                    } catch (e) {
+                        // The connection dropped. The server keeps going regardless — the
+                        // handler sets ignore_user_abort — so the work has most likely
+                        // been done; reloading shows what actually happened rather than
+                        // leaving a raw browser error on screen.
+                        showToast('Lost connection while running. Checking what completed…', '');
+                    }
+
+                    try {
                         await loadDashboard();
                     } catch (e) {
-                        alert('Could not run background tasks: ' + e.message);
+                        // Nothing more we can do here; the next refresh will pick it up.
                     } finally {
                         runBackgroundBtn.disabled = false;
                         runBackgroundBtn.textContent = label;
@@ -4713,6 +4751,16 @@ $isWp = Urls::isWordPress();
                     + 'CashuPayServer keeps checking with the mint and will finish or retire it '
                     + 'automatically — no action needed unless this persists for weeks.');
             });
+            (diag.unreachableAccounts || []).forEach(a => {
+                const host = (() => { try { return new URL(a.mint).host; } catch (e) { return a.mint; } })();
+                items.push(a.primary
+                    ? `Your mint (${host}) could not be reached on the last check. `
+                      + 'While it is down, payments cannot be completed and money cannot be '
+                      + 'withdrawn. Nothing is lost — it resumes when the mint is back.'
+                    : `A backup mint (${host}) could not be reached. Nothing is stored there, `
+                      + 'so this is only worth knowing; remove it under Stores if it stays down.');
+            });
+
             if (diag.failedWebhookDeliveries > 0) {
                 items.push(`${diag.failedWebhookDeliveries} webhook ${diag.failedWebhookDeliveries === 1 ? 'delivery has' : 'deliveries have'} not been acknowledged by the shop.`);
             }
