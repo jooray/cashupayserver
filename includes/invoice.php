@@ -951,6 +951,47 @@ class Invoice {
      * @param string[] $secrets
      * @return array<string, string> secret => state, or [] when the mint could not be asked
      */
+    /**
+     * Which of a store's mints actually holds these proofs.
+     *
+     * A token handed out before a mint switch belongs to the mint it was minted on, which
+     * may now be a backup rather than the primary. Assuming the primary asked the wrong
+     * mint about proofs it has never seen — and a mint answers UNSPENT for secrets it does
+     * not know, so the wrong answer looked like a confident one.
+     *
+     * @param string[] $secrets
+     * @return array{mint_url: string, unit: string}
+     */
+    private static function accountHoldingSecrets(string $storeId, array $secrets): array
+    {
+        $store = Config::getStore($storeId);
+        $fallback = [
+            'mint_url' => rtrim((string)($store['mint_url'] ?? ''), '/'),
+            'unit' => strtolower((string)($store['mint_unit'] ?? 'sat')),
+        ];
+        if (!$store || empty($store['wallet_account_id']) || empty($secrets)) {
+            return $fallback;
+        }
+
+        foreach (Config::getStoreWalletAccounts($storeId) as $account) {
+            try {
+                $storage = new WalletStorage(
+                    Database::getDbPath(),
+                    $account['mint_url'],
+                    $account['unit'],
+                    $store['wallet_account_id']
+                );
+                if (count($storage->getProofsBySecretsAsObjects($secrets)) === count($secrets)) {
+                    return ['mint_url' => $account['mint_url'], 'unit' => $account['unit']];
+                }
+            } catch (Throwable $e) {
+                // A backup we cannot open is not a reason to fail the lookup.
+            }
+        }
+
+        return $fallback;
+    }
+
     public static function checkProofStatesBySecrets(string $storeId, array $secrets): array {
         $secrets = array_values(array_filter($secrets, 'strlen'));
         if (empty($secrets)) {
@@ -967,7 +1008,8 @@ class Invoice {
             $Ys[] = bin2hex(\Cashu\Secp256k1::compressPoint(\Cashu\Crypto::hashToCurve($secret)));
         }
 
-        $client = new \Cashu\MintClient($store['mint_url']);
+        $account = self::accountHoldingSecrets($storeId, $secrets);
+        $client = new \Cashu\MintClient($account['mint_url']);
         $response = $client->post('checkstate', ['Ys' => $Ys]);
         $states = $response['states'] ?? null;
         if (!is_array($states) || count($states) !== count($secrets)) {
@@ -1014,7 +1056,8 @@ class Invoice {
             }
         }
 
-        $wallet = self::getWalletInstance($storeId);
+        $account = self::accountHoldingSecrets($storeId, $secrets);
+        $wallet = self::getWalletForStore($storeId, $account['mint_url'], $account['unit']);
         $storage = $wallet->getStorage();
         $proofs = $storage->getProofsBySecretsAsObjects($secrets);
         if (count($proofs) !== count($secrets)) {
@@ -1033,7 +1076,9 @@ class Invoice {
         $helpers = [];
         if ($fee >= $amount) {
             $exclude = array_flip($secrets);
-            foreach (self::getUnspentProofs($storeId) as $candidate) {
+            // Helpers must come from the same mint — ecash from another mint cannot be an
+            // input to this mint's swap.
+            foreach ($storage->getProofsAsObjects(ProofState::UNSPENT) as $candidate) {
                 if (isset($exclude[$candidate->secret])) {
                     continue;
                 }
