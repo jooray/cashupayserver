@@ -352,6 +352,29 @@ class Config {
     }
 
     /**
+     * Is this mint/unit already on the store's backup list?
+     *
+     * Answers the one question that decides whether switching the primary mint can
+     * strand funds: getStoreWalletAccounts() enumerates primary *and* backups, so a
+     * mint that stays on the backup list is still recovered from and reconciled.
+     * Disabled backups count — they hold recovery state too.
+     */
+    public static function isMintRetainedAsBackup(string $storeId, string $mintUrl, string $unit): bool {
+        $mintUrl = rtrim($mintUrl, '/');
+        $unit = strtolower($unit);
+        if ($mintUrl === '') {
+            return false;
+        }
+        foreach (self::getStoreBackupMints($storeId) as $backup) {
+            if (rtrim((string)$backup['mint_url'], '/') === $mintUrl
+                && strtolower((string)$backup['unit']) === $unit) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Get all enabled backup mints for a store and specific unit
      */
     public static function getStoreEnabledMints(string $storeId, string $unit = 'sat'): array {

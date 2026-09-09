@@ -1121,6 +1121,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $unitChanged = array_key_exists('mint_unit', $updates)
                     && strtolower((string)$updates['mint_unit']) !== strtolower((string)($store['mint_unit'] ?? 'sat'));
                 $confirmStranding = isset($_POST['confirm_stranding']) && $_POST['confirm_stranding'] === '1';
+                // Still true when the old mint is kept as a backup: the balance stays
+                // tracked and recoverable, but getUnspentProofs() reads the primary
+                // account only, so it does leave this store's spendable view.
                 $wouldStrand = ($mintChanged || $unitChanged) && Config::isStoreWalletInitialized($storeId);
 
                 // A zero balance does not mean nothing is outstanding. Recovery only
@@ -1130,7 +1133,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // are blocked outright rather than offered as a choice: an operator
                 // cannot be expected to weigh "an in-flight melt journal" against a
                 // mint change.
-                if ($mintChanged || $unitChanged) {
+                // Keeping the outgoing mint as a backup changes everything: recovery
+                // enumerates a store's *configured* accounts, so an account that stays on
+                // the list is still visited, still reconciled, and nothing is orphaned.
+                // The block below exists to prevent stranding, so it should not fire when
+                // stranding is impossible.
+                $currentMint = rtrim((string)($store['mint_url'] ?? ''), '/');
+                $currentUnit = strtolower((string)($store['mint_unit'] ?? 'sat'));
+                $oldMintRetained = Config::isMintRetainedAsBackup($storeId, $currentMint, $currentUnit);
+
+                if (($mintChanged || $unitChanged) && !$oldMintRetained) {
                     $blockers = cashupay_store_deletion_blockers($storeId);
                     if (!empty($blockers)) {
                         http_response_code(409);
@@ -1165,6 +1177,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'message' => 'Changing this store\'s mint or unit will make its current balance invisible and unspendable through this store. Export the balance first, or confirm to change anyway (the funds stay recoverable under "Recover funds from a previous mint").',
                     ]);
                     break;
+                }
+
+                if (($mintChanged || $unitChanged) && $oldMintRetained) {
+                    error_log(
+                        "CashuPayServer: store {$storeId} switched primary mint from {$currentMint}; "
+                        . 'the old mint is retained as a backup so its funds stay tracked'
+                    );
                 }
 
                 // Allow the mint/unit change only when the operator confirmed the
