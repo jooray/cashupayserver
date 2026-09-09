@@ -16,6 +16,9 @@
 
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/config.php';
+// Used by the sync task. cron.php happens to load this first; WP-Cron does not, so
+// without an explicit require sync_proofs fataled on every WordPress run.
+require_once __DIR__ . '/background.php';
 require_once __DIR__ . '/invoice.php';
 require_once __DIR__ . '/lightning_address.php';
 require_once __DIR__ . '/security.php';
@@ -105,7 +108,13 @@ class BackgroundRunner {
         $tasks = self::tasks();
         $names = array_keys($tasks);
         $cursor = (int)Config::get('cron_task_cursor', '0');
-        $health = json_decode((string)Config::get('cron_task_health', '{}'), true) ?: [];
+        // Config::get() already decodes JSON, so this comes back as an array. Decoding
+        // it a second time yielded [] every run and quietly discarded the health of
+        // every task that did not run in this cycle.
+        $health = Config::get('cron_task_health', []);
+        if (!is_array($health)) {
+            $health = [];
+        }
         $count = count($names);
         $ran = 0;
 
@@ -132,9 +141,9 @@ class BackgroundRunner {
             $results['ran'] = $ran;
             $results['durationMs'] = (int)round((microtime(true) - $started) * 1000);
             Config::set('cron_task_cursor', (string)(($cursor + $ran) % $count));
-            Config::set('cron_task_health', json_encode($health));
+            Config::set('cron_task_health', $health);
             Config::set('cron_last_run', (string)time());
-            Config::set('cron_last_result', json_encode($results));
+            Config::set('cron_last_result', $results);
         } finally {
             self::releaseLease($lease);
         }
@@ -145,11 +154,14 @@ class BackgroundRunner {
     /** Latest heartbeat for the dashboard's diagnostics view. */
     public static function status(): array {
         $lastRun = (int)Config::get('cron_last_run', '0');
+        $health = Config::get('cron_task_health', []);
+        $lastResult = Config::get('cron_last_result');
+
         return [
             'lastRun' => $lastRun ?: null,
             'secondsAgo' => $lastRun ? time() - $lastRun : null,
-            'taskHealth' => json_decode((string)Config::get('cron_task_health', '{}'), true) ?: [],
-            'lastResult' => json_decode((string)Config::get('cron_last_result', 'null'), true),
+            'taskHealth' => is_array($health) ? $health : [],
+            'lastResult' => is_array($lastResult) ? $lastResult : null,
         ];
     }
 
