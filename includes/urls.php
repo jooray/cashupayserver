@@ -48,7 +48,7 @@ class Urls {
         if (self::isWordPress()) {
             return site_url('/cashupay-admin/');
         }
-        return 'admin.php';
+        return self::appRoot() . '/admin.php';
     }
 
     /**
@@ -58,7 +58,20 @@ class Urls {
         if (self::isWordPress()) {
             return site_url('/cashupay-setup/');
         }
-        return 'setup.php';
+        return self::appRoot() . '/setup.php';
+    }
+
+    /**
+     * Application root for building links.
+     *
+     * Bare 'admin.php' resolves relative to the *current* directory, so a link emitted
+     * from the nested /api-keys/authorize.php pointed at /api-keys/admin.php. A path
+     * anchored at the app root works from every entry point and both URL modes.
+     */
+    private static function appRoot(): string {
+        $base = Config::getBaseUrl();
+        $path = rtrim((string)parse_url($base, PHP_URL_PATH), '/');
+        return $path; // '' at the domain root, '/cashupay' in a subdirectory
     }
 
     /**

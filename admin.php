@@ -1904,7 +1904,7 @@ $isWp = Urls::isWordPress();
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#0f0f23">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -3386,6 +3386,9 @@ $isWp = Urls::isWordPress();
         let pin = '';
         let dashboardData = null;
 
+        // Animated export QR currently on screen, so its timer can be stopped on close.
+        let activeAnimatedQr = null;
+
         // Local Storage Keys
         const STORAGE_PIN = 'cashupay_pin';
         const STORAGE_AUTH = 'cashupay_auth';
@@ -4802,14 +4805,21 @@ $isWp = Urls::isWordPress();
                         // Check if we need animated QR based on token size
                         if (AnimatedQR.needsAnimation(result.token)) {
                             // Large token - use NUT-16 animated QR with UR encoding
-                            const animatedQr = new AnimatedQR(qrContainer, {
+                            // Keep the instance so closing the modal can stop its timer.
+                            // Without that, every export left another interval running and
+                            // a backgrounded mobile tab kept animating a token nobody
+                            // could see.
+                            if (activeAnimatedQr) {
+                                activeAnimatedQr.destroy();
+                            }
+                            activeAnimatedQr = new AnimatedQR(qrContainer, {
                                 frameRate: 200,
                                 maxFragmentLen: 200,
                                 qrSize: 280,
                                 errorCorrection: 'M'
                             });
 
-                            if (!animatedQr.encode(result.token)) {
+                            if (!activeAnimatedQr.encode(result.token)) {
                                 throw new Error('Failed to encode animated QR');
                             }
                         } else {
@@ -5931,6 +5941,10 @@ $isWp = Urls::isWordPress();
                 if (exportCheckInterval) {
                     clearInterval(exportCheckInterval);
                     exportCheckInterval = null;
+                }
+                if (activeAnimatedQr) {
+                    activeAnimatedQr.destroy();
+                    activeAnimatedQr = null;
                 }
                 exportSecrets = null;
 

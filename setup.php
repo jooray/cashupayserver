@@ -1480,11 +1480,30 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 $wooConfigured = false;
 
                 if ($btcpayPluginActive && $storeId) {
-                    // Get or create an API key for WooCommerce
-                    $apiKey = Auth::getOrCreateInternalApiKey($storeId);
                     $configResult = null;
 
-                    if (isset($_POST['configure_woocommerce']) && $apiKey) {
+                    // Mutating WooCommerce is a state change, so it happens only on a
+                    // POST whose CSRF token validated ($error is null) — it used to run
+                    // during template rendering regardless.
+                    if ($error === null
+                        && $_SERVER['REQUEST_METHOD'] === 'POST'
+                        && isset($_POST['configure_woocommerce'])) {
+                        // A dedicated integration key, not the least-privilege dashboard
+                        // one: the WooCommerce gateway refetches the invoice on
+                        // InvoiceSettled and refuses to mark the order paid if that
+                        // lookup fails, so it needs canviewinvoices as well.
+                        $apiKey = Auth::createApiKey(
+                            $storeId,
+                            'WooCommerce (auto-configured)',
+                            [
+                                'btcpay.store.cancreateinvoice',
+                                'btcpay.store.canviewinvoices',
+                                'btcpay.store.canmodifyinvoices',
+                                'btcpay.store.webhooks.canmodifywebhooks',
+                            ],
+                            'woocommerce'
+                        )['key'];
+
                         $configResult = cashupay_configure_btcpay_plugin($storeId, $apiKey);
                         $wooConfigured = $configResult['success'] ?? false;
                     }

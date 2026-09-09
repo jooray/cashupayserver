@@ -104,7 +104,7 @@ check(!empty($invoice['id']) && !empty($invoice['quote_id']), 'invoice created w
 check(str_starts_with((string)$invoice['bolt11'], 'lnbcmock'), 'lightning invoice returned');
 
 // New-style quote (no `state` field) must read as unpaid before payment.
-Invoice::pollSingleQuote($invoice['id']);
+Invoice::pollSingleQuote($invoice['id'], true);
 $pending = Invoice::getById($invoice['id']);
 check($pending['status'] === 'New', 'unpaid quote without state field stays New');
 
@@ -114,7 +114,7 @@ $pay = json_decode((string)file_get_contents("$mintUrl/__control/pay", false, st
 ])), true);
 check(($pay['ok'] ?? false) === true, 'mock quote marked paid');
 
-Invoice::pollSingleQuote($invoice['id']);
+Invoice::pollSingleQuote($invoice['id'], true);
 $settled = Invoice::getById($invoice['id']);
 check($settled['status'] === 'Settled', "invoice settled after payment (status: {$settled['status']})");
 check(Invoice::getBalance($storeId) === 21, 'store balance equals invoice amount');
@@ -184,7 +184,7 @@ $payQuote = function (string $quoteId) use ($mintUrl): void {
     ]));
 };
 $payQuote($lockedInvoice['quote_id']);
-Invoice::pollSingleQuote($lockedInvoice['id']);
+Invoice::pollSingleQuote($lockedInvoice['id'], true);
 $lockedSettled = Invoice::getById($lockedInvoice['id']);
 // The mock REQUIRES a valid BIP340 signature for this quote, so settling
 // proves the wallet signed the mint request correctly.
@@ -213,7 +213,7 @@ $setLegacy(true);
 $legacyInvoice = Invoice::create($storeId, ['amount' => 3, 'currency' => 'sat']);
 check($wallet->getStorage()->getMintQuoteKey($legacyInvoice['quote_id']) !== null, 'legacy-mint quote is still NUT-20 locked');
 $payQuote($legacyInvoice['quote_id']);
-Invoice::pollSingleQuote($legacyInvoice['id']);
+Invoice::pollSingleQuote($legacyInvoice['id'], true);
 $legacySettled = Invoice::getById($legacyInvoice['id']);
 check($legacySettled['status'] === 'Settled', "invoice settled via legacy signature fallback (status: {$legacySettled['status']})");
 check(Invoice::getBalance($storeId) === 36, 'balance includes legacy-fallback mint');

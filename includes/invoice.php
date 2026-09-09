@@ -589,7 +589,16 @@ class Invoice {
     /**
      * Poll a single invoice's quote status
      */
-    public static function pollSingleQuote(string $invoiceId): void {
+    /**
+     * Shortest interval between two mint round-trips for the same invoice.
+     *
+     * The checkout page polls every couple of seconds from every open tab, and each poll
+     * used to hit the mint. A known checkout link was therefore enough to occupy a small
+     * PHP-FPM pool with slow network calls.
+     */
+    const MIN_POLL_INTERVAL = 5;
+
+    public static function pollSingleQuote(string $invoiceId, bool $force = false): void {
         $invoice = self::getById($invoiceId);
         if (!$invoice || !$invoice['quote_id']) {
             return;
@@ -604,6 +613,19 @@ class Invoice {
         if ($invoice['status'] === 'New' && $invoice['expiration_time'] < time()) {
             self::updateStatus($invoice['id'], 'Expired');
             return;
+        }
+
+        // Coalesce concurrent pollers for this invoice.
+        $now = time();
+        if (!$force) {
+            $claimed = Database::query(
+                "UPDATE invoices SET last_polled_at = ?
+                 WHERE id = ? AND (last_polled_at IS NULL OR ? - last_polled_at >= ?)",
+                [$now, $invoiceId, $now, self::MIN_POLL_INTERVAL]
+            )->rowCount();
+            if ($claimed === 0) {
+                return; // another request checked this quote moments ago
+            }
         }
 
         try {

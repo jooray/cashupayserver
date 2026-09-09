@@ -88,12 +88,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // Validate the token's shape before any network work: this endpoint is public, and
+    // contacting the mint first let a stream of malformed tokens tie up the PHP pool.
+    if (!is_string($tokenString) || strlen($tokenString) > \Cashu\TokenSerializer::MAX_TOKEN_LENGTH) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Token is missing or too large']);
+        exit;
+    }
+    try {
+        $parsed = \Cashu\TokenSerializer::deserialize($tokenString);
+    } catch (Throwable $e) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid token: ' . $e->getMessage()]);
+        exit;
+    }
+
     try {
         // Initialize wallet with store's configuration
         $mintUrl = Config::getStoreMintUrl($storeId);
         $unit = Config::getStoreMintUnit($storeId);
         $seed = Config::getStoreSeedPhrase($storeId);
         $dbPath = Database::getDbPath();
+
+        // Reject a token for the wrong mint or unit before loading keysets from it.
+        if (rtrim($parsed->mint, '/') !== rtrim($mintUrl, '/')) {
+            throw new Exception('Token is from a different mint');
+        }
+        if (strtolower($parsed->unit) !== strtolower($unit)) {
+            throw new Exception("Token unit ({$parsed->unit}) does not match this store ({$unit})");
+        }
 
         $accountId = Config::getStoreWalletAccountId($storeId);
         $wallet = new Wallet($mintUrl, $unit, $dbPath, $accountId);

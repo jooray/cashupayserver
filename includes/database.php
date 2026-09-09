@@ -27,6 +27,9 @@ use Cashu\WalletStorage;
 class Database {
     private const SCHEMA_VERSION = 7;
 
+    /** Set when ensureCurrentSchema() failed, so callers can tell "broken" from "new". */
+    private static ?string $migrationError = null;
+
     private static ?PDO $instance = null;
     private static ?string $dbPath = null;
     private static ?string $dataDir = null;
@@ -75,10 +78,26 @@ class Database {
      */
     public static function getInstance(): PDO {
         if (self::$instance === null) {
-            self::$instance = self::connect();
-            self::ensureCurrentSchema(self::$instance);
+            $pdo = self::connect();
+            try {
+                self::ensureCurrentSchema($pdo);
+            } catch (Throwable $e) {
+                // Do NOT cache a connection whose migration failed. Caching it first let
+                // isInitialized() swallow the exception, return false, and hand a visitor
+                // the setup wizard on a database that already has an owner — while a
+                // second check reused the cached handle and found the config table.
+                self::$migrationError = $e->getMessage();
+                throw $e;
+            }
+            self::$migrationError = null;
+            self::$instance = $pdo;
         }
         return self::$instance;
+    }
+
+    /** Message from the last failed migration, if any. */
+    public static function getMigrationError(): ?string {
+        return self::$migrationError;
     }
 
     /**
@@ -140,8 +159,29 @@ HTACCESS;
             $pdo = self::getInstance();
             $stmt = $pdo->query("SELECT name FROM sqlite_master WHERE type='table' AND name='config'");
             return $stmt->fetch() !== false;
-        } catch (PDOException $e) {
+        } catch (Throwable $e) {
+            // A database that exists but cannot be opened or migrated is not a fresh
+            // install. Reporting it as one reopens setup on somebody else's data.
+            return self::hasExistingInstallation();
+        }
+    }
+
+    /**
+     * Whether the database file already holds an installation, answered without going
+     * through the cached connection or the migration path.
+     */
+    public static function hasExistingInstallation(): bool {
+        if (!file_exists(self::getDbPath())) {
             return false;
+        }
+        try {
+            $probe = new PDO('sqlite:' . self::getDbPath());
+            $probe->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            $stmt = $probe->query("SELECT name FROM sqlite_master WHERE type='table' AND name='config'");
+            return $stmt->fetch() !== false;
+        } catch (Throwable $e) {
+            // Unreadable but present: assume it holds data, and fail closed.
+            return true;
         }
     }
 
@@ -328,7 +368,17 @@ HTACCESS;
 
         // An empty database belongs to setup.php; do not make isInitialized() true here.
         $table = $pdo->query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'config'")->fetchColumn();
-        if (!$table || (int)$pdo->query('PRAGMA user_version')->fetchColumn() >= self::SCHEMA_VERSION) {
+        if (!$table) {
+            return;
+        }
+        $current = (int)$pdo->query('PRAGMA user_version')->fetchColumn();
+        if ($current > self::SCHEMA_VERSION) {
+            throw new RuntimeException(
+                "Database schema v{$current} is newer than this code (v" . self::SCHEMA_VERSION
+                . '). Downgrading would corrupt it; restore the matching version.'
+            );
+        }
+        if ($current === self::SCHEMA_VERSION) {
             return;
         }
 
