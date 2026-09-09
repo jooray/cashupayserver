@@ -10,17 +10,17 @@ rm -rf build/cashupay build/cashupay-wordpress.zip
 
 mkdir -p "$BUILD_DIR"
 
-# Copy WordPress-specific files
-cp -r wordpress/ "$BUILD_DIR/wordpress/"
+# Flatten the WordPress support files into the plugin root, matching the layout
+# docker/Dockerfile.wordpress builds. cashupay.php requires bootstrap.php, activation.php,
+# rewrite-rules.php and admin-menu.php as siblings, and bootstrap.php defines its own
+# directory as CASHUPAY_PLUGIN_DIR — so a nested copy cannot load either way.
+cp wordpress/*.php "$BUILD_DIR/"
 
-# Copy plugin entry point to root of plugin directory
-cp "$BUILD_DIR/wordpress/cashupay.php" "$BUILD_DIR/cashupay.php"
-
-# Copy uninstall.php to plugin root (WordPress expects it there)
-cp "$BUILD_DIR/wordpress/uninstall.php" "$BUILD_DIR/uninstall.php"
-
-# Copy shared core
+# Copy shared core. RELEASE.md promises no local configuration ships; enforce it here
+# rather than relying on the build tree being clean.
 cp -r includes/ "$BUILD_DIR/includes/"
+rm -f "$BUILD_DIR/includes/config.local.php"
+find "$BUILD_DIR/includes" -name '*.local.php' -delete
 cp admin.php setup.php api.php payment.php receive.php cron.php "$BUILD_DIR/"
 cp -r api-keys/ "$BUILD_DIR/api-keys/"
 
@@ -44,6 +44,15 @@ if [ -d "mint-discovery" ]; then
     # Also copy the bundle to assets
     cp mint-discovery/dist/mint-discovery.bundle.js "$BUILD_DIR/assets/js/"
 fi
+
+# Fail the build rather than shipping an artifact that cannot load.
+for required in cashupay.php uninstall.php bootstrap.php activation.php rewrite-rules.php \
+                admin-menu.php btcpay-integration.php includes/database.php; do
+    if [ ! -f "$BUILD_DIR/$required" ]; then
+        echo "Build error: missing $required in plugin root" >&2
+        exit 1
+    fi
+done
 
 # Create zip
 cd build && zip -r cashupay-wordpress.zip cashupay/ && cd ..

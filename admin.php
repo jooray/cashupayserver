@@ -30,6 +30,67 @@ function cashupay_public_store(array $store): array {
 }
 
 /**
+ * Everything an operator needs to answer "why wasn't my order marked paid?".
+ *
+ * Background heartbeat, unresolved outgoing operations, stuck invoices and failed
+ * webhook deliveries — the three things that are otherwise only visible in error_log.
+ */
+function cashupay_diagnostics(?string $storeId): array {
+    require_once __DIR__ . '/includes/background_runner.php';
+
+    $background = BackgroundRunner::status();
+    $stale = $background['secondsAgo'] === null || $background['secondsAgo'] > 900;
+
+    $pendingTransfers = array_values(array_filter(
+        Transfer::getPending(20),
+        fn($row) => $storeId === null || $row['store_id'] === $storeId
+    ));
+
+    $stuckInvoices = Database::fetchAll(
+        "SELECT id, status, created_at, quote_id FROM invoices
+         WHERE status = 'Processing' AND created_at < ?
+         " . ($storeId ? "AND store_id = ?" : "") . "
+         ORDER BY created_at ASC LIMIT 20",
+        $storeId ? [time() - 3600, $storeId] : [time() - 3600]
+    );
+
+    $failedDeliveries = (int)(Database::fetchOne(
+        "SELECT COUNT(*) AS cnt FROM webhook_deliveries
+         WHERE delivered_at IS NULL AND attempts > 0"
+    )['cnt'] ?? 0);
+
+    $pendingJournals = [];
+    if ($storeId && Config::isStoreConfigured($storeId)) {
+        try {
+            $wallet = Invoice::getWalletInstance($storeId);
+            foreach ($wallet->getStorage()->getPendingOperations() as $op) {
+                $pendingJournals[] = [
+                    'id' => $op['id'],
+                    'type' => $op['type'],
+                    'createdAt' => (int)$op['created_at'],
+                    'ageSeconds' => time() - (int)$op['created_at'],
+                ];
+            }
+        } catch (Throwable $e) {
+            // Diagnostics must never be the thing that breaks the dashboard.
+            $pendingJournals = [];
+        }
+    }
+
+    return [
+        'background' => $background + ['stale' => $stale],
+        'pendingTransfers' => array_map([Transfer::class, 'formatForApi'], $pendingTransfers),
+        'stuckInvoices' => $stuckInvoices,
+        'failedWebhookDeliveries' => $failedDeliveries,
+        'pendingWalletOperations' => $pendingJournals,
+        'needsAttention' => $stale
+            || $failedDeliveries > 0
+            || !empty($stuckInvoices)
+            || !empty($pendingTransfers),
+    ];
+}
+
+/**
  * Acquire a non-blocking exclusive lock (flock) for a named operation, e.g. a per-store
  * withdrawal. Prevents concurrent fund-moving requests (double-click / refresh / two tabs)
  * from each melting a different set of proofs and paying twice.
@@ -76,26 +137,44 @@ if (Auth::isLoggedIn() && Background::shouldSync()) {
  * H5: Check if data directory is protected from HTTP access
  */
 function checkDataDirectoryProtection(): ?string {
-    $baseUrl = Config::getBaseUrl();
-    $testUrl = rtrim($baseUrl, '/') . '/data/cashupay.sqlite';
+    // A database kept outside the webroot has no HTTP path to probe.
+    if (Database::isDataDirOutsideWebroot()) {
+        return null;
+    }
 
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $testUrl,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_NOBODY => true,
-        CURLOPT_TIMEOUT => 3,
-        CURLOPT_CONNECTTIMEOUT => 2,
-        CURLOPT_FOLLOWLOCATION => false,
-        CURLOPT_SSL_VERIFYPEER => false,
-    ]);
+    $baseUrl = rtrim(Config::getBaseUrl(), '/');
 
-    curl_exec($ch);
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    // Note: curl_close() not needed since PHP 8.0 - handle auto-closes
+    // Probe the WAL sidecars too: they hold recently written proofs, and a rule that
+    // only denies the main file leaves them downloadable.
+    $exposed = [];
+    foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $name) {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $baseUrl . '/data/' . $name,
+            CURLOPT_RETURNTRANSFER => true,
+            // A ranged GET, not HEAD: some servers answer HEAD from a rule that a real
+            // GET would not hit, and one byte is enough to prove readability.
+            CURLOPT_RANGE => '0-0',
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_PROTOCOLS_STR => 'https,http',
+            CURLOPT_SSL_VERIFYPEER => false,
+        ]);
 
-    if ($httpCode === 200) {
-        return 'WARNING: Your database may be exposed via HTTP! Check server configuration.';
+        curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        // Note: curl_close() not needed since PHP 8.0 - handle auto-closes
+
+        if ($httpCode === 200 || $httpCode === 206) {
+            $exposed[] = $name;
+        }
+    }
+
+    if (!empty($exposed)) {
+        return 'WARNING: your database is downloadable over HTTP (' . implode(', ', $exposed)
+            . '). Anyone who fetches it can spend your funds. Fix your server configuration'
+            . ' or move the data directory outside the webroot.';
     }
 
     return null;
@@ -222,8 +301,28 @@ if (isset($_GET['api'])) {
                 'transfers' => array_map([Transfer::class, 'formatForApi'], $recentTransfers),
                 'stores' => $stores,
                 'autoMelt' => $autoMelt,
+                // The admin is installable as a PWA, so a loaded page can outlive a
+                // deploy by days and keep posting to endpoints that have moved. The
+                // client compares this with the version it booted with and reloads.
+                'version' => CASHUPAY_VERSION,
+                'diagnostics' => cashupay_diagnostics($storeId),
             ]);
             break;
+
+        case 'diagnostics':
+            echo json_encode(cashupay_diagnostics($_GET['store_id'] ?? null));
+            break;
+
+        case 'get_backup_mints':
+            $storeId = $_GET['store_id'] ?? null;
+            if (!$storeId) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Store ID required']);
+                break;
+            }
+            echo json_encode(Config::getStoreBackupMints($storeId));
+            break;
+
 
         case 'invoices':
             $status = $_GET['status'] ?? null;
@@ -433,6 +532,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'logout':
             Auth::logout();
             echo json_encode(['success' => true]);
+            break;
+
+        case 'run_background':
+            // "Run now": the same leased runner cron uses, so what an operator triggers
+            // here is exactly what a scheduled tick does.
+            require_once __DIR__ . '/includes/background_runner.php';
+            @set_time_limit(0);
+            echo json_encode(BackgroundRunner::run(20));
             break;
 
         case 'create_invoice':
@@ -2714,6 +2821,14 @@ $isWp = Urls::isWordPress();
                     </div>
                 </div>
 
+                <div class="card" id="diagnostics-card" style="display: none;">
+                    <div class="card-header">
+                        <div class="card-title">Needs attention</div>
+                        <button class="btn btn-secondary btn-sm" id="run-background-btn" type="button">Run background tasks now</button>
+                    </div>
+                    <div id="diagnostics-body"></div>
+                </div>
+
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">Recent Invoices</div>
@@ -3462,6 +3577,24 @@ $isWp = Urls::isWordPress();
 
             // Header buttons
             document.getElementById('refresh-btn').addEventListener('click', loadDashboard);
+
+            const runBackgroundBtn = document.getElementById('run-background-btn');
+            if (runBackgroundBtn) {
+                runBackgroundBtn.addEventListener('click', async () => {
+                    runBackgroundBtn.disabled = true;
+                    const label = runBackgroundBtn.textContent;
+                    runBackgroundBtn.textContent = 'Running…';
+                    try {
+                        await postWithCsrf(adminUrl + '?api=run_background', '');
+                        await loadDashboard();
+                    } catch (e) {
+                        alert('Could not run background tasks: ' + e.message);
+                    } finally {
+                        runBackgroundBtn.disabled = false;
+                        runBackgroundBtn.textContent = label;
+                    }
+                });
+            }
             document.getElementById('lock-btn').addEventListener('click', lock);
 
             // Balance actions
@@ -3656,6 +3789,42 @@ $isWp = Urls::isWordPress();
         }
 
         // Data loading
+        // The admin is installable, so a loaded page can survive a deploy by days and
+        // keep posting to endpoints that have moved. Every dashboard response carries the
+        // server's version; the first one seen is the version this page was built for.
+        let bootVersion = null;
+        let reloadingForUpdate = false;
+
+        function checkDeployedVersion(version) {
+            if (!version) return;
+            if (bootVersion === null) {
+                bootVersion = version;
+                return;
+            }
+            if (version === bootVersion || reloadingForUpdate) return;
+
+            reloadingForUpdate = true;
+            const banner = document.createElement('div');
+            banner.setAttribute('role', 'status');
+            banner.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;'
+                + 'background:#f7931a;color:#1a202c;padding:0.85rem 1rem;text-align:center;font-weight:600';
+            banner.textContent = `CashuPayServer was updated to ${version} — reloading…`;
+            document.body.appendChild(banner);
+
+            // Give an in-flight export modal a moment to be read before the reload:
+            // the displayed token is bearer money and must not vanish silently.
+            const hasOpenModal = !!document.querySelector('.modal.active, .modal[style*="display: flex"]');
+            setTimeout(() => window.location.reload(), hasOpenModal ? 15000 : 2500);
+        }
+
+        /** A 401 from any admin call means the session is gone; show the password screen. */
+        function handleUnauthorized() {
+            if (reloadingForUpdate) return true;
+            try { localStorage.removeItem('cashupay_pin'); } catch (e) {}
+            window.location.reload();
+            return true;
+        }
+
         async function loadDashboard() {
             try {
                 // Fetch with store_id if one is selected
@@ -3665,6 +3834,13 @@ $isWp = Urls::isWordPress();
                 }
 
                 const response = await fetch(url);
+
+                // The PIN gate is a convenience lock, not authentication. After the
+                // absolute session timeout it "unlocks" into a dashboard whose every
+                // request 401s, which reads as "Failed to load dashboard".
+                if (response.status === 401 || response.status === 403) {
+                    return handleUnauthorized();
+                }
 
                 // Handle stale store_id from localStorage (store deleted or new database)
                 if (response.status === 404 && currentStoreId) {
@@ -3676,6 +3852,8 @@ $isWp = Urls::isWordPress();
                 if (!response.ok) throw new Error('Failed to load');
 
                 dashboardData = await response.json();
+                checkDeployedVersion(dashboardData.version);
+                renderDiagnostics(dashboardData.diagnostics);
 
                 // Update store selector with available stores
                 updateStoreSelector(dashboardData.stores);
@@ -3926,6 +4104,55 @@ $isWp = Urls::isWordPress();
                     </div>
                 `;
             }).join('');
+        }
+
+        /**
+         * Surface the things that otherwise only appear in error_log: a background
+         * runner that has stopped, withdrawals whose outcome is unknown, invoices stuck
+         * mid-mint, and webhook deliveries the shop never acknowledged.
+         */
+        function renderDiagnostics(diag) {
+            const card = document.getElementById('diagnostics-card');
+            const body = document.getElementById('diagnostics-body');
+            if (!card || !body) return;
+
+            if (!diag || !diag.needsAttention) {
+                card.style.display = 'none';
+                return;
+            }
+
+            const items = [];
+            const bg = diag.background || {};
+            if (bg.stale) {
+                items.push(bg.secondsAgo === null
+                    ? 'Background tasks have never run. Settlement, auto-withdrawal and webhook delivery depend on them — add the cron job shown during setup.'
+                    : `Background tasks last ran ${Math.round(bg.secondsAgo / 60)} min ago.`);
+            }
+            (diag.pendingTransfers || []).forEach(t => {
+                items.push(`Outgoing ${t.type} of ${t.amount} ${t.unit} is unresolved`
+                    + (t.detail ? ` — ${t.detail}` : '')
+                    + '. Do not retry it; it will be reconciled automatically.');
+            });
+            (diag.pendingWalletOperations || []).forEach(op => {
+                items.push(`Wallet operation ${op.type} (${op.id}) has been pending for ${Math.round(op.ageSeconds / 60)} min.`);
+            });
+            if (diag.failedWebhookDeliveries > 0) {
+                items.push(`${diag.failedWebhookDeliveries} webhook ${diag.failedWebhookDeliveries === 1 ? 'delivery has' : 'deliveries have'} not been acknowledged by the shop.`);
+            }
+            (diag.stuckInvoices || []).forEach(inv => {
+                items.push(`Invoice ${inv.id} has been Processing for over an hour.`);
+            });
+
+            body.innerHTML = '';
+            const list = document.createElement('ul');
+            list.style.cssText = 'margin: 0 0 0 1.1rem; line-height: 1.7;';
+            items.forEach(text => {
+                const li = document.createElement('li');
+                li.textContent = text; // text node: these strings include server data
+                list.appendChild(li);
+            });
+            body.appendChild(list);
+            card.style.display = '';
         }
 
         function renderTransfers(containerId, transfers) {
@@ -4320,16 +4547,24 @@ $isWp = Urls::isWordPress();
 
             // For fiat mints, debounce fetch actual cost from mint
             if (isFiatMint && amountSats > 0 && destination) {
-                clearTimeout(withdrawEstimateTimeout);
-                withdrawEstimateTimeout = setTimeout(async () => {
-                    const estimate = await getWithdrawalEstimate(destination, amountSats);
-                    if (estimate) {
-                        lastWithdrawEstimate = estimate;
-                        updateWithdrawInfo(); // Re-render with actual cost
-                    }
-                }, 500);
+                const estimateKey = `${destination}|${amountSats}`;
+                if (estimateKey !== lastWithdrawEstimateKey) {
+                    clearTimeout(withdrawEstimateTimeout);
+                    withdrawEstimateTimeout = setTimeout(async () => {
+                        lastWithdrawEstimateKey = estimateKey;
+                        const estimate = await getWithdrawalEstimate(destination, amountSats);
+                        // Discard a result whose inputs have since changed.
+                        if (estimate && lastWithdrawEstimateKey === estimateKey) {
+                            lastWithdrawEstimate = estimate;
+                            updateWithdrawInfo(); // Re-render with actual cost
+                        }
+                    }, 500);
+                }
             }
         }
+
+        // Inputs the last estimate was computed for, so a re-render does not re-request.
+        let lastWithdrawEstimateKey = null;
 
         // Get withdrawal estimate from mint (actual cost at mint's exchange rate)
         async function getWithdrawalEstimate(destination, amountSats) {
@@ -4338,11 +4573,11 @@ $isWp = Urls::isWordPress();
             }
 
             try {
-                const response = await fetch(adminUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: `action=get_withdrawal_estimate&store_id=${encodeURIComponent(currentStoreId)}&destination=${encodeURIComponent(destination)}&amount_sats=${amountSats}`
-                });
+                const response = await postWithCsrf(
+                    adminUrl,
+                    `action=get_withdrawal_estimate&store_id=${encodeURIComponent(currentStoreId)}`
+                    + `&destination=${encodeURIComponent(destination)}&amount_sats=${amountSats}`
+                );
                 const data = await response.json();
                 return data.success ? data : null;
             } catch (e) {
@@ -4438,7 +4673,9 @@ $isWp = Urls::isWordPress();
 
         async function handleExport(forceAmount = null) {
             const mintUnit = dashboardData?.mintUnit || 'sat';
-            const amount = forceAmount || parseAmount(document.getElementById('export-amount').value, mintUnit);
+            const amount = forceAmount !== null
+                ? forceAmount
+                : parseAmount(document.getElementById('export-amount').value, mintUnit);
             const donate = document.getElementById('export-donate').checked ? '1' : '0';
 
             const minAmount = isFiatUnit(mintUnit) ? 1 : 1; // 1 cent or 1 sat minimum
@@ -4473,9 +4710,14 @@ $isWp = Urls::isWordPress();
                     const requestedDisplay = formatAmount(result.requested, mintUnit);
                     const availableDisplay = formatAmount(result.available, mintUnit);
 
+                    // Only say the mint is unreachable when the server actually said so;
+                    // exact change can also be unavailable with a perfectly healthy mint.
+                    const heading = result.mintUnreachable
+                        ? 'Mint Unreachable - Offline Export\n\nThe mint is currently unreachable, so exact change cannot be provided.'
+                        : 'Exact Change Unavailable\n\nYour proofs cannot be combined into exactly this amount.';
+
                     const confirmed = confirm(
-                        `Mint Unreachable - Offline Export\n\n` +
-                        `The mint is currently unreachable, so exact change cannot be provided.\n\n` +
+                        `${heading}\n\n` +
                         `Requested: ${requestedDisplay} ${unitLabel}\n` +
                         `Available (closest match): ${availableDisplay} ${unitLabel}\n\n` +
                         `Export ${availableDisplay} ${unitLabel} instead?`

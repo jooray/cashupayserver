@@ -478,7 +478,7 @@ $baseUrl = Config::getBaseUrl();
     </div>
 
     <div class="footer">
-        Powered by <a href="#">CashuPayServer</a>
+        Powered by <a href="https://cashupayserver.org" target="_blank" rel="noopener noreferrer">CashuPayServer</a>
     </div>
 
     <div class="copy-toast" id="copy-toast">Copied to clipboard!</div>

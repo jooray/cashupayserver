@@ -59,8 +59,9 @@ CashuPayServer sits between custodial payment gateways and full self-hosting:
 
 ## Requirements
 
-- PHP 8.0 or higher
-- Extensions: `curl`, `json`, `sqlite3`, `gmp`
+- PHP 8.1 or higher
+- Extensions: `curl`, `json`, `pdo_sqlite`, `bcmath`, `mbstring`
+- Recommended: `gmp` (without it the elliptic-curve maths falls back to BCMath and is much slower)
 - Apache with mod_rewrite, nginx, or any PHP-capable web server
 
 ## Installation

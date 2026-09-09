@@ -129,6 +129,13 @@ $routes = [
     'GET /stores/{storeId}/webhooks/{webhookId}' => 'handleGetWebhook',
     'PUT /stores/{storeId}/webhooks/{webhookId}' => 'handleUpdateWebhook',
     'DELETE /stores/{storeId}/webhooks/{webhookId}' => 'handleDeleteWebhook',
+    'GET /stores/{storeId}/webhooks/{webhookId}/deliveries' => 'handleGetWebhookDeliveries',
+    'POST /stores/{storeId}/webhooks/{webhookId}/deliveries/{deliveryId}/redeliver' => 'handleRedeliverWebhook',
+
+    // Endpoints BTCPay clients probe before deciding a server is usable.
+    'GET /api-keys/current' => 'handleCurrentApiKey',
+    'GET /stores/{storeId}/payment-methods' => 'handleStorePaymentMethods',
+    'GET /stores/{storeId}/invoices/{invoiceId}/payment-methods' => 'handleInvoicePaymentMethods',
 ];
 
 /**
@@ -214,9 +221,14 @@ function requirePermission(array $auth, string $permission): void {
  */
 function handleServerInfo(): void {
     jsonResponse([
-        'version' => '1.0.0',
+        // BTCPay clients read this; report our real version, not a placeholder.
+        'version' => CASHUPAY_VERSION,
         'serverTime' => time(),
         'supportedPaymentMethods' => ['BTC-LightningNetwork'],
+        // Greenfield clients check these before deciding a server is usable.
+        'fullySynched' => true,
+        'syncStatus' => [],
+        'onion' => null,
         'isCashuPayServer' => true,
     ]);
 }

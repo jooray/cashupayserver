@@ -183,3 +183,64 @@ function formatWebhookForApi(array $webhook, bool $includeSecret = false): array
 
     return $result;
 }
+
+/**
+ * GET /stores/{storeId}/webhooks/{webhookId}/deliveries
+ *
+ * BTCPay exposes this and its clients use it to diagnose "the order never got marked
+ * paid". Without it the only record of a failed delivery was the server's error log.
+ */
+function handleGetWebhookDeliveries(array $auth, array $params, array $body): void {
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
+
+    $webhook = Database::fetchOne(
+        "SELECT id FROM webhooks WHERE id = ? AND store_id = ? AND deleted_at IS NULL",
+        [$params['webhookId'], $storeId]
+    );
+    if ($webhook === null) {
+        errorResponse('not-found', 'Webhook not found', 404);
+    }
+
+    $limit = max(1, min((int)($_GET['count'] ?? 50), 200));
+    $deliveries = WebhookSender::getDeliveries($params['webhookId'], $limit);
+
+    jsonResponse(array_map(static function (array $row): array {
+        return [
+            'id' => $row['id'],
+            'timestamp' => (int)$row['created_at'],
+            'webhookId' => $row['webhook_id'],
+            'status' => $row['delivered_at'] ? 'HttpSuccess' : ($row['attempts'] > 0 ? 'HttpError' : 'Pending'),
+            'httpCode' => (int)($row['status_code'] ?? 0),
+            'attempts' => (int)($row['attempts'] ?? 0),
+            'errorMessage' => $row['delivered_at'] ? null : ($row['response'] ?? null),
+            'deliveredAt' => $row['delivered_at'] ? (int)$row['delivered_at'] : null,
+            'nextAttemptAt' => (int)($row['next_attempt_at'] ?? 0) ?: null,
+        ];
+    }, $deliveries));
+}
+
+/**
+ * POST /stores/{storeId}/webhooks/{webhookId}/deliveries/{deliveryId}/redeliver
+ *
+ * Re-queues an existing delivery instead of creating a new event, so the receiver sees
+ * the same logical event and its own idempotency still works.
+ */
+function handleRedeliverWebhook(array $auth, array $params, array $body): void {
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.webhooks.canmodifywebhooks');
+
+    $delivery = Database::fetchOne(
+        "SELECT d.id FROM webhook_deliveries d
+         JOIN webhooks w ON w.id = d.webhook_id
+         WHERE d.id = ? AND d.webhook_id = ? AND w.store_id = ?",
+        [$params['deliveryId'], $params['webhookId'], $storeId]
+    );
+    if ($delivery === null) {
+        errorResponse('not-found', 'Delivery not found', 404);
+    }
+
+    WebhookSender::requeueDelivery($params['deliveryId']);
+
+    jsonResponse(['id' => $params['deliveryId'], 'status' => 'Pending'], 200);
+}

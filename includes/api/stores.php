@@ -117,3 +117,68 @@ function handleDeleteStore(array $auth, array $params, array $body): void {
     http_response_code(200);
     exit;
 }
+
+/**
+ * GET /api-keys/current
+ *
+ * The WooCommerce gateway and the Shopify/Magento apps call this after pairing to learn
+ * which permissions their key actually holds. Without it they cannot tell a
+ * misconfigured key from a broken server.
+ */
+function handleCurrentApiKey(array $auth, array $params, array $body): void {
+    jsonResponse([
+        'apiKey' => null, // never echo the credential back
+        'label' => $auth['store_name'] ?? null,
+        'permissions' => array_values($auth['permissions'] ?? []),
+    ]);
+}
+
+/**
+ * GET /stores/{storeId}/payment-methods
+ *
+ * One Lightning method, always on. CashuPayServer settles Lightning invoices through a
+ * Cashu mint, so there is nothing to enable or disable per store.
+ */
+function handleStorePaymentMethods(array $auth, array $params, array $body): void {
+    $storeId = requireStore($auth, $params);
+
+    jsonResponse([[
+        'enabled' => true,
+        'paymentMethodId' => 'BTC-LN',
+        'cryptoCode' => 'BTC',
+        'config' => null,
+    ]]);
+}
+
+/**
+ * GET /stores/{storeId}/invoices/{invoiceId}/payment-methods
+ *
+ * BTCPay clients read this to render payment details (and, in WooCommerce's case, to
+ * confirm an invoice really is payable) rather than trusting the invoice object alone.
+ */
+function handleInvoicePaymentMethods(array $auth, array $params, array $body): void {
+    $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.canviewinvoices');
+
+    $invoice = Invoice::getById($params['invoiceId']);
+    if ($invoice === null || $invoice['store_id'] !== $storeId) {
+        errorResponse('not-found', 'Invoice not found', 404);
+    }
+
+    $paid = in_array($invoice['status'], ['Settled', 'Processing'], true);
+
+    jsonResponse([[
+        'paymentMethodId' => 'BTC-LN',
+        'cryptoCode' => 'BTC',
+        'currency' => 'BTC',
+        'destination' => $invoice['bolt11'] ?? null,
+        'paymentLink' => $invoice['bolt11'] ? 'lightning:' . $invoice['bolt11'] : null,
+        'rate' => (string)($invoice['exchange_rate'] ?? '1'),
+        'amount' => (string)($invoice['amount'] ?? '0'),
+        'due' => $paid ? '0' : (string)($invoice['amount'] ?? '0'),
+        'totalPaid' => $paid ? (string)($invoice['amount'] ?? '0') : '0',
+        'activated' => true,
+        'payments' => [],
+        'additionalData' => [],
+    ]]);
+}

@@ -16,8 +16,11 @@ if [ -d "mint-discovery" ]; then
     cp mint-discovery/dist/mint-discovery.bundle.js assets/js/
 fi
 
-# Copy core files
+# Copy core files. RELEASE.md promises the release never ships local configuration, so
+# exclude it explicitly rather than relying on the build tree being clean.
 cp -r includes/ "$BUILD_DIR/includes/"
+rm -f "$BUILD_DIR/includes/config.local.php"
+find "$BUILD_DIR/includes" -name '*.local.php' -delete
 cp -r assets/ "$BUILD_DIR/assets/"
 cp -r api-keys/ "$BUILD_DIR/api-keys/"
 cp admin.php setup.php api.php payment.php receive.php cron.php router.php index.php "$BUILD_DIR/"

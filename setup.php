@@ -777,12 +777,17 @@ function getDataDirHttpPath(): ?string {
 
                 <?php
                 // Check PHP requirements silently - only show if something fails
+                // These are the real runtime requirements, not an approximation:
+                // includes/rates.php calls bcdiv()/bcmul() unconditionally, so a
+                // GMP-only host fatals on the first fiat-priced invoice; the wallet
+                // library uses readonly properties (8.1) and mbstring.
                 $checks = [
-                    ['PHP ' . PHP_VERSION, version_compare(PHP_VERSION, '8.0.0', '>=')],
+                    ['PHP 8.1 or newer (found ' . PHP_VERSION . ')', version_compare(PHP_VERSION, '8.1.0', '>=')],
                     ['cURL extension', extension_loaded('curl')],
                     ['JSON extension', extension_loaded('json')],
                     ['PDO SQLite', extension_loaded('pdo_sqlite')],
-                    ['GMP or BCMath', extension_loaded('gmp') || extension_loaded('bcmath')],
+                    ['BCMath extension', extension_loaded('bcmath')],
+                    ['mbstring extension', extension_loaded('mbstring')],
                 ];
                 $allPassed = true;
                 $failedChecks = [];
@@ -792,7 +797,22 @@ function getDataDirHttpPath(): ?string {
                         $failedChecks[] = $name;
                     }
                 }
+                // Not required, but the pure-BCMath curve maths is far slower.
+                $recommendations = extension_loaded('gmp')
+                    ? []
+                    : ['GMP extension — without it every cryptographic operation is much slower'];
                 ?>
+
+                <?php if ($allPassed && $recommendations): ?>
+                    <div style="background: rgba(247, 147, 26, 0.08); border: 1px solid rgba(247, 147, 26, 0.3); padding: 0.75rem 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
+                        <strong style="color: #f7931a;">Recommended</strong>
+                        <ul style="margin: 0.5rem 0 0 1.25rem; color: #a0aec0; font-size: 0.9rem;">
+                            <?php foreach ($recommendations as $name): ?>
+                                <li><?= htmlspecialchars($name) ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                <?php endif; ?>
 
                 <?php if (!$allPassed): ?>
                     <div class="error" style="margin-bottom: 1.5rem;">

@@ -16,7 +16,6 @@ RUN mkdir -p /usr/src/sqlite-plugin \
 
 # Copy CashuPayServer source for standalone mode
 COPY includes/ /opt/cashupayserver/includes/
-COPY templates/ /opt/cashupayserver/templates/
 COPY assets/ /opt/cashupayserver/assets/
 COPY api-keys/ /opt/cashupayserver/api-keys/
 COPY cashu-wallet-php/CashuWallet.php /opt/cashupayserver/cashu-wallet-php/CashuWallet.php

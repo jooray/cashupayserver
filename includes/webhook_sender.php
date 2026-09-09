@@ -276,6 +276,22 @@ class WebhookSender {
     }
 
     /**
+     * Put a delivery back in the outbox for another attempt.
+     *
+     * Attempts are reset so a redelivery gets the full retry budget again, and the
+     * delivered marker is cleared so the outbox picks the row up.
+     */
+    public static function requeueDelivery(string $deliveryId): void {
+        Database::query(
+            "UPDATE webhook_deliveries
+             SET delivered_at = NULL, attempts = 0, next_attempt_at = 0,
+                 leased_until = NULL, lease_token = NULL
+             WHERE id = ?",
+            [$deliveryId]
+        );
+    }
+
+    /**
      * Verify webhook signature (for testing)
      */
     public static function verifySignature(string $payload, string $signature, string $secret): bool {
