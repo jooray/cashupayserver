@@ -876,11 +876,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $recovered = Invoice::reclaimExportedProofs($row['store_id'], $secrets);
 
                 Transfer::fail($row['id'], 'Taken back by the operator; the token no longer works');
+                // The mint charges to move ecash, and on a small token that charge can be
+                // the whole amount. Say so, rather than reporting "0 sat is back in your
+                // balance" and leaving the operator to wonder where it went.
+                $charged = (int)$row['amount'] - $recovered;
+                if ($recovered <= 0) {
+                    $message = 'The old token no longer works, so nothing is left outstanding. '
+                        . 'This was too small to be worth moving — the mint\'s charge for it was '
+                        . 'the whole amount — so your balance is unchanged.';
+                } elseif ($charged > 0) {
+                    $message = "{$recovered} {$row['unit']} is back in your balance "
+                        . "(the mint charged {$charged} {$row['unit']} to move it). "
+                        . 'The old token no longer works.';
+                } else {
+                    $message = "{$recovered} {$row['unit']} is back in your balance. The old token no longer works.";
+                }
                 echo json_encode([
                     'success' => true,
                     'amount' => $recovered,
                     'unit' => $row['unit'],
-                    'message' => "{$recovered} {$row['unit']} is back in your balance. The old token no longer works.",
+                    'message' => $message,
                 ]);
             } catch (Throwable $e) {
                 http_response_code(400);

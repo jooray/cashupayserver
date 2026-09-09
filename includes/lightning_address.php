@@ -460,6 +460,23 @@ class Donation {
                 return ['success' => false, 'token' => null, 'error' => 'Fee exceeds donation amount'];
             }
 
+            // The fee above is what *we* pay to split the donation off. There is a second
+            // fee, and it is the one that actually matters: NUT-02 mints charge per input
+            // proof, so whoever receives the token pays to swap it. On a mint charging
+            // 100 ppk a 1 sat donation costs 1 sat to redeem and nets its recipient
+            // nothing — the sink cannot accept it, we cannot take it back on its own
+            // either, and the retry loop would run forever. Don't create it.
+            $redeemFee = self::redeemFee($wallet, (int)$amount);
+            if ($redeemFee >= $amount) {
+                return [
+                    'success' => false,
+                    'token' => null,
+                    'error' => 'Donation of ' . (int)$amount . ' would cost more than that to '
+                        . 'cash in at this mint, so it would never arrive. Skipped; the money '
+                        . 'stays in your balance.',
+                ];
+            }
+
             $result = $wallet->split($proofs, $amount);
             $donationProofs = $result['send'];
             $donationSecrets = array_map(fn($p) => $p->secret, $donationProofs);
@@ -596,6 +613,21 @@ class Donation {
         }
         $donationAmount = max(1, (int)floor($amount * CASHUPAY_DONATION_PERCENT / 100));
         return min($donationAmount, (int)floor($amount * 0.1));
+    }
+
+    /**
+     * What the recipient of a donation of $amount will pay to swap it.
+     *
+     * A donation is handed over as ecash, and ecash is redeemed by swapping it, which
+     * costs one fee per input proof (NUT-02). The proof count is fixed by the amount:
+     * it decomposes into powers of two, so 1 sat is one proof and 18 sat is two.
+     */
+    private static function redeemFee(Wallet $wallet, int $amount): int {
+        if ($amount <= 0) {
+            return 0;
+        }
+        $ppk = $wallet->getInputFeePpk();
+        return (int)ceil(count(Wallet::splitAmount($amount)) * $ppk / 1000);
     }
 
     /**

@@ -321,6 +321,20 @@ class BackgroundRunner {
         // waiting for its recipient and is not a problem to be solved.
         if ($unspent === count($secrets) && $row['type'] === Transfer::TYPE_DONATION
             && !empty($row['token'])) {
+            // ...unless nobody *can* take it. A mint that charges per input proof can make
+            // a small donation cost more to redeem than it is worth, and then no amount of
+            // retrying will ever deliver it. Say so once and stop, instead of retrying for
+            // as long as the server runs.
+            if (self::isBelowMintFee($row['store_id'], (int)$row['amount'])) {
+                Transfer::note(
+                    $row['id'],
+                    'This donation is too small for this mint to be worth cashing in — the '
+                    . 'mint\'s charge for moving it is as large as the donation itself, so it '
+                    . 'can never arrive. Take it back under Transfers to clear it.'
+                );
+                return 'still_pending';
+            }
+
             if (Donation::postTokenToSink($row['token'])) {
                 // Believe the mint, not the HTTP status: confirm on the next pass.
                 Transfer::note($row['id'], 'Re-sent to the donation sink; awaiting confirmation');
@@ -334,6 +348,27 @@ class BackgroundRunner {
         }
 
         return 'still_pending';
+    }
+
+    /**
+     * Would this amount cost at least as much to redeem as it is worth?
+     *
+     * NUT-02 mints charge one fee per input proof, and an amount decomposes into a fixed
+     * number of proofs (powers of two), so this is knowable without asking anyone.
+     */
+    private static function isBelowMintFee(string $storeId, int $amount): bool
+    {
+        if ($amount <= 0) {
+            return true;
+        }
+        try {
+            $wallet = Invoice::getWalletInstance($storeId);
+            $ppk = $wallet->getInputFeePpk();
+        } catch (Throwable $e) {
+            return false; // Can't tell — keep trying rather than give up on real money.
+        }
+        $fee = (int)ceil(count(\Cashu\Wallet::splitAmount($amount)) * $ppk / 1000);
+        return $fee >= $amount;
     }
 
     /** checkAutoMelt() returns one entry per store, not a single result. */

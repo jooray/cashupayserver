@@ -1023,17 +1023,48 @@ class Invoice {
 
         $amount = \Cashu\Wallet::sumProofs($proofs);
         $fee = $wallet->calculateFee($proofs);
+
+        // Dust. A mint that charges per input can make a small token cost more to swap
+        // than it is worth, which used to be the end of the story: the recipient could
+        // not cash it in and the operator could not take it back either, so the money
+        // was simply stuck. Swapping it *together* with ecash we already hold fixes it —
+        // NUT-02 sums the per-input fee and rounds once for the whole swap, so absorbing
+        // one more input usually costs nothing extra at all.
+        $helpers = [];
         if ($fee >= $amount) {
-            throw new Exception('The mint fee to take this back is larger than the amount');
+            $exclude = array_flip($secrets);
+            foreach (self::getUnspentProofs($storeId) as $candidate) {
+                if (isset($exclude[$candidate->secret])) {
+                    continue;
+                }
+                $helpers[] = $candidate;
+                if ($wallet->calculateFee(array_merge($proofs, $helpers))
+                    < $amount + \Cashu\Wallet::sumProofs($helpers)) {
+                    break;
+                }
+            }
+
+            $fee = $wallet->calculateFee(array_merge($proofs, $helpers));
+            if ($fee >= $amount + \Cashu\Wallet::sumProofs($helpers)) {
+                throw new Exception(
+                    'This is worth less than the mint charges to move it, and there is no '
+                    . 'other ecash in this store to combine it with. It will become '
+                    . 'recoverable once you take another payment.'
+                );
+            }
         }
+
+        $inputs = array_merge($proofs, $helpers);
+        $total = \Cashu\Wallet::sumProofs($inputs);
 
         // Briefly spendable so the library may reserve them, then immediately swapped.
         // The swap is journaled, so an interruption here is recovered rather than lost.
         $storage->updateProofsState($secrets, ProofState::UNSPENT);
         try {
-            $wallet->swap($proofs, \Cashu\Wallet::splitAmount($amount - $fee));
+            $wallet->swap($inputs, \Cashu\Wallet::splitAmount($total - $fee));
         } catch (Throwable $e) {
-            // Put them back where they were: still handed out, not spendable.
+            // Put them back where they were: still handed out, not spendable. The helper
+            // proofs were already spendable and stay that way.
             try {
                 $storage->updateProofsState($secrets, ProofState::EXPORTED);
             } catch (Throwable $ignored) {
@@ -1041,7 +1072,9 @@ class Invoice {
             throw $e;
         }
 
-        return $amount - $fee;
+        // What the operator gets back is the token's own value less the fee this swap
+        // cost; the helpers were already theirs and merely came along for the ride.
+        return max(0, $amount - $fee);
     }
 
     /**
