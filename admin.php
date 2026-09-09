@@ -1230,10 +1230,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // stranding warning; seed changes remain permanently blocked.
                 Config::updateStore($storeId, $updates, $wouldStrand && $confirmStranding);
 
+                // A new mint means a new wallet namespace, and an empty namespace has no
+                // seed bound to it yet. Binding it is a deliberate act the library refuses
+                // to guess at, so without this the store looked fine and then failed on its
+                // first payment with a message about seed fingerprints. The seed already
+                // exists, so restore is the right mode: it adopts the seed and picks up any
+                // ecash this seed already has at that mint.
+                $walletWarning = null;
+                if ($mintChanged || $unitChanged) {
+                    try {
+                        Invoice::initializeWalletForStore($storeId, true);
+                    } catch (Throwable $e) {
+                        error_log("CashuPayServer: could not initialize wallet for {$storeId} after mint change: " . $e->getMessage());
+                        $walletWarning = 'The new mint is saved, but this server could not reach it to '
+                            . 'finish setting up. Check the mint address; payments will not work until '
+                            . 'it responds.';
+                    }
+                }
+
                 echo json_encode([
                     'success' => true,
                     'isConfigured' => Config::isStoreConfigured($storeId),
-                ]);
+                ] + ($walletWarning !== null ? ['warning' => $walletWarning] : []));
             } catch (Exception $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
@@ -6717,7 +6735,12 @@ $isWp = Urls::isWordPress();
                     showToast(result.error || 'Failed to change mint', 'error');
                     return;
                 }
-                showToast('Mint updated. Any old balance is recoverable below.', 'success');
+                if (result.warning) {
+                    // Saved, but not usable yet — that is not a success message.
+                    alert('Mint changed, but not ready\n\n' + result.warning);
+                } else {
+                    showToast('Mint updated. Any old balance is recoverable below.', 'success');
+                }
                 document.getElementById('mint-change-editor').style.display = 'none';
                 loadStoreSettings();
                 if (typeof loadDashboard === 'function') loadDashboard();
