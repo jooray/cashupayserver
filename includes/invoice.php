@@ -600,13 +600,34 @@ class Invoice {
      * Poll a single invoice's quote status
      */
     /**
-     * Shortest interval between two mint round-trips for the same invoice.
+     * Shortest interval between two mint round-trips for the same invoice, while payment
+     * is expected imminently.
      *
      * The checkout page polls every couple of seconds from every open tab, and each poll
-     * used to hit the mint. A known checkout link was therefore enough to occupy a small
-     * PHP-FPM pool with slow network calls.
+     * used to hit the mint directly. A known checkout link was therefore enough to
+     * occupy a small PHP-FPM pool with slow network calls. Coalescing per *invoice* caps
+     * that no matter how many tabs (or strangers) are watching, while keeping the page
+     * itself responsible for settlement — it does not wait for cron.
      */
-    const MIN_POLL_INTERVAL = 5;
+    const MIN_POLL_INTERVAL = 2;
+
+    /** Interval once payment is no longer imminent — a tab someone left open. */
+    const IDLE_POLL_INTERVAL = 15;
+
+    /** How long an invoice counts as "payment expected imminently". */
+    const EAGER_POLL_WINDOW = 900;
+
+    /**
+     * How often this invoice's quote may be re-checked with the mint.
+     *
+     * Customers pay in the first minutes, which is exactly when someone is watching the
+     * checkout page and feels every second of delay. Later, an abandoned tab should not
+     * keep asking at the same rate.
+     */
+    private static function pollIntervalFor(array $invoice): int {
+        $age = time() - (int)($invoice['created_at'] ?? 0);
+        return $age <= self::EAGER_POLL_WINDOW ? self::MIN_POLL_INTERVAL : self::IDLE_POLL_INTERVAL;
+    }
 
     public static function pollSingleQuote(string $invoiceId, bool $force = false): void {
         $invoice = self::getById($invoiceId);
@@ -625,13 +646,18 @@ class Invoice {
             return;
         }
 
-        // Coalesce concurrent pollers for this invoice.
+        // Coalesce concurrent pollers for this invoice. The claim is atomic, so of the
+        // several workers that may be looking at one invoice — every open checkout tab
+        // plus the cron batch — exactly one contacts the mint and the rest return
+        // immediately with what is already known. Cron reads the same column, so
+        // whichever gets there first does the work and the other simply finds nothing
+        // due; they cannot both drive the same quote.
         $now = time();
         if (!$force) {
             $claimed = Database::query(
                 "UPDATE invoices SET last_polled_at = ?
                  WHERE id = ? AND (last_polled_at IS NULL OR last_polled_at <= ?)",
-                [$now, $invoiceId, $now - self::MIN_POLL_INTERVAL]
+                [$now, $invoiceId, $now - self::pollIntervalFor($invoice)]
             )->rowCount();
             if ($claimed === 0) {
                 return; // another request checked this quote moments ago
@@ -669,6 +695,17 @@ class Invoice {
      */
     private static function recordPollOutcome(string $invoiceId, ?string $state, ?string $error): void {
         try {
+            if ($error !== null) {
+                // Losing a race is not a failure. While one worker was talking to the
+                // mint another may have minted and settled the same invoice, so this
+                // one's "quote already issued" is the system working, not breaking.
+                // Recording it would put a scare on the operator's dashboard.
+                $current = Database::fetchOne('SELECT status FROM invoices WHERE id = ?', [$invoiceId]);
+                if ($current !== null && !in_array($current['status'], ['New', 'Processing'], true)) {
+                    return;
+                }
+            }
+
             Database::update(
                 'invoices',
                 [

@@ -89,11 +89,13 @@ $claim = function (int $at) {
         [$at, $at - Invoice::MIN_POLL_INTERVAL]
     )->rowCount();
 };
+check(Invoice::MIN_POLL_INTERVAL >= 1, 'the eager interval still coalesces');
 
+$window = Invoice::MIN_POLL_INTERVAL;
 check($claim($now) === 0, 'a second poll in the same second is coalesced away');
-check($claim($now + 2) === 0, 'a poll 2s later is still coalesced away');
-check($claim($now + Invoice::MIN_POLL_INTERVAL) === 1, 'a poll after the window goes through');
-check($claim($now + Invoice::MIN_POLL_INTERVAL) === 0, 'and immediately coalesces again');
+check($claim($now + $window - 1) === 0, 'a poll inside the window is coalesced away');
+check($claim($now + $window) === 1, 'a poll after the window goes through');
+check($claim($now + $window) === 0, 'and immediately coalesces again');
 
 // --- The batch poller must pick up an invoice it has already polled once -------
 Database::query("DELETE FROM invoices");
@@ -121,6 +123,42 @@ check((int)$row['last_polled_at'] === 1788960303, 'integers round-trip through t
 check(
     Database::fetchOne("SELECT typeof(last_polled_at) t FROM invoices WHERE id = 'inv_fresh'")['t'] === 'integer',
     'and are stored as integers, not text'
+);
+
+// --- The interval adapts to how likely payment is ------------------------------
+Database::query("DELETE FROM invoices");
+$interval = new ReflectionMethod(Invoice::class, 'pollIntervalFor');
+
+$young = ['created_at' => time() - 60];
+$old = ['created_at' => time() - Invoice::EAGER_POLL_WINDOW - 60];
+check(
+    $interval->invoke(null, $young) === Invoice::MIN_POLL_INTERVAL,
+    'a fresh invoice is re-checked eagerly, while a customer is watching'
+);
+check(
+    $interval->invoke(null, $old) === Invoice::IDLE_POLL_INTERVAL,
+    'an abandoned invoice backs off'
+);
+check(
+    Invoice::MIN_POLL_INTERVAL < Invoice::IDLE_POLL_INTERVAL,
+    'the eager interval really is the shorter one'
+);
+
+// --- A benign race must not be reported as a failure ---------------------------
+$record = new ReflectionMethod(Invoice::class, 'recordPollOutcome');
+makeInvoice('inv_race', time(), 'New');
+
+$record->invoke(null, 'inv_race', null, 'quote already issued');
+$row = Database::fetchOne("SELECT last_poll_error FROM invoices WHERE id = 'inv_race'");
+check($row['last_poll_error'] !== null, 'a failure on a still-open invoice is recorded');
+
+// Another worker settles it while this one was talking to the mint.
+Database::query("UPDATE invoices SET status = 'Settled', last_poll_error = NULL WHERE id = 'inv_race'");
+$record->invoke(null, 'inv_race', null, 'quote already issued');
+$row = Database::fetchOne("SELECT last_poll_error FROM invoices WHERE id = 'inv_race'");
+check(
+    $row['last_poll_error'] === null,
+    'the loser of a race against a settled invoice reports nothing'
 );
 
 echo "poll_scheduling: OK\n";
