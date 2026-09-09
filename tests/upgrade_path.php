@@ -82,7 +82,7 @@ require_once dirname(__DIR__) . '/includes/invoice.php';
 
 $db = Database::getInstance();
 
-check((int)$db->query('PRAGMA user_version')->fetchColumn() === 8, 'schema migrates to the current version automatically');
+check((int)$db->query('PRAGMA user_version')->fetchColumn() === 9, 'schema migrates to the current version automatically');
 
 // The operator must not be dropped back into the setup wizard.
 check(Config::isSetupComplete(), 'the installation is still set up');
@@ -116,6 +116,11 @@ check(
     $db->query("SELECT 1 FROM sqlite_master WHERE type='table' AND name='payment_requests'")->fetchColumn() !== false,
     'v8 adds the payment_requests table'
 );
+
+$invoiceColumns = array_column($db->query('PRAGMA table_info(invoices)')->fetchAll(PDO::FETCH_ASSOC), 'name');
+foreach (['last_poll_state', 'last_poll_error'] as $column) {
+    check(in_array($column, $invoiceColumns, true), "v9 adds invoices.$column");
+}
 
 // An unresolved quote well past the 90-day cleanup window must not be deleted.
 require_once dirname(__DIR__) . '/includes/background_runner.php';

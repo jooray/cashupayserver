@@ -157,9 +157,14 @@ function cashupay_diagnostics(?string $storeId): array {
         fn($row) => $storeId === null || $row['store_id'] === $storeId
     ));
 
+    // Anything that should have settled by now: stuck mid-mint, or unpaid-but-recent
+    // with a poll that is failing. Carrying the mint's own last word turns "it isn't
+    // working" into something an operator can act on or report.
     $stuckInvoices = Database::fetchAll(
-        "SELECT id, status, created_at, quote_id FROM invoices
-         WHERE status = 'Processing' AND created_at < ?
+        "SELECT id, status, created_at, quote_id, last_poll_state, last_poll_error
+         FROM invoices
+         WHERE ((status = 'Processing' AND created_at < ?)
+                OR (status = 'New' AND last_poll_error IS NOT NULL))
          " . ($storeId ? "AND store_id = ?" : "") . "
          ORDER BY created_at ASC LIMIT 20",
         $storeId ? [time() - 3600, $storeId] : [time() - 3600]
@@ -4525,7 +4530,14 @@ $isWp = Urls::isWordPress();
                 items.push(`${diag.failedWebhookDeliveries} webhook ${diag.failedWebhookDeliveries === 1 ? 'delivery has' : 'deliveries have'} not been acknowledged by the shop.`);
             }
             (diag.stuckInvoices || []).forEach(inv => {
-                items.push(`Invoice ${inv.id} has been Processing for over an hour.`);
+                if (inv.last_poll_error) {
+                    items.push(`Payment ${inv.id} could not be checked with the mint: `
+                        + `${inv.last_poll_error}`);
+                } else {
+                    items.push(`Payment ${inv.id} has been mid-processing for over an hour`
+                        + (inv.last_poll_state ? ` (the mint last reported it "${inv.last_poll_state}")` : '')
+                        + '.');
+                }
             });
 
             body.innerHTML = '';

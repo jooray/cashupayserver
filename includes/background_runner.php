@@ -34,6 +34,17 @@ class BackgroundRunner {
     const LEASE_SECONDS = 120;
 
     /**
+     * Tasks that run on *every* tick, before the round-robin remainder.
+     *
+     * Round-robin stops a slow task starving the others, but applying it to the payment
+     * path means a customer's settlement waits for whichever housekeeping happens to be
+     * next in line. These three are what turn a paid invoice into a completed order, so
+     * they never wait their turn: recovery of unresolved outgoing operations, the quote
+     * poll that marks an invoice Settled, and the outbox that tells the shop about it.
+     */
+    private const ALWAYS_RUN = ['recover_wallet_operations', 'poll_quotes', 'webhook_outbox'];
+
+    /**
      * Tasks in a fixed order. Recovery of ambiguous outgoing operations always runs
      * first — starting new money movement while an old one is unresolved is how a
      * payment gets made twice.
@@ -106,8 +117,6 @@ class BackgroundRunner {
         $started = microtime(true);
         $results = ['timestamp' => time(), 'tasks' => []];
         $tasks = self::tasks();
-        $names = array_keys($tasks);
-        $cursor = (int)Config::get('cron_task_cursor', '0');
         // Config::get() already decodes JSON, so this comes back as an array. Decoding
         // it a second time yielded [] every run and quietly discarded the health of
         // every task that did not run in this cycle.
@@ -115,32 +124,47 @@ class BackgroundRunner {
         if (!is_array($health)) {
             $health = [];
         }
-        $count = count($names);
+
+        // Everything except the payment path takes its turn.
+        $rotating = array_values(array_diff(array_keys($tasks), self::ALWAYS_RUN));
+        $cursor = (int)Config::get('cron_task_cursor', '0');
+        $count = count($rotating);
         $ran = 0;
 
+        $runTask = function (string $name) use ($tasks, &$results, &$health): void {
+            try {
+                $results['tasks'][$name] = $tasks[$name]();
+                $health[$name] = ['last_ok' => time()];
+            } catch (Throwable $e) {
+                $results['tasks'][$name] = 'error: ' . $e->getMessage();
+                $health[$name] = [
+                    'last_error' => time(),
+                    'message' => mb_substr($e->getMessage(), 0, 300),
+                ];
+                error_log("CashuPayServer cron task {$name} failed: " . $e->getMessage());
+            }
+        };
+
         try {
+            // The payment path runs first and is not subject to the budget: a customer's
+            // settlement must never be skipped because housekeeping ran long.
+            foreach (self::ALWAYS_RUN as $name) {
+                if (isset($tasks[$name])) {
+                    $runTask($name);
+                }
+            }
+
             for ($i = 0; $i < $count; $i++) {
                 if (microtime(true) - $started > $budgetSeconds) {
                     break;
                 }
-                $name = $names[($cursor + $i) % $count];
-                try {
-                    $results['tasks'][$name] = $tasks[$name]();
-                    $health[$name] = ['last_ok' => time()];
-                } catch (Throwable $e) {
-                    $results['tasks'][$name] = 'error: ' . $e->getMessage();
-                    $health[$name] = [
-                        'last_error' => time(),
-                        'message' => mb_substr($e->getMessage(), 0, 300),
-                    ];
-                    error_log("CashuPayServer cron task {$name} failed: " . $e->getMessage());
-                }
+                $runTask($rotating[($cursor + $i) % $count]);
                 $ran++;
             }
 
-            $results['ran'] = $ran;
+            $results['ran'] = count($results['tasks']);
             $results['durationMs'] = (int)round((microtime(true) - $started) * 1000);
-            Config::set('cron_task_cursor', (string)(($cursor + $ran) % $count));
+            Config::set('cron_task_cursor', (string)($count > 0 ? ($cursor + $ran) % $count : 0));
             Config::set('cron_task_health', $health);
             Config::set('cron_last_run', (string)time());
             Config::set('cron_last_result', $results);

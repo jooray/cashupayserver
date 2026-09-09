@@ -397,6 +397,7 @@ class Invoice {
 
                 // Check quote status
                 $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
+                self::recordPollOutcome($invoice['id'], $quoteStatus->state, null);
 
                 if ($quoteStatus->isPaid() || $quoteStatus->isIssued()) {
                     if ($quoteStatus->isIssued()) {
@@ -405,7 +406,9 @@ class Invoice {
                         self::mintAndStoreTokens($invoice, $wallet);
                     }
                 }
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
+                // Visible to the operator, not just to a log they cannot read.
+                self::recordPollOutcome($invoice['id'], null, $e->getMessage());
                 error_log("CashuPayServer: Error polling invoice {$invoice['id']}: " . $e->getMessage());
             }
         }
@@ -639,10 +642,9 @@ class Invoice {
             $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null);
             $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
 
-            error_log("CashuPayServer: Quote {$invoice['quote_id']} state: {$quoteStatus->state}");
+            self::recordPollOutcome($invoice['id'], $quoteStatus->state, null);
 
             if ($quoteStatus->isPaid() || $quoteStatus->isIssued()) {
-                error_log("CashuPayServer: Quote is paid/issued, processing...");
                 if ($quoteStatus->isIssued()) {
                     self::completeIssuedInvoice($invoice, $wallet);
                 } elseif ($invoice['status'] === 'New') {
@@ -651,8 +653,33 @@ class Invoice {
                     self::mintAndStoreTokens($invoice, $wallet);
                 }
             }
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
+            // Record it where the operator can see it. This used to go only to the PHP
+            // error log, which on most shared hosts nobody can read — so "why wasn't my
+            // order marked paid?" had no answer at all.
+            self::recordPollOutcome($invoice['id'], null, $e->getMessage());
             error_log("CashuPayServer: Error polling single quote {$invoice['id']}: " . $e->getMessage());
+        }
+    }
+
+    /**
+     * Remember what the mint last said about an invoice's quote, and any failure.
+     *
+     * Never throws: diagnostics must not be the thing that breaks a payment.
+     */
+    private static function recordPollOutcome(string $invoiceId, ?string $state, ?string $error): void {
+        try {
+            Database::update(
+                'invoices',
+                [
+                    'last_poll_state' => $state,
+                    'last_poll_error' => $error !== null ? mb_substr($error, 0, 300) : null,
+                ],
+                'id = ?',
+                [$invoiceId]
+            );
+        } catch (Throwable $e) {
+            // Ignore: this is only bookkeeping.
         }
     }
 

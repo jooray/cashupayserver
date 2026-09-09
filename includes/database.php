@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 8;
+    private const SCHEMA_VERSION = 9;
 
     /** Set when ensureCurrentSchema() failed, so callers can tell "broken" from "new". */
     private static ?string $migrationError = null;
@@ -329,6 +329,8 @@ HTACCESS;
             created_at INTEGER NOT NULL,
             expiration_time INTEGER NOT NULL,
             last_polled_at INTEGER DEFAULT NULL,
+            last_poll_state TEXT,
+            last_poll_error TEXT,
             FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
         );
 
@@ -558,6 +560,15 @@ HTACCESS;
                 )");
                 $pdo->exec("CREATE INDEX IF NOT EXISTS idx_payment_requests_store ON payment_requests(store_id, created_at)");
                 $pdo->exec('PRAGMA user_version = 8');
+            }
+            if ($version < 9) {
+                // What the mint last said about this invoice's quote, and why the last
+                // check failed. "Why wasn't my order marked paid?" is the first question
+                // an operator asks, and until now the only answer was in a PHP error log
+                // most of them cannot read.
+                self::addColumnIfMissing($pdo, 'invoices', 'last_poll_state', 'TEXT');
+                self::addColumnIfMissing($pdo, 'invoices', 'last_poll_error', 'TEXT');
+                $pdo->exec('PRAGMA user_version = 9');
             }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()
