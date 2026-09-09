@@ -1,7 +1,7 @@
 {
   "name": "CashuPayServer",
   "short_name": "CashuPay",
-  "version": "0.5.0-alpha",
+  "version": "0.5.1-alpha",
   "description": "Lightning payments with Cashu ecash",
   "start_url": "/admin.php",
   "display": "standalone",
