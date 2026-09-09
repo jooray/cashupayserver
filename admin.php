@@ -204,10 +204,15 @@ function cashupay_diagnostics(?string $storeId): array {
         // driving background work. With a real cron job running every minute the
         // installation is healthy, and shouting "needs attention" at an operator
         // whose site is fine teaches them to ignore the card.
+        // An exported token nobody has cashed in yet is normal, not a fault, so it does
+        // not raise an alarm on its own — it is listed so the operator can act on it.
         'needsAttention' => $stale
             || $failedDeliveries > 0
             || !empty($stuckInvoices)
-            || !empty($pendingTransfers),
+            || !empty(array_filter(
+                $pendingTransfers,
+                fn($row) => $row['type'] !== Transfer::TYPE_TOKEN_EXPORT
+            )),
     ];
 }
 
@@ -752,6 +757,116 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'transfer_token':
+            // Re-display a token that was handed out. It is bearer money, so it stays
+            // available for as long as nobody has cashed it in — a lost QR code should
+            // not mean lost funds.
+            try {
+                $row = Transfer::getById((string)($_POST['id'] ?? ''));
+                if (!$row || empty($row['token'])) {
+                    http_response_code(404);
+                    echo json_encode(['error' => 'No token stored for this transfer']);
+                    break;
+                }
+                echo json_encode([
+                    'token' => $row['token'],
+                    'amount' => (int)$row['amount'],
+                    'unit' => $row['unit'],
+                    'type' => $row['type'],
+                ]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'check_transfer':
+            // Ask the mint whether this token has been cashed in yet.
+            try {
+                $row = Transfer::getById((string)($_POST['id'] ?? ''));
+                if (!$row) {
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Transfer not found']);
+                    break;
+                }
+                $secrets = array_values(array_filter(explode(',', (string)($row['reference'] ?? ''))));
+                if (empty($secrets)) {
+                    echo json_encode(['status' => $row['status'], 'message' => 'Nothing to check for this transfer.']);
+                    break;
+                }
+
+                $states = Invoice::checkProofStatesBySecrets($row['store_id'], $secrets);
+                $spent = count(array_filter($states, fn($st) => $st === ProofState::SPENT));
+
+                if ($spent === count($secrets)) {
+                    Transfer::complete($row['id'], (int)$row['amount']);
+                    Invoice::markProofsSpent($row['store_id'], $secrets);
+                    echo json_encode([
+                        'status' => Transfer::STATUS_COMPLETED,
+                        'message' => 'This token has been cashed in. Marked as completed.',
+                    ]);
+                } elseif ($spent === 0) {
+                    echo json_encode([
+                        'status' => $row['status'],
+                        'reclaimable' => true,
+                        'message' => 'Nobody has cashed this in yet. You can show the token again, or take the money back.',
+                    ]);
+                } else {
+                    echo json_encode([
+                        'status' => $row['status'],
+                        'message' => "Partly cashed in ({$spent} of " . count($secrets) . "). Leave it for now; it will resolve itself.",
+                    ]);
+                }
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => 'Could not reach the mint to check: ' . $e->getMessage()]);
+            }
+            break;
+
+        case 'reclaim_transfer':
+            // Take back an unclaimed token by swapping its ecash for fresh ecash, which
+            // kills the old token at the mint. Anything less would leave two valid
+            // claims on the same money.
+            $reclaimLock = null;
+            try {
+                $row = Transfer::getById((string)($_POST['id'] ?? ''));
+                if (!$row) {
+                    http_response_code(404);
+                    echo json_encode(['error' => 'Transfer not found']);
+                    break;
+                }
+                if ($row['status'] !== Transfer::STATUS_PENDING) {
+                    http_response_code(409);
+                    echo json_encode(['error' => 'This transfer is already ' . $row['status'] . '.']);
+                    break;
+                }
+
+                $reclaimLock = cashupay_acquire_lock('funds_' . $row['store_id']);
+                if (!$reclaimLock) {
+                    http_response_code(409);
+                    echo json_encode(['error' => 'Another outgoing operation is in progress. Try again in a moment.']);
+                    break;
+                }
+
+                @set_time_limit(0);
+                $secrets = array_values(array_filter(explode(',', (string)($row['reference'] ?? ''))));
+                $recovered = Invoice::reclaimExportedProofs($row['store_id'], $secrets);
+
+                Transfer::fail($row['id'], 'Taken back by the operator; the token no longer works');
+                echo json_encode([
+                    'success' => true,
+                    'amount' => $recovered,
+                    'unit' => $row['unit'],
+                    'message' => "{$recovered} {$row['unit']} is back in your balance. The old token no longer works.",
+                ]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            } finally {
+                cashupay_release_lock($reclaimLock ?? null);
             }
             break;
 
@@ -3510,6 +3625,29 @@ $isWp = Urls::isWordPress();
         </div>
     </div>
 
+    <!-- Re-display a token that has already been handed out but not yet cashed in. -->
+    <div class="modal-overlay" id="modal-token-view">
+        <div class="modal">
+            <div class="modal-handle"></div>
+            <div class="modal-title">Your token</div>
+            <p class="form-help" style="margin-bottom: 1rem;">
+                This is the same token as before — showing it again does not create new money.
+                It works until someone cashes it in.
+            </p>
+            <div style="text-align: center; font-size: 1.4rem; font-weight: 600; margin-bottom: 0.75rem;"
+                 id="token-view-amount"></div>
+            <div id="token-view-qr" style="display: flex; justify-content: center; margin-bottom: 1rem;"></div>
+            <div class="form-group">
+                <label class="form-label">Token</label>
+                <textarea class="form-input" id="token-view-text" readonly rows="4"
+                          style="font-family: monospace; font-size: 0.7rem; word-break: break-all;"></textarea>
+            </div>
+            <button class="btn btn-full" type="button" onclick="copyTokenView()">Copy token</button>
+            <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;"
+                    onclick="closeModal('modal-token-view')">Close</button>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="modal-export">
         <div class="modal">
             <div class="modal-handle"></div>
@@ -4143,17 +4281,40 @@ $isWp = Urls::isWordPress();
             if (version === bootVersion || reloadingForUpdate) return;
 
             reloadingForUpdate = true;
+
+            // A token on screen is bearer money the operator may be part-way through
+            // handing over. Reloading it away lost a real 300 sat export during testing,
+            // so when anything is open we ask instead of acting. (The earlier version
+            // looked for the wrong CSS class, so this never triggered at all.)
+            const modalOpen = !!document.querySelector('.modal-overlay.visible');
+
             const banner = document.createElement('div');
             banner.setAttribute('role', 'status');
             banner.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;'
-                + 'background:#f7931a;color:#1a202c;padding:0.85rem 1rem;text-align:center;font-weight:600';
-            banner.textContent = `CashuPayServer was updated to ${version} — reloading…`;
+                + 'background:#f7931a;color:#1a202c;padding:0.85rem 1rem;text-align:center;'
+                + 'font-weight:600;display:flex;gap:0.75rem;align-items:center;justify-content:center';
+
+            const text = document.createElement('span');
+            text.textContent = modalOpen
+                ? `CashuPayServer was updated to ${version}. Finish what you are doing, then reload.`
+                : `CashuPayServer was updated to ${version} — reloading…`;
+            banner.appendChild(text);
+
+            if (modalOpen) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = 'Reload now';
+                button.style.cssText = 'background:#1a202c;color:#fff;border:0;border-radius:6px;'
+                    + 'padding:0.35rem 0.8rem;font-weight:600;cursor:pointer';
+                button.addEventListener('click', () => window.location.reload());
+                banner.appendChild(button);
+            }
+
             document.body.appendChild(banner);
 
-            // Give an in-flight export modal a moment to be read before the reload:
-            // the displayed token is bearer money and must not vanish silently.
-            const hasOpenModal = !!document.querySelector('.modal.active, .modal[style*="display: flex"]');
-            setTimeout(() => window.location.reload(), hasOpenModal ? 15000 : 2500);
+            if (!modalOpen) {
+                setTimeout(() => window.location.reload(), 2500);
+            }
         }
 
         /** A 401 from any admin call means the session is gone; show the password screen. */
@@ -4235,19 +4396,29 @@ $isWp = Urls::isWordPress();
                 // Say so on the balance card: an operator upgrading from a version that
                 // counted exported tokens as available otherwise just sees the number
                 // drop and assumes something went wrong.
+                // Money in tokens that have been handed out but not cashed in. It is not
+                // spendable and not lost, so it gets its own quiet line rather than
+                // shouting inside the balance card.
                 let exportedNote = document.getElementById('exported-balance-note');
                 if (!exportedNote) {
                     exportedNote = document.createElement('div');
                     exportedNote.id = 'exported-balance-note';
-                    exportedNote.style.cssText = 'margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-secondary);';
-                    document.querySelector('.balance-label')?.parentNode?.appendChild(exportedNote);
+                    exportedNote.style.cssText = 'display: flex; align-items: baseline; gap: 0.4rem;'
+                        + 'margin-top: 0.75rem; padding-top: 0.75rem;'
+                        + 'border-top: 1px solid rgba(255,255,255,0.22);'
+                        + 'font-size: 0.8rem; color: rgba(255,255,255,0.92);';
+                    document.querySelector('.balance-card')?.appendChild(exportedNote);
                 }
                 const exported = dashboardData.exportedBalance ?? 0;
                 if (exported > 0) {
-                    exportedNote.textContent =
-                        `Plus ${formatAmount(exported, mintUnit)} ${unitLabel} in tokens you exported `
-                        + 'that nobody has cashed in yet. It is still yours — see Transfers.';
-                    exportedNote.style.display = '';
+                    exportedNote.innerHTML = '';
+                    const value = document.createElement('strong');
+                    value.textContent = `${formatAmount(exported, mintUnit)} ${unitLabel}`;
+                    const rest = document.createElement('span');
+                    rest.style.opacity = '0.85';
+                    rest.textContent = ' in tokens waiting to be cashed in';
+                    exportedNote.append(value, rest);
+                    exportedNote.style.display = 'flex';
                 } else {
                     exportedNote.style.display = 'none';
                 }
@@ -4476,7 +4647,10 @@ $isWp = Urls::isWordPress();
             const body = document.getElementById('diagnostics-body');
             if (!card || !body) return;
 
-            if (!diag || (!diag.needsAttention && !diag.background?.needsBaseUrl)) {
+            const hasItems = diag && (diag.needsAttention
+                || diag.background?.needsBaseUrl
+                || (diag.pendingTransfers || []).length > 0);
+            if (!hasItems) {
                 card.style.display = 'none';
                 return;
             }
@@ -4512,9 +4686,22 @@ $isWp = Urls::isWordPress();
                     : `Background tasks last ran ${Math.round(bg.secondsAgo / 60)} min ago.`);
             }
             (diag.pendingTransfers || []).forEach(t => {
-                items.push(`Outgoing ${t.type} of ${t.amount} ${t.unit} is unresolved`
-                    + (t.detail ? ` — ${t.detail}` : '')
-                    + '. Do not retry it; it will be reconciled automatically.');
+                const amount = `${t.amount} ${(t.unit || 'sat').toUpperCase()}`;
+                if (t.type === 'token_export') {
+                    // Not a fault: a token sits there until someone cashes it in. Say what
+                    // the operator can do rather than telling them to wait indefinitely.
+                    items.push(`A token for ${amount} has not been cashed in yet. `
+                        + 'Under Transfers you can show it again, check whether it has been '
+                        + 'used, or take the money back.');
+                } else if (t.type === 'donation') {
+                    items.push(`A donation of ${amount} has not gone through`
+                        + (t.detail ? ` — ${t.detail}` : '')
+                        + '. It keeps retrying; you can also take the money back under Transfers.');
+                } else {
+                    items.push(`A withdrawal of ${amount} has not finished yet`
+                        + (t.detail ? ` — ${t.detail}` : '')
+                        + '. Do not send it again; it will resolve on its own.');
+                }
             });
             (diag.pendingWalletOperations || []).forEach(op => {
                 const age = op.ageSeconds >= 86400
@@ -4550,7 +4737,7 @@ $isWp = Urls::isWordPress();
             });
             const title = document.getElementById('diagnostics-title');
             if (title) {
-                title.textContent = diag.needsAttention ? 'Needs attention' : 'Suggested setting';
+                title.textContent = diag.needsAttention ? 'Needs attention' : 'Worth knowing';
             }
 
             body.appendChild(list);
@@ -4614,8 +4801,28 @@ $isWp = Urls::isWordPress();
                     : '';
                 const feeText = (t.fee && t.fee > 0) ? ` · fee ${formatAmount(t.fee, t.unit)}` : '';
                 const statusClass = t.status === 'completed' ? 'settled' : (t.status === 'failed' ? 'expired' : 'new');
+
+                // A token that is still out there is money the operator can act on: show
+                // it again (a lost QR code must not mean lost funds), ask the mint whether
+                // it has been cashed in, or take it back.
+                const isToken = t.type === 'token_export' || t.type === 'donation';
+                const actionable = isToken && t.status === 'pending' && t.hasToken;
+                const label = t.status === 'pending'
+                    ? (isToken ? 'waiting to be cashed in' : 'in progress')
+                    : t.status;
+
+                const actions = actionable ? `
+                        <div class="transfer-actions" style="display: flex; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem;">
+                            <button class="btn btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;"
+                                    data-transfer="${escapeHtml(t.id)}" data-act="show">Show token</button>
+                            <button class="btn btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;"
+                                    data-transfer="${escapeHtml(t.id)}" data-act="check">Check if cashed in</button>
+                            <button class="btn btn-secondary" style="padding: 0.25rem 0.6rem; font-size: 0.75rem;"
+                                    data-transfer="${escapeHtml(t.id)}" data-act="reclaim">Take the money back</button>
+                        </div>` : '';
+
                 return `
-                    <div class="list-item">
+                    <div class="list-item" style="${actionable ? 'flex-wrap: wrap;' : ''}">
                         <div class="list-icon ${statusClass}">${m.icon}</div>
                         <div class="list-content">
                             <div class="list-title">${m.label}</div>
@@ -4623,11 +4830,100 @@ $isWp = Urls::isWordPress();
                         </div>
                         <div class="list-amount">
                             <div class="list-amount-value">-${formatAmount(t.amount, t.unit)} ${escapeHtml(unit)}</div>
-                            <div class="list-amount-status ${statusClass}">${escapeHtml(t.status)}</div>
+                            <div class="list-amount-status ${statusClass}">${escapeHtml(label)}</div>
                         </div>
+                        ${actions ? `<div style="flex-basis: 100%;">${actions}</div>` : ''}
                     </div>
                 `;
             }).join('');
+
+            container.querySelectorAll('[data-transfer]').forEach(btn => {
+                btn.addEventListener('click', () => handleTransferAction(btn.dataset.transfer, btn.dataset.act, btn));
+            });
+        }
+
+        /** Show token / check if cashed in / take the money back. */
+        async function handleTransferAction(id, act, btn) {
+            const original = btn.textContent;
+            btn.disabled = true;
+            btn.textContent = '…';
+
+            try {
+                if (act === 'show') {
+                    const res = await postWithCsrf(adminUrl, `action=transfer_token&id=${encodeURIComponent(id)}`);
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) { showToast(data.error || 'Could not load the token', 'error'); return; }
+                    showTokenModal(data.token, data.amount, data.unit);
+                    return;
+                }
+
+                if (act === 'check') {
+                    const res = await postWithCsrf(adminUrl, `action=check_transfer&id=${encodeURIComponent(id)}`);
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) { showToast(data.error || 'Could not check', 'error'); return; }
+                    alert(data.message);
+                    loadDashboard();
+                    return;
+                }
+
+                if (act === 'reclaim') {
+                    if (!confirm('Take this money back?\n\n'
+                        + 'The token will stop working, so make sure nobody is about to use it. '
+                        + 'The ecash returns to your balance (minus any mint fee).')) {
+                        return;
+                    }
+                    const res = await postWithCsrf(adminUrl, `action=reclaim_transfer&id=${encodeURIComponent(id)}`);
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) { alert(data.error || 'Could not take the money back'); return; }
+                    showToast(data.message, 'success');
+                    loadDashboard();
+                }
+            } catch (e) {
+                showToast(e.message || 'Something went wrong', 'error');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = original;
+            }
+        }
+
+        function copyTokenView() {
+            const text = document.getElementById('token-view-text').value
+                || document.getElementById('token-view-text').textContent;
+            navigator.clipboard?.writeText(text)
+                .then(() => showToast('Token copied', 'success'))
+                .catch(() => {
+                    // Clipboard access needs a secure context and permission; selecting
+                    // the text is the fallback that always works.
+                    document.getElementById('token-view-text').select();
+                    showToast('Press Ctrl/Cmd+C to copy', '');
+                });
+        }
+
+        /** Re-display a token with its QR, the same way the export screen does. */
+        function showTokenModal(token, amount, unit) {
+            const modal = document.getElementById('modal-token-view');
+            document.getElementById('token-view-amount').textContent =
+                `${formatAmount(amount, unit)} ${(unit || 'sat').toUpperCase()}`;
+            document.getElementById('token-view-text').value = token;
+
+            const qr = document.getElementById('token-view-qr');
+            qr.innerHTML = '';
+            try {
+                if (typeof AnimatedQR !== 'undefined' && AnimatedQR.needsAnimation(token)) {
+                    if (activeAnimatedQr) activeAnimatedQr.destroy();
+                    activeAnimatedQr = new AnimatedQR(qr, { frameRate: 200, maxFragmentLen: 200, qrSize: 260, errorCorrection: 'M' });
+                    activeAnimatedQr.encode(token);
+                } else if (typeof QRious !== 'undefined') {
+                    const canvas = document.createElement('canvas');
+                    qr.appendChild(canvas);
+                    new QRious({ element: canvas, value: token, size: Math.min(260, window.innerWidth - 80),
+                        backgroundAlpha: 1, foreground: '#000000', background: '#ffffff', level: 'L' });
+                }
+            } catch (e) {
+                console.error('QR render failed', e);
+            }
+
+            modal.classList.add('visible');
         }
 
         function renderStores(stores) {
@@ -6444,6 +6740,11 @@ $isWp = Urls::isWordPress();
 
         function closeModal(id) {
             document.getElementById(id).classList.remove('visible');
+
+            if (id === 'modal-token-view' && activeAnimatedQr) {
+                activeAnimatedQr.destroy();
+                activeAnimatedQr = null;
+            }
 
             // Cleanup and refresh when closing export modal
             if (id === 'modal-export') {

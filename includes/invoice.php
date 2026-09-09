@@ -946,6 +946,105 @@ class Invoice {
     }
 
     /**
+     * Ask the mint what it thinks of these proofs.
+     *
+     * @param string[] $secrets
+     * @return array<string, string> secret => state, or [] when the mint could not be asked
+     */
+    public static function checkProofStatesBySecrets(string $storeId, array $secrets): array {
+        $secrets = array_values(array_filter($secrets, 'strlen'));
+        if (empty($secrets)) {
+            return [];
+        }
+
+        $store = Config::getStore($storeId);
+        if (!$store || empty($store['mint_url'])) {
+            return [];
+        }
+
+        $Ys = [];
+        foreach ($secrets as $secret) {
+            $Ys[] = bin2hex(\Cashu\Secp256k1::compressPoint(\Cashu\Crypto::hashToCurve($secret)));
+        }
+
+        $client = new \Cashu\MintClient($store['mint_url']);
+        $response = $client->post('checkstate', ['Ys' => $Ys]);
+        $states = $response['states'] ?? null;
+        if (!is_array($states) || count($states) !== count($secrets)) {
+            throw new Exception('Mint returned an incomplete proof state response');
+        }
+
+        $result = [];
+        foreach ($states as $i => $state) {
+            if (isset($state['Y']) && !hash_equals($Ys[$i], strtolower((string)$state['Y']))) {
+                throw new Exception('Mint returned proof states in an unexpected order');
+            }
+            $result[$secrets[$i]] = strtoupper($state['state'] ?? '');
+        }
+
+        return $result;
+    }
+
+    /**
+     * Take back an exported token's value by swapping its proofs for fresh ones.
+     *
+     * This is the only safe way to undo an export: simply marking the proofs spendable
+     * again would leave the token in the recipient's hands still valid, and whoever got
+     * there second would lose. Swapping invalidates the token at the mint.
+     *
+     * Refuses unless the mint confirms every proof is still unspent — if the recipient
+     * already redeemed it, there is nothing to take back.
+     *
+     * @param string[] $secrets
+     * @return int Amount returned to the spendable balance
+     */
+    public static function reclaimExportedProofs(string $storeId, array $secrets): int {
+        $secrets = array_values(array_filter($secrets, 'strlen'));
+        if (empty($secrets)) {
+            throw new Exception('Nothing to reclaim');
+        }
+
+        $states = self::checkProofStatesBySecrets($storeId, $secrets);
+        foreach ($secrets as $secret) {
+            if (($states[$secret] ?? null) !== ProofState::UNSPENT) {
+                throw new Exception(
+                    'This token has already been cashed in (or is being cashed in right now), '
+                    . 'so it cannot be taken back.'
+                );
+            }
+        }
+
+        $wallet = self::getWalletInstance($storeId);
+        $storage = $wallet->getStorage();
+        $proofs = $storage->getProofsBySecretsAsObjects($secrets);
+        if (count($proofs) !== count($secrets)) {
+            throw new Exception('Some of this token\'s ecash is no longer in the wallet');
+        }
+
+        $amount = \Cashu\Wallet::sumProofs($proofs);
+        $fee = $wallet->calculateFee($proofs);
+        if ($fee >= $amount) {
+            throw new Exception('The mint fee to take this back is larger than the amount');
+        }
+
+        // Briefly spendable so the library may reserve them, then immediately swapped.
+        // The swap is journaled, so an interruption here is recovered rather than lost.
+        $storage->updateProofsState($secrets, ProofState::UNSPENT);
+        try {
+            $wallet->swap($proofs, \Cashu\Wallet::splitAmount($amount - $fee));
+        } catch (Throwable $e) {
+            // Put them back where they were: still handed out, not spendable.
+            try {
+                $storage->updateProofsState($secrets, ProofState::EXPORTED);
+            } catch (Throwable $ignored) {
+            }
+            throw $e;
+        }
+
+        return $amount - $fee;
+    }
+
+    /**
      * Value sitting in tokens this store handed out that nobody has redeemed yet.
      *
      * Shown next to the balance so the money is visibly accounted for. Without it, an

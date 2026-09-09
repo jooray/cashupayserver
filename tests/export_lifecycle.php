@@ -113,6 +113,37 @@ check($exact !== null && \Cashu\Wallet::sumProofs($exact) === 20, 'an exact subs
 $exact = Donation::selectExact($remaining, 4);
 check($exact !== null && count($exact) === 1 && $exact[0]->amount === 4, 'a single matching proof is used for an exact donation');
 
+// --- Taking an unclaimed token back ------------------------------------------
+// The only safe way to undo an export is to swap the ecash for fresh ecash, which kills
+// the old token at the mint. Simply making it spendable again would leave two valid
+// claims on the same money.
+$reclaim = new ReflectionMethod(Invoice::class, 'reclaimExportedProofs');
+
+// A token the mint says was already cashed in must not be reclaimable.
+$storage->storeProofs([new Proof('009a1f293253e41e', 64, 'claimed-secret', '02' . str_repeat('44', 64 / 2))]);
+$storage->updateProofsState(['claimed-secret'], ProofState::EXPORTED);
+
+$failed = false;
+try {
+    // No mint is reachable here, so the state check throws — which must also block it.
+    $reclaim->invoke(null, $storeId, ['claimed-secret']);
+} catch (Throwable $e) {
+    $failed = true;
+}
+check($failed, 'reclaim refuses when the mint cannot confirm the ecash is still unspent');
+check(
+    ($storage->getProofsStatesBySecrets(['claimed-secret'])['claimed-secret'] ?? null) === ProofState::EXPORTED,
+    'a refused reclaim leaves the ecash exactly as it was'
+);
+
+$failed = false;
+try {
+    $reclaim->invoke(null, $storeId, []);
+} catch (Throwable $e) {
+    $failed = true;
+}
+check($failed, 'reclaim refuses an empty proof set');
+
 echo "export_lifecycle: OK\n";
 
 // Cleanup

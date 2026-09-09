@@ -243,27 +243,12 @@ class BackgroundRunner {
         foreach (Transfer::getPending() as $row) {
             $result['checked']++;
             try {
-                if ($row['type'] === Transfer::TYPE_DONATION) {
-                    if (empty($row['token'])) {
-                        $result['still_pending']++;
-                        continue;
-                    }
-                    if (Donation::postTokenToSink($row['token'])) {
-                        Transfer::complete($row['id'], (int)$row['amount']);
-                        if (!empty($row['reference'])) {
-                            Invoice::markProofsSpent($row['store_id'], explode(',', $row['reference']));
-                        }
-                        $result['completed']++;
-                    } else {
-                        $result['still_pending']++;
-                    }
-                    continue;
-                }
-
-                if ($row['type'] === Transfer::TYPE_TOKEN_EXPORT) {
-                    // An export is resolved by its recipient, not by us. It stays pending
-                    // until the proofs show up SPENT at the mint.
-                    $result['still_pending']++;
+                // Anything handed out as a token — an export or a donation — is resolved
+                // by whoever received it. The mint, not our own retry log, is what knows
+                // whether that happened.
+                if (in_array($row['type'], [Transfer::TYPE_DONATION, Transfer::TYPE_TOKEN_EXPORT], true)) {
+                    $outcome = self::reconcileTokenTransfer($row);
+                    $result[$outcome]++;
                     continue;
                 }
 
@@ -295,6 +280,60 @@ class BackgroundRunner {
         }
 
         return $result;
+    }
+
+    /**
+     * Resolve a transfer whose value left as a token.
+     *
+     * Asking the mint is what makes this reliable: a POST to the donation sink can
+     * succeed while its response is lost, and a recipient can cash a token in without
+     * telling us. If the proofs are spent, somebody got the money and the transfer is
+     * done — regardless of what our own delivery attempt reported.
+     *
+     * @return string One of the reconcileTransfers() result keys
+     */
+    private static function reconcileTokenTransfer(array $row): string {
+        $secrets = array_values(array_filter(explode(',', (string)($row['reference'] ?? ''))));
+        if (empty($secrets)) {
+            return 'still_pending';
+        }
+
+        $states = Invoice::checkProofStatesBySecrets($row['store_id'], $secrets);
+        $spent = 0;
+        $unspent = 0;
+        foreach ($secrets as $secret) {
+            $state = $states[$secret] ?? null;
+            if ($state === \Cashu\ProofState::SPENT) {
+                $spent++;
+            } elseif ($state === \Cashu\ProofState::UNSPENT) {
+                $unspent++;
+            }
+        }
+
+        // Fully redeemed: the recipient (or the sink) has the money.
+        if ($spent === count($secrets)) {
+            Transfer::complete($row['id'], (int)$row['amount']);
+            Invoice::markProofsSpent($row['store_id'], $secrets);
+            return 'completed';
+        }
+
+        // Nobody has taken it yet. A donation is ours to keep trying; an export is simply
+        // waiting for its recipient and is not a problem to be solved.
+        if ($unspent === count($secrets) && $row['type'] === Transfer::TYPE_DONATION
+            && !empty($row['token'])) {
+            if (Donation::postTokenToSink($row['token'])) {
+                // Believe the mint, not the HTTP status: confirm on the next pass.
+                Transfer::note($row['id'], 'Re-sent to the donation sink; awaiting confirmation');
+            } else {
+                Transfer::note(
+                    $row['id'],
+                    'The donation service is not accepting this token. The ecash is still '
+                    . 'yours — you can take it back from Transfers.'
+                );
+            }
+        }
+
+        return 'still_pending';
     }
 
     /** checkAutoMelt() returns one entry per store, not a single result. */
