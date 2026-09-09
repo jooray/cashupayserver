@@ -79,6 +79,31 @@ function cashupay_backup_mint_holdings(int $backupMintId): ?array {
  *
  * @return string[] Empty when nothing is outstanding
  */
+/**
+ * Settle the ledger row for a token we have just seen redeemed.
+ *
+ * The export screen watches the mint and turns green the moment the recipient cashes a
+ * token in. That used to be all it did: the proofs were marked spent but the transfer
+ * stayed pending, so closing the modal revealed a dashboard still calling the very token
+ * the operator had just watched being claimed "not cashed in yet" — and it stayed that
+ * way until the round-robin reconcile task came around, which can be minutes.
+ *
+ * Whoever observes the redemption is in the best position to record it, so record it here.
+ */
+function cashupay_settle_redeemed_transfer(string $storeId, array $secrets): void {
+    try {
+        $row = Transfer::findPendingBySecrets($storeId, $secrets);
+        if ($row === null) {
+            return;
+        }
+        Transfer::complete($row['id'], (int)$row['amount']);
+    } catch (Throwable $e) {
+        // The money is already settled at the mint; a bookkeeping failure must not turn
+        // a successful redemption into an error on the operator's screen.
+        error_log('CashuPayServer: could not settle redeemed transfer: ' . $e->getMessage());
+    }
+}
+
 function cashupay_store_deletion_blockers(string $storeId): array {
     $blockers = [];
 
@@ -1341,6 +1366,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($spentCount == count($secrets)) {
                     // All spent in database
+                    cashupay_settle_redeemed_transfer($storeId, $secrets);
                     echo json_encode(['spent' => true, 'source' => 'db']);
                     break;
                 }
@@ -1379,6 +1405,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // If all spent at mint but not in DB, update DB
                 if ($allSpent && $spentCount < count($secrets)) {
                     Invoice::markProofsSpent($storeId, $secrets);
+                }
+                if ($allSpent) {
+                    cashupay_settle_redeemed_transfer($storeId, $secrets);
                 }
 
                 echo json_encode(['spent' => $allSpent, 'source' => 'mint']);
@@ -4010,6 +4039,7 @@ $isWp = Urls::isWordPress();
             }
 
             await loadDashboard();
+            startDashboardRefresh();
 
             // Show success toast after dashboard loaded
             if (createdStoreId) {
@@ -4119,7 +4149,10 @@ $isWp = Urls::isWordPress();
                     const label = runBackgroundBtn.textContent;
                     runBackgroundBtn.textContent = 'Running…';
                     try {
-                        const response = await postWithCsrf(adminUrl + '?api=run_background', '');
+                        // run_background is a POST action, not a `?api=` read endpoint.
+                        // Sending it as a query parameter landed in the GET dispatcher,
+                        // which does not know it, so the button answered "Unknown action".
+                        const response = await postWithCsrf(adminUrl, 'action=run_background');
                         if (!response.ok) {
                             const body = await response.json().catch(() => ({}));
                             showToast(body.error || `Background tasks failed (HTTP ${response.status})`, 'error');
@@ -4396,6 +4429,33 @@ $isWp = Urls::isWordPress();
             window.location.reload();
             return true;
         }
+
+        // Background work settles payments, transfers and webhooks while the operator is
+        // looking at the dashboard. Without a refresh the page silently ages: a transfer
+        // completed a minute ago still reads "waiting to be cashed in" until something is
+        // clicked. Left open on a shop counter, that is the whole day.
+        let dashboardRefreshTimer = null;
+
+        function startDashboardRefresh() {
+            if (dashboardRefreshTimer) return;
+            dashboardRefreshTimer = setInterval(() => {
+                if (!isAuthenticated) return;
+                // Don't redraw the page under an open modal — a QR being scanned, a token
+                // being copied or a form half-filled must survive a refresh tick.
+                if (document.querySelector('.modal-overlay.visible')) return;
+                // A backgrounded tab does not need to keep polling; the visibility
+                // handler below catches it up the moment the operator returns.
+                if (document.hidden) return;
+                loadDashboard();
+            }, 20000);
+        }
+
+        // Coming back to the tab is exactly when stale numbers are most visible.
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden || !isAuthenticated) return;
+            if (document.querySelector('.modal-overlay.visible')) return;
+            loadDashboard();
+        });
 
         async function loadDashboard() {
             try {

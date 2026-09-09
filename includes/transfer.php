@@ -119,6 +119,42 @@ class Transfer {
     }
 
     /**
+     * The pending token transfer that handed out exactly these proofs, if any.
+     *
+     * Lets whoever *notices* a token was redeemed settle it there and then. The proof
+     * secrets are the only durable link between a token in someone's wallet and the
+     * ledger row that recorded handing it over, and they are stored as a comma-separated
+     * reference. Order is not significant, so compare as sets.
+     *
+     * @param string[] $secrets
+     */
+    public static function findPendingBySecrets(string $storeId, array $secrets): ?array {
+        $wanted = array_values(array_unique(array_filter($secrets, 'strlen')));
+        if (empty($wanted)) {
+            return null;
+        }
+        sort($wanted);
+
+        foreach (self::getPending() as $row) {
+            if ((string)$row['store_id'] !== $storeId) {
+                continue;
+            }
+            if (!in_array($row['type'], [self::TYPE_TOKEN_EXPORT, self::TYPE_DONATION], true)) {
+                continue;
+            }
+            $have = array_values(array_unique(array_filter(
+                explode(',', (string)($row['reference'] ?? '')),
+                'strlen'
+            )));
+            sort($have);
+            if ($have === $wanted) {
+                return $row;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Record an outgoing transfer. Never throws — a ledger write must not break
      * the money movement it records (the transfer already happened).
      *
