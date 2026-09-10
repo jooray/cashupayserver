@@ -285,7 +285,14 @@ jobs:
             license.txt \
             assets/img/barebits-gateway-logo.png \
             assets/js/discount-classic.js \
-            assets/js/discount-blocks.js
+            assets/js/discount-blocks.js \
+            assets/js/admin-reveal-password.js \
+            assets/js/maintenance-guard.js \
+            assets/js/onboarding.js \
+            assets/js/wizard-expand.js \
+            assets/js/review-notice.js \
+            assets/css/admin.css \
+            assets/css/admin-embed.css
           for leaked in includes vendor setup.php admin.php api.php cron.php payment.php; do
             if [ -e "build/cashupay/$leaked" ]; then
               echo "BareBits server code leaked into the GPL plugin build: $leaked" >&2
@@ -312,7 +319,14 @@ jobs:
             license.txt \
             assets/img/barebits-gateway-logo.png \
             assets/js/discount-classic.js \
-            assets/js/discount-blocks.js
+            assets/js/discount-blocks.js \
+            assets/js/admin-reveal-password.js \
+            assets/js/maintenance-guard.js \
+            assets/js/onboarding.js \
+            assets/js/wizard-expand.js \
+            assets/js/review-notice.js \
+            assets/css/admin.css \
+            assets/css/admin-embed.css
           for leaked in installer.php includes vendor setup.php admin.php api.php cron.php payment.php; do
             if [ -e "build/wporg/cashupay/$leaked" ]; then
               echo "forbidden file in the wordpress.org plugin build: $leaked" >&2

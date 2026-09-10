@@ -505,7 +505,7 @@ function cashupay_render_onboarding(): void {
     $step = cashupay_onboarding_step();
     $flash = cashupay_take_flash();
     ?>
-    <div class="wrap" style="max-width: 720px;">
+    <div class="wrap cashupay-wrap">
         <h1>BareBits</h1>
         <?php if ($flash): ?>
             <div class="notice notice-<?php echo esc_attr($flash['kind'] === 'error' ? 'error' : ($flash['kind'] === 'warning' ? 'warning' : 'success')) ?>"><p><?php echo esc_html($flash['message']); ?></p></div>
@@ -549,73 +549,24 @@ function cashupay_render_onboarding(): void {
  * choice unsaved (WordPress checks its .maintenance flag before any plugin
  * loads, so nothing server-side here can intercept it). Same failure, same
  * cure as the setup wizard's return-to-WordPress handoff (setup.php): probe
- * first, and only submit once WordPress answers. 503 is the ONLY status
- * that waits; anything else (including errors a broken probe might
- * fabricate) falls through to a plain submit — this guard may delay the
- * merchant, never trap them. A second click while waiting is the manual
- * override, and without JavaScript every form submits exactly as before.
+ * first, and only submit once WordPress answers — the probe-and-submit
+ * logic lives in assets/js/maintenance-guard.js, keyed off the waiting note
+ * rendered here (which also carries the probe URL).
  */
 function cashupay_render_maintenance_guard(): void {
     ?>
-    <div class="notice notice-warning inline" id="cashupay-maintenance-waiting" style="display: none; margin: 1em 0 0;">
+    <div class="notice notice-warning inline" id="cashupay-maintenance-waiting" hidden
+         data-probe-url="<?php echo esc_attr(admin_url('admin-post.php')); ?>">
         <p>WordPress is briefly updating itself (maintenance mode) &mdash; continuing automatically
            as soon as it's back, usually under a minute. Clicking again goes ahead right away.</p>
     </div>
-    <script>
-    (function () {
-        const note = document.getElementById('cashupay-maintenance-waiting');
-        // admin-post.php with no action is a cheap no-op that still answers
-        // 503 while WordPress is in maintenance mode.
-        const probeUrl = <?php echo wp_json_encode(admin_url('admin-post.php')); ?>;
-        document.querySelectorAll('form').forEach(function (form) {
-            if ((form.getAttribute('action') || '').indexOf('admin-post.php') === -1) {
-                return;
-            }
-            let cleared = false;
-            form.addEventListener('submit', function (e) {
-                if (cleared) {
-                    return; // the probe said go
-                }
-                if (form.dataset.cashupayWaiting === '1') {
-                    cleared = true; // second click while waiting: manual override
-                    return;
-                }
-                // Native validation already passed (the submit event only
-                // fires afterwards), so submitting programmatically — which
-                // skips both validation and this handler — is safe. Via the
-                // prototype: WordPress's submit_button() renders an input
-                // NAMED "submit", which shadows form.submit with the element.
-                e.preventDefault();
-                form.dataset.cashupayWaiting = '1';
-                const go = function () {
-                    cleared = true;
-                    HTMLFormElement.prototype.submit.call(form);
-                };
-                const probe = function () {
-                    fetch(probeUrl, { credentials: 'same-origin', cache: 'no-store' })
-                        .then(function (res) {
-                            if (res.status === 503) {
-                                form.insertAdjacentElement('afterend', note);
-                                note.style.display = '';
-                                setTimeout(probe, 5000);
-                            } else {
-                                go();
-                            }
-                        })
-                        .catch(go);
-                };
-                probe();
-            });
-        });
-    })();
-    </script>
     <?php
 }
 
 /** The ✅/❌ server-checks table, shared by the chooser and the install confirmation. */
 function cashupay_render_preflight_table(array $checks): void {
     ?>
-    <table class="widefat striped" style="max-width: 680px;">
+    <table class="widefat striped cashupay-table">
         <tbody>
         <?php foreach ($checks as $label => $check): ?>
             <tr>
@@ -658,7 +609,7 @@ function cashupay_render_step_choose(): void {
            self-hosted BareBits server.</p>
     <?php endif; ?>
     <?php if ($existingInstall !== ''): ?>
-        <div class="notice notice-info inline" style="margin: 0 0 1em;">
+        <div class="notice notice-info inline cashupay-notice-lead">
             <p>
                 A BareBits server installed earlier by this plugin is still running at
                 <code><?php echo esc_html($existingInstall); ?></code> (its data and funds are untouched).
@@ -668,45 +619,7 @@ function cashupay_render_step_choose(): void {
                 <button type="button" class="button button-small" id="cashupay-reveal-password"
                         data-nonce="<?php echo esc_attr(wp_create_nonce('cashupay_reveal_password')); ?>">Reveal</button>
             </p>
-            <script>
-            document.getElementById('cashupay-reveal-password').addEventListener('click', function () {
-                const btn = this;
-                const body = new URLSearchParams();
-                body.set('action', 'cashupay_reveal_password');
-                body.set('nonce', btn.dataset.nonce);
-                // A 503 is WordPress's own maintenance screen (an auto-update
-                // in progress) — retry until it's back instead of failing
-                // silently; anything else falls through as before.
-                const attempt = function () {
-                    fetch(ajaxurl, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: body.toString(),
-                        credentials: 'same-origin'
-                    }).then(function (r) {
-                        if (r.status === 503) {
-                            btn.disabled = true;
-                            btn.textContent = 'Waiting for WordPress…';
-                            setTimeout(attempt, 5000);
-                            return null;
-                        }
-                        return r.json();
-                    }).then(function (res) {
-                        if (res && res.success && res.data) {
-                            document.getElementById('cashupay-admin-password').textContent = res.data;
-                            btn.remove();
-                        } else if (res) {
-                            btn.disabled = false;
-                            btn.textContent = 'Reveal';
-                        }
-                    }).catch(function () {
-                        btn.disabled = false;
-                        btn.textContent = 'Reveal';
-                    });
-                };
-                attempt();
-            });
-            </script>
+            <?php // Button behavior: assets/js/admin-reveal-password.js. ?>
         </div>
     <?php endif; ?>
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>">
@@ -714,7 +627,7 @@ function cashupay_render_step_choose(): void {
         <input type="hidden" name="action" value="cashupay_choose_mode">
         <table class="form-table" role="presentation">
             <tr>
-                <td style="vertical-align: top;"><input type="radio" name="cashupay_mode" value="url" id="cashupay-mode-url" checked></td>
+                <td class="cashupay-radio-cell"><input type="radio" name="cashupay_mode" value="url" id="cashupay-mode-url" checked></td>
                 <td>
                     <label for="cashupay-mode-url"><strong>I already run a BareBits server</strong></label>
                     <p class="description">Connect this shop to an existing server by URL.</p>
@@ -724,7 +637,7 @@ function cashupay_render_step_choose(): void {
             </tr>
             <?php if ($installerAvailable): ?>
             <tr>
-                <td style="vertical-align: top;"><input type="radio" name="cashupay_mode" value="install" id="cashupay-mode-install" <?php disabled(!$installOk); ?>></td>
+                <td class="cashupay-radio-cell"><input type="radio" name="cashupay_mode" value="install" id="cashupay-mode-install" <?php disabled(!$installOk); ?>></td>
                 <td>
                     <label for="cashupay-mode-install"><strong>Install BareBits alongside WordPress</strong></label>
                     <p class="description">Downloads the latest stable BareBits release from GitHub and installs it next to this WordPress site (its own folder, its own license, updated independently of this plugin).</p>
@@ -742,7 +655,7 @@ function cashupay_render_step_choose(): void {
             <?php endif; ?>
         </table>
         <?php if ($installerAvailable): ?>
-            <h2 style="font-size: 1.1em;">Server checks for installing alongside</h2>
+            <h2 class="cashupay-subheading">Server checks for installing alongside</h2>
             <?php cashupay_render_preflight_table($checks); ?>
             <?php if (!$installOk): ?>
                 <p><strong>Fix the failed checks above, then reload this page.</strong> If your host cannot pass them, you can still run BareBits on another host and connect it by URL with the first option.</p>
@@ -750,30 +663,7 @@ function cashupay_render_step_choose(): void {
         <?php endif; ?>
         <?php submit_button('Continue'); ?>
     </form>
-    <script>
-    // The URL field must only take part in the browser's form validation
-    // while "I already run a BareBits server" is the selected mode. Any text
-    // in a type="url" input that is not a scheme-qualified URL (a pasted
-    // "pay.example.com", browser autofill) otherwise blocks the WHOLE form
-    // with "Please enter a URL" — making the install option unselectable.
-    // Disabling also drops the field from the POST, which the install branch
-    // never reads anyway. Without JavaScript the field stays enabled and
-    // optional, and the server-side probe validates it as before.
-    (function () {
-        const urlField = document.getElementById('cashupay-server-url');
-        const sync = function () {
-            const urlMode = document.getElementById('cashupay-mode-url').checked;
-            urlField.disabled = !urlMode;
-            urlField.required = urlMode;
-        };
-        document.querySelectorAll('input[name="cashupay_mode"]').forEach(function (radio) {
-            radio.addEventListener('change', sync);
-        });
-        // Browsers restore form state on back-navigation after scripts ran.
-        window.addEventListener('pageshow', sync);
-        sync();
-    })();
-    </script>
+    <?php // URL-field validation sync: assets/js/onboarding.js. ?>
     <?php
 }
 
@@ -786,7 +676,7 @@ function cashupay_render_step_choose(): void {
 function cashupay_render_step_install_unavailable(): void {
     ?>
     <h2>Install BareBits alongside WordPress</h2>
-    <div class="notice notice-warning inline" style="margin: 0 0 1em;">
+    <div class="notice notice-warning inline cashupay-notice-lead">
         <p>Onboarding was started in install-alongside mode, but this build of the plugin cannot
            manage that installation (the wordpress.org edition connects to a server you run
            yourself). To continue the install-alongside setup, replace this plugin with the full
@@ -811,7 +701,7 @@ function cashupay_render_step_install(): void {
     ?>
     <h2>Install BareBits alongside WordPress</h2>
     <?php if ($allOk): $target = cashupay_resolve_install_target((string) get_option('cashupay_install_dirname', '')); ?>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top: 1em;">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="cashupay-section">
             <?php wp_nonce_field('cashupay_run_install'); ?>
             <input type="hidden" name="action" value="cashupay_run_install">
             <p>This downloads the latest stable release (a few MB) and installs it
@@ -835,75 +725,15 @@ function cashupay_render_step_provision(): void {
     <p>
         <button type="button" class="button button-primary button-hero" id="cashupay-wizard-expand">Continue — open the wizard full screen</button>
     </p>
-    <style>
-    #cashupay-wizard-shell { position: relative; }
-    /* Expanded: fill the whole wp-admin viewport except the admin bar and the
-       left menu, tracking WordPress's own menu breakpoints (folded 36px,
-       hidden + 46px-tall bar on mobile). z-index sits just under the admin
-       bar's 99999 so the bar stays usable. */
-    #cashupay-wizard-shell.cashupay-expanded {
-        position: fixed;
-        top: 32px;
-        left: 160px;
-        right: 0;
-        bottom: 0;
-        z-index: 99998;
-        margin: 0;
-        background: #fff;
-    }
-    #cashupay-wizard-shell.cashupay-expanded iframe {
-        width: 100% !important;
-        height: 100% !important;
-        border: 0 !important;
-        border-radius: 0 !important;
-        display: block;
-    }
-    body.folded #cashupay-wizard-shell.cashupay-expanded { left: 36px; }
-    @media screen and (max-width: 960px) {
-        #cashupay-wizard-shell.cashupay-expanded { left: 36px; }
-    }
-    @media screen and (max-width: 782px) {
-        #cashupay-wizard-shell.cashupay-expanded { left: 0; top: 46px; }
-    }
-    #cashupay-wizard-exit {
-        display: none;
-        position: absolute;
-        top: 8px;
-        right: 24px;
-        z-index: 1;
-    }
-    #cashupay-wizard-shell.cashupay-expanded #cashupay-wizard-exit { display: block; }
-    </style>
     <!-- Same-origin embed: the alongside install lives under this site's own
          origin, so the wizard runs inside wp-admin just like the old bundled
-         plugin's did. -->
+         plugin's did. Expand/collapse behavior: assets/js/wizard-expand.js;
+         layout (incl. the expanded state): admin.css. -->
     <div id="cashupay-wizard-shell">
         <button type="button" class="button" id="cashupay-wizard-exit">Exit full screen</button>
-        <iframe src="<?php echo esc_url($setupUrl); ?>" title="BareBits setup"
-                style="width: 100%; height: 70vh; border: 1px solid #c3c4c7; border-radius: 4px; background: #fff;"></iframe>
+        <iframe id="cashupay-wizard-frame" src="<?php echo esc_url($setupUrl); ?>" title="BareBits setup"></iframe>
     </div>
-    <script>
-    (function () {
-        const shell = document.getElementById('cashupay-wizard-shell');
-        const setExpanded = function (on) {
-            shell.classList.toggle('cashupay-expanded', on);
-            // Survive reloads mid-wizard: an accidental refresh (or the
-            // page revisited while setup is unfinished) returns to the
-            // view the merchant chose.
-            try { sessionStorage.setItem('cashupayWizardExpanded', on ? '1' : '0'); } catch (e) {}
-        };
-        document.getElementById('cashupay-wizard-expand').addEventListener('click', function () { setExpanded(true); });
-        document.getElementById('cashupay-wizard-exit').addEventListener('click', function () { setExpanded(false); });
-        // Full screen by default — the wizard is the whole point of this
-        // step, so it opens expanded with no click. Only a stored '0' (the
-        // merchant clicked "Exit full screen" this session) keeps it
-        // collapsed; blocked sessionStorage also falls back to expanded.
-        let collapsed = false;
-        try { collapsed = sessionStorage.getItem('cashupayWizardExpanded') === '0'; } catch (e) {}
-        setExpanded(!collapsed);
-    })();
-    </script>
-    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top: 1em;">
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="cashupay-section">
         <?php wp_nonce_field('cashupay_collect_provision'); ?>
         <input type="hidden" name="action" value="cashupay_collect_provision">
         <p class="description">Finished the wizard but still seeing this page? Continue manually:</p>
@@ -937,14 +767,14 @@ function cashupay_render_step_wire(): void {
             <p><label for="cashupay-discount">Offer customers a discount for paying with Bitcoin (Bitcoin payments have no card fees or chargebacks):</label></p>
             <p>
                 <input type="number" min="0" max="100" step="0.01" id="cashupay-discount"
-                       name="cashupay_discount_percent" value="<?php echo esc_attr($saved === null ? '0' : (string) $saved); ?>" style="width: 6em;"> %
+                       name="cashupay_discount_percent" value="<?php echo esc_attr($saved === null ? '0' : (string) $saved); ?>" class="cashupay-percent-field"> %
                 <span class="description">0 = no discount. Applied automatically at checkout when the customer pays with BareBits, and advertised in the payment method's title.</span>
             </p>
         <?php else: ?>
             <p><strong>WooCommerce is not active.</strong> Install and activate WooCommerce first, then click Finish.</p>
         <?php endif; ?>
         <?php if ($takeover === 'needs_consent'): ?>
-            <p style="border-left: 4px solid #d63638; padding-left: 8px;">
+            <p class="cashupay-btcpay-consent">
                 <label>
                     <input type="checkbox" name="cashupay_btcpay_override_consent" value="1">
                     A BTCPay Server is already connected (<code><?php echo esc_html((string) get_option('btcpay_gf_url', '')); ?></code>).
@@ -960,11 +790,11 @@ function cashupay_render_step_wire(): void {
 
 function cashupay_render_reset_form(): void {
     ?>
-    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top: 2em;">
+    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="cashupay-reset-form">
         <?php wp_nonce_field('cashupay_reset_onboarding'); ?>
         <input type="hidden" name="action" value="cashupay_reset_onboarding">
-        <button type="submit" class="button-link" style="color: #b32d2e;"
-                onclick="return confirm('Start over? This only resets the plugin\'s connection state — an installed BareBits server and its funds are not touched.');">
+        <?php // Confirmation prompt: assets/js/onboarding.js. ?>
+        <button type="submit" class="button-link" id="cashupay-reset-button">
             Start over
         </button>
     </form>

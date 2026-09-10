@@ -111,6 +111,25 @@ def _assert_readme_sane(zip_path: Path, wp: WordPressHandle) -> None:
     )
 
 
+def test_no_inline_scripts_or_styles() -> None:
+    """wordpress.org review gate (2026-09 submission feedback): all plugin JS
+    and CSS must go through the enqueue APIs. No PHP file may print <script>
+    or <style> blocks, style="…" attributes, or on*="…" event handlers — the
+    enqueue-able home for all of it is the files under wordpress/assets/."""
+    offenders = []
+    for php in sorted((REPO_ROOT / "wordpress").glob("*.php")):
+        for lineno, line in enumerate(php.read_text().splitlines(), 1):
+            for pattern, label in (
+                (r"<script\b", "<script> tag"),
+                (r"<style\b", "<style> tag"),
+                (r'\bstyle="', 'style="…" attribute'),
+                (r'\bon[a-z]+="', "inline event handler"),
+            ):
+                if re.search(pattern, line):
+                    offenders.append(f"{php.name}:{lineno} {label}: {line.strip()[:120]}")
+    assert offenders == [], "inline JS/CSS crept back into the plugin:\n" + "\n".join(offenders)
+
+
 def test_plugin_check_full_zip(wordpress_bare: WordPressHandle, wp_plugin_zip: Path) -> None:
     rows = _install_and_check(wordpress_bare, wp_plugin_zip)
     _assert_clean(rows)

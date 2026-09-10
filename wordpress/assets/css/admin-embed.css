@@ -1,0 +1,16 @@
+/**
+ * The configured install-mode BareBits page: hand the whole wp-admin content
+ * area to the embedded admin iframe; wp-admin's own padding and footer would
+ * otherwise add a page scrollbar under the SPA.
+ */
+
+#wpcontent, #wpbody-content { padding: 0; }
+#wpfooter { display: none; }
+#cashupay-admin-frame {
+    display: block;
+    width: 100%;
+    /* WP 5.9+ exposes the admin-bar height (32px, 46px on small screens) as
+       a custom property; older cores get the 32px fallback. */
+    height: calc(100vh - var(--wp-admin--admin-bar--height, 32px));
+    border: 0;
+}

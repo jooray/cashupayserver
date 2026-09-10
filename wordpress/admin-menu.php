@@ -12,6 +12,7 @@ if (!defined('ABSPATH')) {
 }
 
 add_action('admin_menu', 'cashupay_admin_menu');
+add_action('admin_enqueue_scripts', 'cashupay_admin_enqueue_assets');
 add_action('admin_notices', 'cashupay_admin_notice');
 add_action('wp_ajax_cashupay_dismiss_review', 'cashupay_dismiss_review_notice');
 add_action('wp_ajax_cashupay_reveal_password', 'cashupay_reveal_password_ajax');
@@ -33,7 +34,8 @@ const CASHUPAY_REVIEW_MAX_DISMISSALS = 3;
 const CASHUPAY_CRON_STALE_WARN_SECONDS = 600;
 
 function cashupay_admin_menu(): void {
-    add_menu_page(
+    $hooks = [];
+    $hooks['main'] = add_menu_page(
         'BareBits',
         'BareBits',
         'manage_options',
@@ -45,7 +47,84 @@ function cashupay_admin_menu(): void {
     if (cashupay_is_configured()) {
         // Rename the auto-created first submenu entry and add the details page.
         add_submenu_page('cashupay', 'BareBits', cashupay_mode() === 'install' ? 'Dashboard' : 'Status', 'manage_options', 'cashupay', 'cashupay_admin_page');
-        add_submenu_page('cashupay', 'BareBits connection', 'Connection', 'manage_options', 'cashupay-connection', 'cashupay_connection_page');
+        $hooks['connection'] = add_submenu_page('cashupay', 'BareBits connection', 'Connection', 'manage_options', 'cashupay-connection', 'cashupay_connection_page');
+    }
+    // The hook suffixes cashupay_admin_enqueue_assets() keys asset loading on
+    // (admin_enqueue_scripts fires after admin_menu). false = no capability.
+    $GLOBALS['cashupay_admin_page_hooks'] = array_filter($hooks);
+}
+
+/** Enqueue one of the plugin's admin scripts (assets/js/…), file-mtime versioned like the checkout scripts. */
+function cashupay_enqueue_admin_script(string $handle, string $rel): void {
+    wp_enqueue_script(
+        $handle,
+        plugin_dir_url(CASHUPAY_PLUGIN_FILE) . 'assets/' . $rel,
+        [],
+        (string) filemtime(CASHUPAY_PLUGIN_DIR . '/assets/' . $rel),
+        true
+    );
+}
+
+/** Enqueue one of the plugin's admin stylesheets (assets/css/…). */
+function cashupay_enqueue_admin_style(string $handle, string $rel): void {
+    wp_enqueue_style(
+        $handle,
+        plugin_dir_url(CASHUPAY_PLUGIN_FILE) . 'assets/' . $rel,
+        [],
+        (string) filemtime(CASHUPAY_PLUGIN_DIR . '/assets/' . $rel)
+    );
+}
+
+/**
+ * All the plugin's admin JS/CSS lives in files under assets/ and is enqueued
+ * here (the wordpress.org review disallows inline script/style blocks
+ * printed from PHP). Each page enqueues only what its render path uses, mirroring
+ * the render functions' own conditions; every script also no-ops when its
+ * elements are absent, so a condition drifting out of sync degrades to a
+ * dead file load, never a broken page. Styles must enqueue here (not during
+ * render) to reach the document head.
+ */
+function cashupay_admin_enqueue_assets(string $hook): void {
+    // The review banner renders (admin_notices) on every admin page once the
+    // plugin is configured; its dismiss handler rides along under the same
+    // conditions cashupay_review_notice() renders under.
+    if (cashupay_is_configured() && current_user_can('manage_options') && cashupay_review_notice_visible()) {
+        cashupay_enqueue_admin_script('cashupay-review-notice', 'js/review-notice.js');
+    }
+
+    $hooks = $GLOBALS['cashupay_admin_page_hooks'] ?? [];
+    if (!in_array($hook, $hooks, true)) {
+        return;
+    }
+
+    if (!cashupay_is_configured()) {
+        // The main page renders the onboarding flow.
+        cashupay_enqueue_admin_style('cashupay-admin', 'css/admin.css');
+        cashupay_enqueue_admin_script('cashupay-maintenance-guard', 'js/maintenance-guard.js');
+        cashupay_enqueue_admin_script('cashupay-onboarding', 'js/onboarding.js');
+        $step = cashupay_onboarding_step();
+        if ($step === 'choose' && cashupay_install_url() !== '') {
+            cashupay_enqueue_admin_script('cashupay-reveal-password', 'js/admin-reveal-password.js');
+        }
+        if ($step === 'provision' && cashupay_installer_available()) {
+            cashupay_enqueue_admin_script('cashupay-wizard-expand', 'js/wizard-expand.js');
+        }
+        return;
+    }
+
+    // Configured + install mode on the main page: the full-height admin
+    // embed hands the whole content area to the iframe.
+    if ($hook === ($hooks['main'] ?? null) && cashupay_mode() === 'install') {
+        cashupay_enqueue_admin_style('cashupay-admin-embed', 'css/admin-embed.css');
+        return;
+    }
+
+    // The Connection page — reached directly, or as what the main page
+    // renders for a URL-mode server.
+    cashupay_enqueue_admin_style('cashupay-admin', 'css/admin.css');
+    cashupay_enqueue_admin_script('cashupay-maintenance-guard', 'js/maintenance-guard.js');
+    if (cashupay_mode() === 'install' && (string) get_option('cashupay_admin_password', '') !== '') {
+        cashupay_enqueue_admin_script('cashupay-reveal-password', 'js/admin-reveal-password.js');
     }
 }
 
@@ -79,22 +158,9 @@ function cashupay_admin_page(): void {
     if ($flash) {
         echo '<div class="notice notice-' . esc_attr($flash['kind'] === 'error' ? 'error' : ($flash['kind'] === 'warning' ? 'warning' : 'success')) . '"><p>' . esc_html($flash['message']) . '</p></div>';
     }
+    // Layout (content area handed entirely to the iframe) comes from
+    // admin-embed.css, enqueued for exactly this view.
     ?>
-    <style>
-        /* Hand the whole content area to the iframe; wp-admin's own padding
-           and footer would otherwise add a page scrollbar under the SPA. */
-        #wpcontent, #wpbody-content { padding: 0; }
-        #wpfooter { display: none; }
-        #cashupay-admin-frame {
-            display: block;
-            width: 100%;
-            /* WP 5.9+ exposes the admin-bar height (32px, 46px on small
-               screens) as a custom property; older cores get the 32px
-               fallback. */
-            height: calc(100vh - var(--wp-admin--admin-bar--height, 32px));
-            border: 0;
-        }
-    </style>
     <iframe id="cashupay-admin-frame" src="<?php echo esc_url($src); ?>" title="BareBits"></iframe>
     <?php
 }
@@ -110,13 +176,13 @@ function cashupay_connection_page(): void {
     $server = cashupay_server_url();
     $flash = cashupay_take_flash();
     ?>
-    <div class="wrap" style="max-width: 720px;">
+    <div class="wrap cashupay-wrap">
         <h1>BareBits</h1>
         <?php if ($flash): ?>
             <div class="notice notice-<?php echo esc_attr($flash['kind'] === 'error' ? 'error' : ($flash['kind'] === 'warning' ? 'warning' : 'success')) ?>"><p><?php echo esc_html($flash['message']); ?></p></div>
         <?php endif; ?>
         <p>✅ WooCommerce is connected to your BareBits server.</p>
-        <table class="widefat striped" style="max-width: 680px;">
+        <table class="widefat striped cashupay-table">
             <tbody>
                 <tr><td>Server</td><td><a href="<?php echo esc_url($server) ?>" target="_blank" rel="noopener"><?php echo esc_html($server); ?></a></td></tr>
                 <tr><td>Store ID</td><td><code><?php echo esc_html((string) get_option('cashupay_store_id', '')); ?></code></td></tr>
@@ -141,56 +207,18 @@ function cashupay_connection_page(): void {
                             <p class="description">Sign-in from here is automatic; BareBits asks for this password only for
                             sensitive actions (revealing a wallet recovery phrase), and it lets you sign in directly if this
                             plugin is ever removed.</p>
-                            <script>
-                            document.getElementById('cashupay-reveal-password').addEventListener('click', function () {
-                                const btn = this;
-                                const body = new URLSearchParams();
-                                body.set('action', 'cashupay_reveal_password');
-                                body.set('nonce', btn.dataset.nonce);
-                                // A 503 is WordPress's own maintenance screen (an
-                                // auto-update in progress) — retry until it's back
-                                // instead of failing silently.
-                                const attempt = function () {
-                                    fetch(ajaxurl, {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                                        body: body.toString(),
-                                        credentials: 'same-origin'
-                                    }).then(function (r) {
-                                        if (r.status === 503) {
-                                            btn.disabled = true;
-                                            btn.textContent = 'Waiting for WordPress…';
-                                            setTimeout(attempt, 5000);
-                                            return null;
-                                        }
-                                        return r.json();
-                                    }).then(function (res) {
-                                        if (res && res.success && res.data) {
-                                            document.getElementById('cashupay-admin-password').textContent = res.data;
-                                            btn.remove();
-                                        } else if (res) {
-                                            btn.disabled = false;
-                                            btn.textContent = 'Reveal';
-                                        }
-                                    }).catch(function () {
-                                        btn.disabled = false;
-                                        btn.textContent = 'Reveal';
-                                    });
-                                };
-                                attempt();
-                            });
-                            </script>
+                            <?php // Button behavior: assets/js/admin-reveal-password.js. ?>
                         </td>
                     </tr>
                     <?php endif; ?>
                 <?php endif; ?>
             </tbody>
         </table>
-        <p style="margin-top: 1em;">
+        <p class="cashupay-section">
             <a href="<?php echo esc_url($server . '/admin.php') ?>" target="_blank" rel="noopener" class="button button-primary">Open the BareBits admin<?php echo esc_html($mode === 'install' ? ' in a new tab' : ''); ?></a>
         </p>
         <?php cashupay_render_discount_settings(); ?>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" style="margin-top: 1em;">
+        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="cashupay-section">
             <?php wp_nonce_field('cashupay_finish'); ?>
             <input type="hidden" name="action" value="cashupay_finish">
             <p class="description">If the WooCommerce gateway or webhook got misconfigured, re-run the wiring:</p>
@@ -284,29 +312,8 @@ function cashupay_review_notice(): void {
     echo 'Enjoying having control of your money with <strong>BareBits</strong>? ';
     echo '<a href="https://wordpress.org/plugins/search/barebits/" target="_blank" rel="noopener noreferrer">Leave us a review!</a>';
     echo '</p></div>';
-
-    // WP core adds the dismiss (X) button to .is-dismissible notices after DOM
-    // ready, so a delegated listener is the reliable way to catch the click.
-    // The X already hides the notice for this page load; we just persist it.
-    ?>
-    <script>
-    document.addEventListener('click', function (e) {
-        const notice = e.target.closest('#cashupay-review-notice');
-        if (!notice || !e.target.closest('.notice-dismiss')) {
-            return;
-        }
-        const body = new URLSearchParams();
-        body.set('action', 'cashupay_dismiss_review');
-        body.set('nonce', notice.dataset.nonce);
-        fetch(ajaxurl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-            body: body.toString(),
-            credentials: 'same-origin'
-        });
-    });
-    </script>
-    <?php
+    // Dismissal persistence: assets/js/review-notice.js, enqueued under the
+    // same visibility conditions by cashupay_admin_enqueue_assets().
 }
 
 /**
