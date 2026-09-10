@@ -130,6 +130,64 @@ def test_no_inline_scripts_or_styles() -> None:
     assert offenders == [], "inline JS/CSS crept back into the plugin:\n" + "\n".join(offenders)
 
 
+# The only WordPress core files plugin code may ever load, per the exception
+# wordpress.org reviewers allow: a require_once of a wp-admin include whose
+# function/class is consumed immediately after, behind an existence guard.
+# Extending this set needs the same justification the existing entries have.
+ALLOWED_CORE_INCLUDES = {
+    "wp-admin/includes/file.php",
+    "wp-admin/includes/plugin.php",
+    "wp-admin/includes/plugin-install.php",
+    "wp-admin/includes/class-wp-upgrader.php",
+}
+
+
+def test_no_direct_core_file_includes() -> None:
+    """wordpress.org review gate (2026-09 submission feedback): plugin code
+    must never include WordPress bootstrap files (wp-load.php, wp-config.php,
+    wp-blog-header.php, wp-settings.php) — WordPress loads the plugin, never
+    the other way around — and ABSPATH-relative includes are restricted to
+    the allowlisted wp-admin includes above, each sitting directly behind a
+    function_exists()/class_exists() guard so the file is loaded only when
+    missing and used immediately after."""
+    bootstrap = re.compile(
+        r"\b(?:require|include)(?:_once)?\b[^;]*"
+        r"(?:wp-load\.php|wp-config\.php|wp-blog-header\.php|wp-settings\.php)"
+    )
+    core_include = re.compile(
+        r"\b(?:require|include)(?:_once)?\b[^;]*\bABSPATH\b[^;]*['\"]([^'\"]+)['\"]"
+    )
+    guard = re.compile(r"!\s*(?:function_exists|class_exists)\s*\(")
+    offenders = []
+    for php in sorted((REPO_ROOT / "wordpress").glob("*.php")):
+        lines = php.read_text().splitlines()
+        for lineno, line in enumerate(lines, 1):
+            if bootstrap.search(line):
+                offenders.append(
+                    f"{php.name}:{lineno} loads a WordPress bootstrap file: {line.strip()[:120]}"
+                )
+                continue
+            m = core_include.search(line)
+            if not m:
+                continue
+            if m.group(1) not in ALLOWED_CORE_INCLUDES:
+                offenders.append(
+                    f"{php.name}:{lineno} ABSPATH include outside the allowlist "
+                    f"({m.group(1)}): {line.strip()[:120]}"
+                )
+                continue
+            prev = lines[lineno - 2].strip() if lineno >= 2 else ""
+            if not guard.search(prev):
+                offenders.append(
+                    f"{php.name}:{lineno} core include must sit directly inside a "
+                    f"function_exists()/class_exists() guard: {line.strip()[:120]}"
+                )
+    assert offenders == [], (
+        "direct core-file includes crept back into the plugin (wordpress.org "
+        "rejects these):\n" + "\n".join(offenders)
+    )
+
+
 def test_plugin_check_full_zip(wordpress_bare: WordPressHandle, wp_plugin_zip: Path) -> None:
     rows = _install_and_check(wordpress_bare, wp_plugin_zip)
     _assert_clean(rows)

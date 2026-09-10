@@ -420,10 +420,19 @@ function cashupay_install_btcpay_plugin(): array {
             ];
         }
 
-        require_once ABSPATH . 'wp-admin/includes/file.php';
-        require_once ABSPATH . 'wp-admin/includes/misc.php';
-        require_once ABSPATH . 'wp-admin/includes/plugin-install.php';
-        require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+        // wordpress.org requires core admin includes to be loaded guarded and
+        // consumed immediately: file.php backs the WP_Filesystem the upgrader
+        // writes plugin files through, plugins_api() resolves the download
+        // link, and Plugin_Upgrader performs the install below.
+        if (!function_exists('WP_Filesystem')) {
+            require_once ABSPATH . 'wp-admin/includes/file.php';
+        }
+        if (!function_exists('plugins_api')) {
+            require_once ABSPATH . 'wp-admin/includes/plugin-install.php';
+        }
+        if (!class_exists('Plugin_Upgrader')) {
+            require_once ABSPATH . 'wp-admin/includes/class-wp-upgrader.php';
+        }
 
         $api = plugins_api('plugin_information', [
             'slug' => 'btcpay-greenfield-for-woocommerce',
