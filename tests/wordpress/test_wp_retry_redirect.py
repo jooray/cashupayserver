@@ -99,6 +99,28 @@ def test_retry_routes_by_order_state(woocommerce) -> None:
     )
 
 
+def test_retry_malformed_id_never_reaches_the_database(wordpress) -> None:
+    """Ids outside the server's invoice-id shape (^[A-Za-z0-9_-]{1,64}$) are
+    ignored outright — the request renders as a normal page instead of
+    triggering the meta lookup + redirect (wordpress.org review hardening,
+    2026-09)."""
+    wp = wordpress
+    for bad in (
+        "inv%20retry",          # whitespace
+        "..%2F..%2Fetc",        # traversal shape
+        "%3Cscript%3E",         # markup
+        "inv%7Cretry",          # pipe
+        "a" * 65,               # over the length bound
+    ):
+        r = requests.get(
+            f"{wp.url}/?cashupay-retry={bad}", timeout=30, allow_redirects=False
+        )
+        assert r.status_code == 200, (
+            f"malformed id {bad!r} must be ignored (plain page render), "
+            f"got {r.status_code} -> {r.headers.get('Location')}"
+        )
+
+
 def test_retry_without_woocommerce_falls_back_to_front_page(wordpress) -> None:
     """On a WP install with no WooCommerce at all (the plugin activates fine
     without it), the retry endpoint must still answer with a safe redirect."""

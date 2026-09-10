@@ -188,6 +188,139 @@ def test_no_direct_core_file_includes() -> None:
     )
 
 
+def _php_functions(src: str) -> dict[str, str]:
+    """Map top-level function name -> full source text. Relies on the plugin's
+    uniform style: functions declared at column 0, closing brace at column 0
+    (no classes, no closures registered as hooks — asserted by the callers)."""
+    funcs: dict[str, str] = {}
+    for m in re.finditer(r"^function\s+([A-Za-z0-9_]+)\s*\(", src, re.M):
+        end = src.find("\n}", m.start())
+        funcs[m.group(1)] = src[m.start() : end + 2] if end != -1 else src[m.start() :]
+    return funcs
+
+
+def _hook_registrations(prefix: str) -> list[tuple[str, str, str, dict[str, str]]]:
+    """All add_action('{prefix}...', 'fn') registrations across the plugin:
+    [(file, hook, fn, functions-of-that-file)]. Fails if a hook with the
+    prefix is registered with anything but a plain 'function_name' string —
+    the nonce gates below can only audit named top-level functions."""
+    rows = []
+    for php in sorted((REPO_ROOT / "wordpress").glob("*.php")):
+        src = php.read_text()
+        funcs = _php_functions(src)
+        for m in re.finditer(r"add_action\(\s*['\"](" + re.escape(prefix) + r"[a-z0-9_]*)['\"]\s*,\s*(.+?)\s*[,)]", src):
+            hook, callback = m.group(1), m.group(2)
+            named = re.fullmatch(r"['\"]([A-Za-z0-9_]+)['\"]", callback)
+            assert named, (
+                f"{php.name}: {hook} registered with a non-literal callback "
+                f"({callback!r}); the nonce audit needs a named function"
+            )
+            assert named.group(1) in funcs, (
+                f"{php.name}: {hook} handler {named.group(1)}() not found as a "
+                f"top-level function in the same file"
+            )
+            rows.append((php.name, hook, named.group(1), funcs))
+    return rows
+
+
+# The only admin-post handlers allowed to skip check_admin_referer(), each
+# with the structural reason a WordPress nonce cannot exist there, and the
+# compensating control the handler body MUST therefore contain. Extending
+# this map is a review-level decision, not a convenience.
+NONCE_EXEMPT_ADMIN_POST = {
+    # Cross-site POST from the BareBits approval page: carries no wp-admin
+    # auth cookie, so a session-bound WP nonce could never verify. The
+    # compensating control is the single-use, time-boxed pairing state token
+    # compared with hash_equals().
+    "cashupay_handle_pairing_callback": "hash_equals(",
+    # Return link minted by the BareBits setup wizard (which cannot create WP
+    # nonces); idempotent state advance, gated on the admin capability.
+    "cashupay_handle_provision_return": "current_user_can(",
+    # nopriv twin of the above: redirects to the login screen, touches nothing.
+    "cashupay_handle_provision_return_nopriv": "wp_login_url(",
+}
+
+
+def test_admin_post_handlers_verify_nonce_and_capability() -> None:
+    """wordpress.org review gate (2026-09 submission feedback): every
+    admin-post handler must contain a literal current_user_can() +
+    check_admin_referer() in its own body — visible to any static scanner,
+    never hidden behind a helper — unless it is on the documented exemption
+    list above, in which case its compensating control must be present."""
+    offenders = []
+    seen = set()
+    for file, hook, fn, funcs in _hook_registrations("admin_post"):
+        seen.add(fn)
+        body = funcs[fn]
+        if fn in NONCE_EXEMPT_ADMIN_POST:
+            if NONCE_EXEMPT_ADMIN_POST[fn] not in body:
+                offenders.append(
+                    f"{file}: {fn}() is nonce-exempt but lost its compensating "
+                    f"control {NONCE_EXEMPT_ADMIN_POST[fn]!r}"
+                )
+            continue
+        if hook.startswith("admin_post_nopriv_"):
+            offenders.append(
+                f"{file}: {hook} -> {fn}() — a new logged-out admin-post handler "
+                "needs an explicit entry in NONCE_EXEMPT_ADMIN_POST with its "
+                "compensating control"
+            )
+            continue
+        for required in ("current_user_can(", "check_admin_referer("):
+            if required not in body:
+                offenders.append(f"{file}: {fn}() is missing {required}")
+    stale = set(NONCE_EXEMPT_ADMIN_POST) - seen
+    assert not stale, f"NONCE_EXEMPT_ADMIN_POST lists unregistered handlers: {sorted(stale)}"
+    assert offenders == [], (
+        "admin-post handlers without scanner-visible auth checks (wordpress.org "
+        "review rejects these):\n" + "\n".join(offenders)
+    )
+
+
+def test_ajax_handlers_verify_nonce_and_capability() -> None:
+    """Same gate for wp_ajax_* handlers: check_ajax_referer() + a capability
+    check, literally in the handler body. Logged-out ajax (wp_ajax_nopriv_*)
+    does not exist in this plugin; adding one must trip this test."""
+    offenders = []
+    for file, hook, fn, funcs in _hook_registrations("wp_ajax"):
+        if hook.startswith("wp_ajax_nopriv_"):
+            offenders.append(
+                f"{file}: {hook} — the plugin has no logged-out ajax; adding one "
+                "needs its own auth story and an update to this test"
+            )
+            continue
+        for required in ("check_ajax_referer(", "current_user_can("):
+            if required not in funcs[fn]:
+                offenders.append(f"{file}: {fn}() is missing {required}")
+    assert offenders == [], (
+        "ajax handlers without nonce/capability checks:\n" + "\n".join(offenders)
+    )
+
+
+def test_no_superglobal_access_outside_functions() -> None:
+    """wordpress.org review gate (2026-09 submission feedback): request input
+    ($_GET/$_POST/$_REQUEST) may only be read inside hook-driven functions —
+    never at file top level, where it would run on every load of every page."""
+    offenders = []
+    for php in sorted((REPO_ROOT / "wordpress").glob("*.php")):
+        src = php.read_text()
+        # Blank out every top-level function body, then whatever superglobal
+        # access remains is top-level code (comment lines excepted).
+        stripped = src
+        for body in _php_functions(src).values():
+            stripped = stripped.replace(body, "")
+        for lineno_text in stripped.splitlines():
+            text = lineno_text.strip()
+            if text.startswith(("*", "//", "#", "/*")):
+                continue
+            if re.search(r"\$_(GET|POST|REQUEST)\b", text):
+                offenders.append(f"{php.name}: top-level input access: {text[:120]}")
+    assert offenders == [], (
+        "superglobals read outside functions (runs on every pageview; "
+        "wordpress.org review rejects this):\n" + "\n".join(offenders)
+    )
+
+
 def test_plugin_check_full_zip(wordpress_bare: WordPressHandle, wp_plugin_zip: Path) -> None:
     rows = _install_and_check(wordpress_bare, wp_plugin_zip)
     _assert_clean(rows)

@@ -437,10 +437,11 @@ function cashupay_render_discount_settings(): void {
 
 /** Save handler for the Connection page form. */
 function cashupay_handle_save_discount(): void {
-    cashupay_require_admin_post('cashupay_save_discount');
+    if (!current_user_can('manage_options')) {
+        cashupay_admin_post_denied();
+    }
+    check_admin_referer('cashupay_save_discount');
 
-    // Nonce verified above in cashupay_require_admin_post().
-    // phpcs:ignore WordPress.Security.NonceVerification.Missing
     $parsed = cashupay_parse_discount_percent(sanitize_text_field(wp_unslash((string) ($_POST['cashupay_discount_percent'] ?? ''))));
     if ($parsed === null) {
         cashupay_flash('error', 'The discount must be a number between 0 and 100 (up to two decimal places).');

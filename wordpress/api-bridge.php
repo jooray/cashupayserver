@@ -81,6 +81,18 @@ function cashupay_api_bridge_authorization(): string {
  * Catch an install-API request that fell through to WordPress and replay it
  * against the install's api.php. Runs on plugins_loaded — before WordPress
  * routes, canonicalizes, or 404s the request.
+ *
+ * No nonce, deliberately: this is machine-to-machine API traffic (the
+ * WooCommerce gateway, external Greenfield API clients), not a browser form
+ * — the callers have no WordPress session to bind a nonce to. Authentication
+ * is the Greenfield API key in the Authorization header, checked by the
+ * BareBits install the request is replayed against; the bridge itself grants
+ * nothing (an unauthenticated request is replayed and comes back 401, same
+ * as if the install's own rewrites had served it). It only ever proxies to
+ * the plugin's OWN alongside install on this site's own origin — the target
+ * is built from the stored install URL, never from request input — and the
+ * response is relayed under the install's Content-Type, never rendered as
+ * this site's HTML.
  */
 function cashupay_maybe_bridge_api_request(): void {
     $requestPath = (string) wp_parse_url(sanitize_text_field(wp_unslash((string) ($_SERVER['REQUEST_URI'] ?? ''))), PHP_URL_PATH);

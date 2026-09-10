@@ -103,19 +103,25 @@ function cashupay_onboarding_step(): string {
 // POST handlers
 // ---------------------------------------------------------------------------
 
-function cashupay_require_admin_post(string $nonceAction): void {
-    if (!current_user_can('manage_options')) {
-        wp_die(esc_html__('Sorry, you are not allowed to do that.', 'barebits-lightning-payments-via-bitcoin'), 403);
-    }
-    check_admin_referer($nonceAction);
+/**
+ * Every admin-post handler below opens with the same two lines, deliberately
+ * inline rather than behind a helper: the capability check authorizes, the
+ * nonce check (check_admin_referer wp_die()s on failure) proves intent — and
+ * keeping both literally inside each handler lets any reviewer or static
+ * scanner verify at a glance that no handler skips them
+ * (test_wp_plugin_check.py enforces exactly that).
+ */
+function cashupay_admin_post_denied(): void {
+    wp_die(esc_html__('Sorry, you are not allowed to do that.', 'barebits-lightning-payments-via-bitcoin'), 403);
 }
 
 /** Step 1: the merchant picked a mode (and, for 'url', gave the server URL). */
 function cashupay_handle_choose_mode(): void {
-    cashupay_require_admin_post('cashupay_choose_mode');
+    if (!current_user_can('manage_options')) {
+        cashupay_admin_post_denied();
+    }
+    check_admin_referer('cashupay_choose_mode');
 
-    // Nonce verified above in cashupay_require_admin_post().
-    // phpcs:disable WordPress.Security.NonceVerification.Missing
     $mode = sanitize_key(wp_unslash($_POST['cashupay_mode'] ?? ''));
     if ($mode === 'url') {
         $url = rtrim(trim(sanitize_text_field(wp_unslash((string) ($_POST['cashupay_server_url'] ?? '')))), '/');
@@ -141,7 +147,6 @@ function cashupay_handle_choose_mode(): void {
         // check resolves the merchant's Advanced choice, not the default —
         // the chooser's table only ever showed the saved/default target.
         $dirname = sanitize_file_name(wp_unslash((string) ($_POST['cashupay_install_dirname'] ?? '')));
-        // phpcs:enable
         update_option('cashupay_install_dirname', $dirname, false);
         $failed = cashupay_install_preflight_failure();
         if ($failed !== null) {
@@ -160,7 +165,10 @@ function cashupay_handle_choose_mode(): void {
 
 /** Install mode: download + unpack + configure the BareBits release. */
 function cashupay_handle_run_install(): void {
-    cashupay_require_admin_post('cashupay_run_install');
+    if (!current_user_can('manage_options')) {
+        cashupay_admin_post_denied();
+    }
+    check_admin_referer('cashupay_run_install');
 
     if (!cashupay_installer_available()) {
         cashupay_flash('error', 'This build of the plugin cannot install BareBits alongside '
@@ -258,7 +266,10 @@ function cashupay_collect_provision_and_store(): void {
 
 /** Install mode: try to collect credentials through the handshake. */
 function cashupay_handle_collect_provision(): void {
-    cashupay_require_admin_post('cashupay_collect_provision');
+    if (!current_user_can('manage_options')) {
+        cashupay_admin_post_denied();
+    }
+    check_admin_referer('cashupay_collect_provision');
 
     cashupay_collect_provision_and_store();
     wp_safe_redirect(cashupay_onboarding_url());
@@ -279,7 +290,7 @@ function cashupay_handle_collect_provision(): void {
  */
 function cashupay_handle_provision_return(): void {
     if (!current_user_can('manage_options')) {
-        wp_die(esc_html__('Sorry, you are not allowed to do that.', 'barebits-lightning-payments-via-bitcoin'), 403);
+        cashupay_admin_post_denied();
     }
     // Nothing left to collect (already collected, or not in install mode):
     // just land on the onboarding page at whatever step it is on. Covers a
@@ -300,7 +311,10 @@ function cashupay_handle_provision_return_nopriv(): void {
 
 /** URL mode: mint the state token and send the merchant to the approval page. */
 function cashupay_handle_start_pairing(): void {
-    cashupay_require_admin_post('cashupay_start_pairing');
+    if (!current_user_can('manage_options')) {
+        cashupay_admin_post_denied();
+    }
+    check_admin_referer('cashupay_start_pairing');
 
     $server = cashupay_server_url();
     if ($server === '') {
@@ -353,11 +367,20 @@ function cashupay_handle_start_pairing(): void {
  * verified against the server before anything is stored.
  */
 function cashupay_handle_pairing_callback(): void {
-    // No WordPress nonce on purpose (see the action registration above): the
-    // POST arrives cross-site from the BareBits approval page, which cannot
-    // mint one. The single-use, time-boxed state token below — compared with
-    // hash_equals — is the authentication, and the pairing result is verified
-    // against the server before anything is stored.
+    // No WordPress nonce on purpose (see the action registration above), and
+    // none is technically possible: the POST arrives cross-site from the
+    // BareBits approval page, which cannot mint a WordPress nonce — and even
+    // one minted here at pairing start could never verify, because a
+    // cross-site POST does not carry the wp-admin auth cookie (SameSite) and
+    // WordPress nonces are bound to the logged-in session. The state token
+    // below is the nonce-equivalent, strictly stronger than a stock nonce:
+    // 128 bits from random_bytes (a nonce is a truncated hash), single-use
+    // (deleted before checking, success or not — a stock nonce is replayable
+    // for 12-24h), time-boxed to 15 minutes, and compared with hash_equals.
+    // On top of that, nothing is stored until the returned credentials are
+    // verified against the server the ADMIN configured (an attacker-supplied
+    // key for a foreign server cannot pass), and the handler only ever writes
+    // the plugin's own pairing options and redirects — it echoes nothing back.
     // phpcs:disable WordPress.Security.NonceVerification.Missing, WordPress.Security.NonceVerification.Recommended
     $expected = get_option('cashupay_pairing_expected');
     delete_option('cashupay_pairing_expected'); // single use, success or not
@@ -401,10 +424,11 @@ function cashupay_handle_pairing_callback(): void {
  * (when granted), and run the WooCommerce wiring.
  */
 function cashupay_handle_finish(): void {
-    cashupay_require_admin_post('cashupay_finish');
+    if (!current_user_can('manage_options')) {
+        cashupay_admin_post_denied();
+    }
+    check_admin_referer('cashupay_finish');
 
-    // Nonce verified above in cashupay_require_admin_post().
-    // phpcs:disable WordPress.Security.NonceVerification.Missing
     if (isset($_POST['cashupay_discount_percent'])) {
         $percent = cashupay_parse_discount_percent(sanitize_text_field(wp_unslash((string) $_POST['cashupay_discount_percent'])));
         if ($percent === null) {
@@ -418,7 +442,6 @@ function cashupay_handle_finish(): void {
     if (!empty($_POST['cashupay_btcpay_override_consent'])) {
         cashupay_record_btcpay_override_consent();
     }
-    // phpcs:enable
 
     $storeId = (string) get_option('cashupay_store_id', '');
     $apiKey = (string) get_option('cashupay_api_key', '');
@@ -453,7 +476,10 @@ function cashupay_handle_finish(): void {
  * plugin promised it the heartbeat at provision time).
  */
 function cashupay_handle_reset_onboarding(): void {
-    cashupay_require_admin_post('cashupay_reset_onboarding');
+    if (!current_user_can('manage_options')) {
+        cashupay_admin_post_denied();
+    }
+    check_admin_referer('cashupay_reset_onboarding');
 
     $options = [
         'cashupay_mode', 'cashupay_server_url', 'cashupay_store_id',

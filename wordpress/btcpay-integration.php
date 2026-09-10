@@ -321,15 +321,21 @@ function cashupay_apply_btcpay_order_states(): void {
  * order-received page instead, which explains the order's actual state.
  */
 function cashupay_maybe_handle_retry(): void {
-    // A payer-facing link from the install's payment page — no WordPress
-    // session, so no nonce applies; the id is sanitized and only used in a
-    // meta lookup.
+    // A payer-facing link from the install's payment page. No nonce exists or
+    // can exist: the payer has no WordPress session (nonces are bound to one),
+    // and the link is minted by the BareBits payment page, which cannot create
+    // WordPress nonces — the same class as any public permalink. Defense is
+    // capability-free by nature of the action: read-only resolution of an
+    // invoice id to a redirect the payer could reach anyway (WooCommerce's
+    // own order-pay/order-received pages enforce their own access rules).
+    // The id must match the server's invoice-id shape before it touches the
+    // database; anything else is ignored outright.
     // phpcs:disable WordPress.Security.NonceVerification.Recommended
     $invoiceId = isset($_GET['cashupay-retry'])
         ? sanitize_text_field((string) wp_unslash($_GET['cashupay-retry']))
         : '';
     // phpcs:enable
-    if ($invoiceId === '') {
+    if ($invoiceId === '' || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $invoiceId)) {
         return;
     }
 
