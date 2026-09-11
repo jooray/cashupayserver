@@ -200,3 +200,26 @@ def test_checkout_and_settlement_on_starved_hostile_host(
         f"invoice {inv.get('status')!r}); the BTCPay plugin should have run "
         f"payment_complete() on the signed InvoiceSettled webhook"
     )
+
+    # --- phase 3: the bridge cannot be repointed through its query string ---
+    # wp.org review gate (2026-09, second round), the one live assertion that
+    # needs a fully SET-UP install (test_wp_api_bridge_live.py covers the
+    # rest): the canonical /api/v1 URL falls through into WordPress on this
+    # host and rides the plugin's API bridge, which re-encodes the query pair
+    # by pair and strips any smuggled cashupay_path. Unstripped, the
+    # duplicate parameter would win at api.php and this would answer as
+    # server/info instead of the invoice.
+    auth = {"Authorization": f"token {wp_option(wp, 'btcpay_gf_api_key')}"}
+    canonical = f"{wp.barebits_url}/api/v1/stores/{store_id}/invoices/{invoice_id}"
+    r = requests.get(canonical, headers=auth, timeout=30)
+    assert r.status_code == 200, f"bridged canonical GET -> {r.status_code}: {r.text[:300]}"
+    assert r.json().get("id") == invoice_id, r.text[:300]
+    r = requests.get(
+        canonical + "?cashupay_path=/api/v1/server/info&dup=1&dup=2&odd=a+b",
+        headers=auth,
+        timeout=30,
+    )
+    assert r.status_code == 200, f"bridged query GET -> {r.status_code}: {r.text[:300]}"
+    assert r.json().get("id") == invoice_id, (
+        f"bridged replay was repointed or corrupted by its query string: {r.text[:300]}"
+    )

@@ -10,6 +10,12 @@
  * a false match would swallow a real WordPress page and a missed match leaves
  * the API dead on the very hosts the bridge exists for. The live proxying is
  * driven end to end by the hostile-host browser journey test.
+ *
+ * The wp.org review gate (2026-09, second round) also lives here: nothing
+ * from the request may be replayed raw, so the pure query re-encoder and
+ * body validator are pinned pair by pair — including every spelling of a
+ * smuggled cashupay_path parameter and the JSON/size refusals. The live
+ * HTTP half of the same gate is tests/wordpress/test_wp_api_bridge_live.py.
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
@@ -71,6 +77,70 @@ assert_eq(null, cashupay_api_bridge_path('/barebits/api/v1', $install),
 // URL on the site would be the wrong failure mode.
 assert_eq(null, cashupay_api_bridge_path('/api/v1/server/info', 'http://wp.test'),
     'a pathless install URL claims nothing');
+
+// --- Query re-encoding (wp.org review: sanitize/validate QUERY_STRING) -------
+// Ordinary parameters ride through byte-for-byte in meaning: order and
+// duplicate keys preserved, +-as-space and %-escapes normalized to one
+// canonical percent-encoded form.
+assert_eq('', cashupay_api_bridge_query(''), 'empty query stays empty');
+assert_eq('skip=0&take=5', cashupay_api_bridge_query('skip=0&take=5'),
+    'plain parameters are unchanged');
+assert_eq('dup=1&dup=2', cashupay_api_bridge_query('dup=1&dup=2'),
+    'duplicate keys survive in order (parse_str-style rebuilds would collapse them)');
+assert_eq('flag', cashupay_api_bridge_query('flag'),
+    'a valueless flag parameter keeps its shape');
+assert_eq('q=a%20b', cashupay_api_bridge_query('q=a+b'),
+    '+ means space and is re-encoded as %20');
+assert_eq('q=a%2Bb', cashupay_api_bridge_query('q=a%2Bb'),
+    'an escaped literal plus stays a literal plus');
+assert_eq('items%5B%5D=1&items%5B%5D=2', cashupay_api_bridge_query('items[]=1&items[]=2'),
+    'bracketed array keys are percent-encoded, still the same PHP parameter');
+assert_eq('a=1', cashupay_api_bridge_query('&&a=1&'),
+    'empty fragments are dropped');
+assert_eq('a=1', cashupay_api_bridge_query('a=1&=orphan'),
+    'a pair with an empty name is dropped');
+assert_eq('a=b%20c%22%3C%3E%27', cashupay_api_bridge_query('a=b c"<>\''),
+    'raw URL-hostile bytes come out fully percent-encoded');
+assert_eq('a=%25zz', cashupay_api_bridge_query('a=%zz'),
+    'a malformed %-escape is neutralized into literal, well-formed bytes');
+
+// The bridge's own transport parameter can never be overridden from outside:
+// every spelling PHP would parse as cashupay_path is stripped.
+assert_eq('x=1', cashupay_api_bridge_query('cashupay_path=/evil&x=1'),
+    'a smuggled cashupay_path is dropped');
+assert_eq('x=1', cashupay_api_bridge_query('x=1&%63ashupay_path=/evil'),
+    'percent-encoded spellings of the name are dropped too');
+assert_eq('x=1', cashupay_api_bridge_query('cashupay.path=/evil&cashupay+path=/evil&x=1'),
+    'dot/space spellings PHP folds to underscores are dropped');
+assert_eq('x=1', cashupay_api_bridge_query('cashupay_path[]=/evil&x=1'),
+    'array spellings that would clobber the scalar parameter are dropped');
+assert_eq('cashupay_pathx=1', cashupay_api_bridge_query('cashupay_pathx=1'),
+    'a merely prefix-similar name is NOT dropped');
+
+// --- Body validation (wp.org review: validate php://input) -------------------
+// The install's API parses every body as JSON and nothing else, so the
+// bridge forwards exactly that: nothing, or valid JSON within the cap.
+assert_eq(null, cashupay_api_bridge_body_refusal(''), 'an empty body is fine');
+assert_eq(null, cashupay_api_bridge_body_refusal('{"amount":"1.23","currency":"USD"}'),
+    'a JSON object is fine');
+assert_eq(null, cashupay_api_bridge_body_refusal('null'),
+    'any valid JSON document is fine, scalars included');
+
+$refusal = cashupay_api_bridge_body_refusal('amount=1&currency=USD');
+assert_eq(400, $refusal[0] ?? null, 'a non-JSON body is refused with 400');
+assert_eq('bridge-invalid-body', $refusal[1] ?? null, 'non-JSON refusal carries its error code');
+$refusal = cashupay_api_bridge_body_refusal('   ');
+assert_eq(400, $refusal[0] ?? null, 'a whitespace-only body is not JSON either');
+$refusal = cashupay_api_bridge_body_refusal('{"amount":');
+assert_eq(400, $refusal[0] ?? null, 'truncated JSON is refused');
+
+// The size cap: valid JSON exactly at the cap passes; one byte over — even
+// perfectly valid JSON — is refused as oversized (checked before parsing).
+$atCap = '"' . str_repeat('a', CASHUPAY_BRIDGE_MAX_BODY_BYTES - 2) . '"';
+assert_eq(null, cashupay_api_bridge_body_refusal($atCap), 'a body exactly at the cap passes');
+$refusal = cashupay_api_bridge_body_refusal('"' . str_repeat('a', CASHUPAY_BRIDGE_MAX_BODY_BYTES - 1) . '"');
+assert_eq(413, $refusal[0] ?? null, 'one byte over the cap is refused with 413');
+assert_eq('bridge-body-too-large', $refusal[1] ?? null, 'oversize refusal carries its error code');
 
 // --- Authorization header recovery -------------------------------------------
 $_SERVER['HTTP_AUTHORIZATION'] = 'token abc';

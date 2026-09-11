@@ -321,6 +321,66 @@ def test_no_superglobal_access_outside_functions() -> None:
     )
 
 
+# Functions that justify a request-input read on the line where it happens:
+# the WP sanitizers the plugin actually uses, plus pure existence checks
+# (isset/empty guard lines never consume the value). A raw read that uses
+# none of these needs an entry in RAW_INPUT_ALLOWLIST below.
+INPUT_READ_APPROVED = (
+    "sanitize_text_field(",
+    "sanitize_key(",
+    "sanitize_file_name(",
+    "absint(",
+    "isset(",
+    "empty(",
+    "array_key_exists(",
+)
+
+# The only raw request-input reads allowed without a sanitize_*() on the
+# line, keyed by (file, substring that must appear on the same line — the
+# compensating control). Extending this map is a review-level decision, not
+# a convenience: each entry documents why WordPress's sanitizers are the
+# wrong tool there and what handles the input instead.
+RAW_INPUT_ALLOWLIST = {
+    # The bridged query string is re-encoded pair by pair by
+    # cashupay_api_bridge_query() — sanitize_text_field would corrupt
+    # legitimate API parameters; percent re-encoding cannot. The call being
+    # ON the access line is exactly what this gate pins.
+    ("api-bridge.php", "cashupay_api_bridge_query("),
+    # The bridged request body: a bounded read (the cap constant on the line
+    # is the control), validated as JSON by cashupay_api_bridge_body_refusal()
+    # immediately after — sanitizing bytes that must reach the API verbatim
+    # would corrupt payloads.
+    ("api-bridge.php", "CASHUPAY_BRIDGE_MAX_BODY_BYTES"),
+}
+
+
+def test_request_input_reads_are_sanitized() -> None:
+    """wordpress.org review gate (2026-09 submission feedback, second round):
+    every read of request input ($_GET/$_POST/$_REQUEST/$_SERVER/$_COOKIE/
+    $_FILES, php://input) in the plugin must sanitize or validate on the very
+    line it happens — or carry a documented entry in RAW_INPUT_ALLOWLIST.
+    A tripwire against `$x = $_POST['foo'];` creeping back in, not a proof of
+    correctness: the pure sanitizers themselves are pinned by
+    tests/php/test_wp_api_bridge.php, and the refusal behavior over HTTP by
+    test_wp_api_bridge_live.py."""
+    token = re.compile(r"\$_(GET|POST|REQUEST|SERVER|COOKIE|FILES)\b|php://input")
+    offenders = []
+    for php in sorted((REPO_ROOT / "wordpress").glob("*.php")):
+        for lineno, line in enumerate(php.read_text().splitlines(), 1):
+            text = line.strip()
+            if text.startswith(("*", "//", "#", "/*")) or not token.search(text):
+                continue
+            if any(fn in text for fn in INPUT_READ_APPROVED):
+                continue
+            if any(f == php.name and snippet in text for f, snippet in RAW_INPUT_ALLOWLIST):
+                continue
+            offenders.append(f"{php.name}:{lineno} raw request input: {text[:120]}")
+    assert offenders == [], (
+        "request input read without a same-line sanitizer/validator "
+        "(wordpress.org review rejects these):\n" + "\n".join(offenders)
+    )
+
+
 def test_plugin_check_full_zip(wordpress_bare: WordPressHandle, wp_plugin_zip: Path) -> None:
     rows = _install_and_check(wordpress_bare, wp_plugin_zip)
     _assert_clean(rows)

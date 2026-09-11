@@ -28,6 +28,16 @@ if (!defined('ABSPATH')) {
 
 add_action('plugins_loaded', 'cashupay_maybe_bridge_api_request');
 
+// The most a replayed request body may carry. Every real Greenfield payload
+// is small JSON (an invoice create is well under 10 KB); a larger body is
+// nothing the install's API could parse, so it is refused, never buffered
+// whole or forwarded.
+const CASHUPAY_BRIDGE_MAX_BODY_BYTES = 1048576;
+
+// The only methods the bridge will replay — the verbs the Greenfield API
+// speaks. Anything else on a provably-ours path is refused with 405.
+const CASHUPAY_BRIDGE_METHODS = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+
 /**
  * Decide whether a request path is an API request for the alongside install
  * that fell through to WordPress, and if so which API path it carries.
@@ -70,11 +80,89 @@ function cashupay_api_bridge_authorization(): string {
     if (function_exists('apache_request_headers')) {
         foreach ((array) apache_request_headers() as $name => $value) {
             if (strcasecmp((string) $name, 'Authorization') === 0) {
-                return (string) $value;
+                return sanitize_text_field((string) $value);
             }
         }
     }
     return '';
+}
+
+/**
+ * Re-encode an incoming query string for the replayed request: each key and
+ * value is decoded (urldecode, so +-as-space survives) and percent-encoded
+ * again, preserving order, duplicate keys, and every byte of meaning — while
+ * guaranteeing the result is well-formed with no character that could
+ * corrupt the target URL. Two kinds of pair are dropped outright: empty
+ * fragments, and any parameter that PHP's request parsing would read as
+ * cashupay_path — that slot is api.php's path transport, already carrying
+ * the validated API path, and an incoming duplicate must not override it.
+ *
+ * Pure (no WordPress calls) so tests/php can pin it;
+ * cashupay_maybe_bridge_api_request() is the live caller.
+ */
+function cashupay_api_bridge_query(string $raw): string {
+    $pairs = [];
+    foreach (explode('&', $raw) as $pair) {
+        if ($pair === '') {
+            continue;
+        }
+        $eq = strpos($pair, '=');
+        $key = urldecode($eq === false ? $pair : substr($pair, 0, $eq));
+        // PHP normalizes parameter names before they reach $_GET: dots and
+        // spaces in the segment before any bracket become underscores. Match
+        // that, or "cashupay.path" (and bracketed variants) would slip past
+        // the name comparison and still clobber api.php's path parameter.
+        $bracket = strpos($key, '[');
+        $base = strtr($bracket === false ? $key : substr($key, 0, $bracket), ['.' => '_', ' ' => '_']);
+        if ($key === '' || $base === 'cashupay_path') {
+            continue;
+        }
+        $encoded = rawurlencode($key);
+        if ($eq !== false) {
+            $encoded .= '=' . rawurlencode(urldecode(substr($pair, $eq + 1)));
+        }
+        $pairs[] = $encoded;
+    }
+    return implode('&', $pairs);
+}
+
+/**
+ * Decide whether a bridged request body must be refused instead of replayed:
+ * returns [HTTP status, error code, message], or null when the body is fine
+ * to forward. The install's API parses every request body as JSON and
+ * nothing else (getRequestBody() in api.php), so a valid body is empty or
+ * JSON — anything else would silently degrade to an empty body over there,
+ * and refusing it here with an honest error is strictly more informative.
+ * A body that passes is forwarded as the ORIGINAL bytes: decode/re-encode
+ * could alter number formatting inside payment amounts.
+ *
+ * Pure (no WordPress calls) so tests/php can pin it;
+ * cashupay_maybe_bridge_api_request() is the live caller.
+ */
+function cashupay_api_bridge_body_refusal(string $body): ?array {
+    if (strlen($body) > CASHUPAY_BRIDGE_MAX_BODY_BYTES) {
+        return [413, 'bridge-body-too-large', 'The API bridge only replays request bodies up to 1 MB.'];
+    }
+    if ($body === '') {
+        return null;
+    }
+    json_decode($body);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return [400, 'bridge-invalid-body', 'The request body is not valid JSON — the BareBits API accepts only JSON bodies.'];
+    }
+    return null;
+}
+
+/**
+ * Answer a request the bridge has proven is ours but refuses to replay,
+ * in the API's own error shape, and stop.
+ */
+function cashupay_api_bridge_refuse(int $status, string $code, string $message): void {
+    nocache_headers();
+    status_header($status);
+    header('Content-Type: application/json');
+    echo wp_json_encode(['code' => $code, 'message' => $message]);
+    exit;
 }
 
 /**
@@ -93,6 +181,12 @@ function cashupay_api_bridge_authorization(): string {
  * is built from the stored install URL, never from request input — and the
  * response is relayed under the install's Content-Type, never rendered as
  * this site's HTML.
+ *
+ * Nothing from the request is replayed raw: the method must be a standard
+ * verb (405 otherwise), the query string is percent re-encoded pair by pair
+ * (cashupay_api_bridge_query), the body must be empty or valid JSON within
+ * the size cap (cashupay_api_bridge_body_refusal; 400/413 otherwise), and
+ * the forwarded headers pass through sanitize_text_field.
  */
 function cashupay_maybe_bridge_api_request(): void {
     $requestPath = (string) wp_parse_url(sanitize_text_field(wp_unslash((string) ($_SERVER['REQUEST_URI'] ?? ''))), PHP_URL_PATH);
@@ -114,17 +208,21 @@ function cashupay_maybe_bridge_api_request(): void {
     }
 
     $target = $installUrl . '/api.php?cashupay_path=' . rawurlencode($apiPath);
-    // Forwarded verbatim: this is the raw query string of an API request being
-    // replayed against the same-origin install; sanitizing could corrupt
-    // legitimate parameters. It is only ever a URL component of a server-side
-    // HTTP request, never output.
-    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
-    $query = (string) ($_SERVER['QUERY_STRING'] ?? '');
+    // The query string is never forwarded raw: cashupay_api_bridge_query()
+    // re-encodes it pair by pair (sanitize_text_field would corrupt
+    // legitimate API parameters; percent re-encoding cannot) and drops any
+    // attempt to smuggle a second cashupay_path into the target.
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- sanitized by cashupay_api_bridge_query() wrapping this read.
+    $query = cashupay_api_bridge_query(wp_unslash((string) ($_SERVER['QUERY_STRING'] ?? '')));
     if ($query !== '') {
         $target .= '&' . $query;
     }
 
     $method = strtoupper(sanitize_key(wp_unslash((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'))));
+    if (!in_array($method, CASHUPAY_BRIDGE_METHODS, true)) {
+        header('Allow: ' . implode(', ', CASHUPAY_BRIDGE_METHODS));
+        cashupay_api_bridge_refuse(405, 'bridge-method-not-allowed', 'The API bridge only replays standard HTTP methods.');
+    }
     $headers = [];
     $authorization = cashupay_api_bridge_authorization();
     if ($authorization !== '') {
@@ -142,7 +240,14 @@ function cashupay_maybe_bridge_api_request(): void {
         'headers' => $headers,
     ];
     if (!in_array($method, ['GET', 'HEAD'], true)) {
-        $args['body'] = (string) file_get_contents('php://input');
+        // Bounded read — one byte past the cap is enough to prove the body
+        // is oversized without ever buffering more than that.
+        $body = (string) file_get_contents('php://input', false, null, 0, CASHUPAY_BRIDGE_MAX_BODY_BYTES + 1);
+        $refusal = cashupay_api_bridge_body_refusal($body);
+        if ($refusal !== null) {
+            cashupay_api_bridge_refuse($refusal[0], $refusal[1], $refusal[2]);
+        }
+        $args['body'] = $body;
     }
 
     $response = wp_remote_request($target, $args);
