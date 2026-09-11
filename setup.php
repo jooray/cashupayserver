@@ -564,11 +564,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $strikeKey = trim($_POST['strike_keep_ref'] ?? '');
                 }
 
+                // Strike on-chain option: invoice addresses are minted in the
+                // merchant's Strike account (fallback: the store's own
+                // xpub/static address). Gated below behind a receive-request
+                // scope probe before it is persisted.
+                $strikeOnchainWanted = ($_POST['strike_onchain'] ?? '') === '1';
+
                 if ($lnAction === 'skip') {
                     $lnAddress = '';
                     $nofferPosted = [];
                     $nwc = '';
                     $strikeKey = '';
+                    $strikeOnchainWanted = false;
                 }
 
                 // Validate separately so the operator gets a message naming the
@@ -671,7 +678,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // for this store passes through, so revisiting the screen
                 // never locks the operator out.
                 $gated = StoreLnAddresses::probeAndGateChain($storeId, $chain);
+
+                // Strike on-chain gate, BEFORE anything is persisted so a
+                // refusal leaves both the chain and the flag untouched (see
+                // OnchainConfig::gateStrikeOnchainEnable for the rules).
+                require_once __DIR__ . '/includes/onchain/config.php';
+                if ($strikeOnchainWanted) {
+                    $finalStrikeKeys = [];
+                    foreach ($gated['entries'] as $gatedEntry) {
+                        if (($gatedEntry['type'] ?? '') === StoreLnAddresses::TYPE_STRIKE) {
+                            $finalStrikeKeys[] = (string)$gatedEntry['address'];
+                        }
+                    }
+                    $storedStrikeKeys = [];
+                    foreach (StoreLnAddresses::listForStore($storeId) as $lnRow) {
+                        if ($lnRow['type'] === StoreLnAddresses::TYPE_STRIKE) {
+                            $storedStrikeKeys[$lnRow['address']] = true;
+                        }
+                    }
+                    OnchainConfig::gateStrikeOnchainEnable(
+                        $storeId,
+                        $finalStrikeKeys,
+                        $storedStrikeKeys,
+                        OnchainConfig::strikeEnabledForStore($storeId)
+                    );
+                }
+
                 StoreLnAddresses::replaceForStore($storeId, $gated['entries']);
+                OnchainConfig::setStrikeEnabled($storeId, $strikeOnchainWanted ? 1 : 0);
                 // Auto-cashout mode isn't decided here: which rail sweeps the
                 // mint balance depends on the swaps and mints answers still to
                 // come. setupResolveAutoCashout() settles it at the end.
@@ -2269,6 +2303,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 // ref of a stored key round-trips.
                 $lnStrikeValue = trim((string)($_POST['strike_keep_ref'] ?? $lnExistingStrikeRef));
                 $lnStrikeShowsSaved = $lnStrikeValue !== '' && str_starts_with($lnStrikeValue, StoreLnAddresses::KEEP_REF_PREFIX);
+                // Strike on-chain checkbox: reflect the POSTed state on a
+                // re-render after a failed save, else the stored flag.
+                require_once __DIR__ . '/includes/onchain/config.php';
+                $lnStrikeOnchainChecked = isset($_POST['lightning_action'])
+                    ? (($_POST['strike_onchain'] ?? '') === '1')
+                    : ($renderStoreId !== null && OnchainConfig::strikeEnabledForStore($renderStoreId));
                 ?>
                 <h2 style="margin-bottom: 1rem;">⚡ Lightning payments</h2>
                 <p style="margin-bottom: 0.75rem;">
@@ -2381,7 +2421,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                     <strong>Generate invoice quotes</strong>
                                     (<code>partner.invoice.quote.generate</code>) and
                                     <strong>Read invoices</strong>
-                                    (<code>partner.invoice.read</code>).</li>
+                                    (<code>partner.invoice.read</code>).
+                                    Add a fourth scope, <strong>Create receive
+                                    requests</strong>
+                                    (<code>partner.receive-request.create</code>),
+                                    only if you also tick the on-chain checkbox
+                                    below.</li>
                                 <li>Copy the key and paste it below.</li>
                             </ol>
                             <p style="margin: 0;">
@@ -2415,6 +2460,18 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                    value=""
                                    placeholder="paste your Strike API key">
                         <?php endif; ?>
+                        <label style="display:block; font-size: 0.9rem; margin-top: 0.75rem;">
+                            <input type="checkbox" name="strike_onchain" value="1"<?= $lnStrikeOnchainChecked ? ' checked' : '' ?>>
+                            Also accept on-chain payments via Strike
+                        </label>
+                        <p style="margin: 0.35rem 0 0 1.5rem; font-size: 0.8rem; color: #a0aec0;">
+                            Each invoice's Bitcoin address is then created in your
+                            Strike account (with your on-chain wallet as fallback if
+                            Strike is unreachable). The key additionally needs the
+                            <strong>Create receive requests</strong> scope
+                            (<code>partner.receive-request.create</code>) — it is
+                            tested when you continue.
+                        </p>
                     </details>
 
                     <!-- Collapsed by default; open only when the section already

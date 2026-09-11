@@ -100,6 +100,12 @@ class PaymentPathDebug
             return self::withDest('Fee-redirect on-chain (xpub-derived)', $address);
         }
 
+        // A Strike-minted address (receive request in the merchant's Strike
+        // account) overrides the store's own xpub/static source.
+        if (!empty($invoice['strike_receive_request_id'])) {
+            return self::withDest('On-chain (Strike receive request)', $address);
+        }
+
         $mode = ($onchainMode === 'static') ? 'static address' : 'xpub-derived';
         return self::withDest('On-chain (' . $mode . ')', $address);
     }

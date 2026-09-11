@@ -13,7 +13,17 @@
  *                                           (scope partner.invoice.quote.generate)
  *   read invoice    — GET  /invoices/{id}   (scope partner.invoice.read)
  *
- * Those three scopes are all the key ever needs; none of them can move funds
+ * The optional Strike ON-CHAIN rail additionally mints a fresh Bitcoin
+ * address in the merchant's Strike account per invoice:
+ *
+ *   create receive request — POST /receive-requests
+ *                                           (scope partner.receive-request.create)
+ *
+ * Settlement of on-chain payments is detected by our own chain watcher
+ * (OnchainPayments::pollInvoice against the returned address), so no
+ * receive-request read scope is ever needed.
+ *
+ * Those scopes are all the key ever needs; none of them can move funds
  * out of the account. The spend-capable endpoints (payment quotes/executions)
  * are never called.
  *
@@ -205,6 +215,70 @@ class StrikeClient
     }
 
     /**
+     * Create a Strike receive request carrying a fresh on-chain Bitcoin
+     * address, with $amountSats as the suggested amount. Strike documents
+     * that on-chain addresses "can be paid with more or less than the
+     * suggested amount" — the amount here only pre-fills the payer's wallet
+     * via the BIP21 URI; our chain watcher enforces the invoice total.
+     *
+     * Requires the partner.receive-request.create scope, which the three
+     * classic invoice scopes do NOT imply — keys saved before the on-chain
+     * option existed may lack it (see probeOnchainKey).
+     *
+     * @return array{address:string, receive_request_id:string}
+     * @throws StrikeException on any failure
+     */
+    public static function createOnchainReceiveRequest(
+        string $key,
+        int $amountSats,
+        ?int $timeoutSec = null
+    ): array {
+        if ($amountSats < 1) {
+            throw new StrikeException('receive amount must be at least 1 sat');
+        }
+        $deadline = microtime(true) + ($timeoutSec ?? (int)STRIKE_DEFAULT_TIMEOUT_SEC);
+
+        $body = [
+            'onchain' => [
+                'amount' => [
+                    'amount' => self::satsToBtc($amountSats),
+                    'currency' => 'BTC',
+                ],
+            ],
+        ];
+        $made = self::request($key, 'POST', '/receive-requests', $body, $deadline);
+        $requestId = (string)($made['receiveRequestId'] ?? '');
+        $onchain = $made['onchain'] ?? null;
+        $address = is_array($onchain) ? trim((string)($onchain['address'] ?? '')) : '';
+        if ($requestId === '' || $address === '') {
+            throw new StrikeException('Strike returned no on-chain address');
+        }
+        // btcAmount is the amount Strike suggests to the payer (and encodes
+        // into the BIP21 URI). For a BTC-denominated request it must be
+        // sat-exact for what we asked; a mismatch means the API did something
+        // unexpected (e.g. currency conversion crept in) — refuse the address
+        // rather than suggest the customer a wrong amount. Tolerate both
+        // response shapes (plain decimal string or {amount, currency}).
+        $btcAmount = is_array($onchain) ? ($onchain['btcAmount'] ?? null) : null;
+        if (is_array($btcAmount)) {
+            $btcAmount = strtoupper((string)($btcAmount['currency'] ?? 'BTC')) === 'BTC'
+                ? (string)($btcAmount['amount'] ?? '')
+                : null;
+        }
+        if (is_string($btcAmount) && $btcAmount !== '') {
+            $suggestedSats = self::btcToSats($btcAmount);
+            if ($suggestedSats !== $amountSats) {
+                throw new StrikeException(sprintf(
+                    'Strike suggested %s sats for a %d sat receive request',
+                    $suggestedSats === null ? 'a non-sat-exact amount' : (string)$suggestedSats,
+                    $amountSats
+                ));
+            }
+        }
+        return ['address' => $address, 'receive_request_id' => $requestId];
+    }
+
+    /**
      * Read a Strike invoice's state. Returns one of:
      *   ['state' => 'paid']      — Strike reports PAID
      *   ['state' => 'pending']   — UNPAID / PENDING
@@ -252,6 +326,33 @@ class StrikeClient
             return ['ok' => false, 'error' => self::describeFailure($e)];
         } catch (\Throwable $e) {
             error_log('[strike] probe threw: ' . $e->getMessage());
+            return ['ok' => false, 'error' => 'the Strike API could not be reached'];
+        }
+        return ['ok' => true, 'error' => null];
+    }
+
+    /**
+     * Save-time probe for the on-chain option: create a real receive request
+     * so a key missing partner.receive-request.create fails at enable time
+     * instead of silently dropping the Strike address from checkouts later.
+     * Side effect: each probe leaves one 1-sat receive request (an unused
+     * fresh address) in the merchant's Strike dashboard; nothing is paid.
+     *
+     * Returns ['ok' => bool, 'error' => ?string]. The error is operator-
+     * facing and never contains the key.
+     */
+    public static function probeOnchainKey(string $key, ?int $timeoutSec = null): array
+    {
+        try {
+            self::createOnchainReceiveRequest($key, 1, $timeoutSec);
+        } catch (StrikeException $e) {
+            $error = ($e->httpStatus === 401 || $e->httpStatus === 403)
+                ? 'the Strike API rejected the key for receive requests (the key needs the '
+                  . '"create receive requests" scope, partner.receive-request.create)'
+                : self::describeFailure($e);
+            return ['ok' => false, 'error' => $error];
+        } catch (\Throwable $e) {
+            error_log('[strike] onchain probe threw: ' . $e->getMessage());
             return ['ok' => false, 'error' => 'the Strike API could not be reached'];
         }
         return ['ok' => true, 'error' => null];

@@ -412,6 +412,19 @@ if (isset($_GET['api'])) {
                 // Whether the on-chain rail is OFFERED to customers (per-store
                 // flag; legacy -1 rows resolve to on).
                 'offerEnabled' => OnchainConfig::isEnabledForStore($storeId),
+                // "Also accept on-chain payments via Strike": addresses are
+                // minted in the merchant's Strike account, xpub/static as
+                // fallback. Only effective with a Strike key + mainnet.
+                'strikeOnchainEnabled' => OnchainConfig::strikeEnabledForStore($storeId),
+                'strikeKeyConfigured' => (function () use ($storeId): bool {
+                    require_once __DIR__ . '/includes/store_ln_addresses.php';
+                    foreach (StoreLnAddresses::listForStore($storeId) as $lnRow) {
+                        if ($lnRow['type'] === StoreLnAddresses::TYPE_STRIKE) {
+                            return true;
+                        }
+                    }
+                    return false;
+                })(),
             ];
 
             // Calculate balance in sats for fiat mints (uses cached exchange rates)
@@ -2040,6 +2053,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             break;
 
+        case 'save_onchain_strike':
+            Auth::requireAdmin();
+            // Toggle "also accept on-chain payments via Strike" from the
+            // on-chain settings card (the Lightning payments card saves the
+            // same flag alongside the Strike key). Enabling probes a real
+            // receive request against every stored Strike key so a key
+            // without partner.receive-request.create is refused here instead
+            // of silently dropping the Strike address from checkouts.
+            try {
+                $storeId = $_POST['store_id'] ?? '';
+                if (empty($storeId)) {
+                    throw new Exception('Store ID required');
+                }
+                require_once __DIR__ . '/includes/onchain/config.php';
+                require_once __DIR__ . '/includes/store_ln_addresses.php';
+                $raw = (string)($_POST['strike_onchain'] ?? '0');
+                if (!in_array($raw, ['0', '1'], true)) {
+                    throw new Exception('Invalid Strike on-chain value');
+                }
+                if ($raw === '1') {
+                    $strikeKeys = [];
+                    $storedStrikeKeys = [];
+                    foreach (StoreLnAddresses::listForStore($storeId) as $row) {
+                        if ($row['type'] === StoreLnAddresses::TYPE_STRIKE) {
+                            $strikeKeys[] = $row['address'];
+                            $storedStrikeKeys[$row['address']] = true;
+                        }
+                    }
+                    OnchainConfig::gateStrikeOnchainEnable(
+                        $storeId,
+                        $strikeKeys,
+                        $storedStrikeKeys,
+                        OnchainConfig::strikeEnabledForStore($storeId)
+                    );
+                }
+                OnchainConfig::setStrikeEnabled($storeId, (int)$raw);
+                echo json_encode([
+                    'success' => true,
+                    'strikeOnchainEnabled' => OnchainConfig::strikeEnabledForStore($storeId),
+                ]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
+            break;
+
         case 'save_onchain':
             Auth::requireAdmin();
             // Persist a store's on-chain Bitcoin payment configuration.
@@ -2449,13 +2508,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $entries = $gate['entries'];
                 $addressResults = $gate['results'];
 
+                // Strike on-chain option ("also accept on-chain payments via
+                // Strike") rides this save when the card posts it; when the
+                // field is absent the stored flag is left untouched so legacy
+                // callers can't silently clear it. Gated BEFORE anything is
+                // persisted — see OnchainConfig::gateStrikeOnchainEnable.
+                require_once __DIR__ . '/includes/onchain/config.php';
+                $strikeOnchainParam = isset($_POST['strike_onchain'])
+                    ? (string)$_POST['strike_onchain'] : null;
+                if ($strikeOnchainParam !== null && !in_array($strikeOnchainParam, ['0', '1'], true)) {
+                    throw new Exception('Invalid Strike on-chain value');
+                }
+                if ($strikeOnchainParam === '1') {
+                    $finalStrikeKeys = [];
+                    foreach ($entries as $chainEntry) {
+                        if (($chainEntry['type'] ?? '') === StoreLnAddresses::TYPE_STRIKE) {
+                            $finalStrikeKeys[] = (string)$chainEntry['address'];
+                        }
+                    }
+                    $storedStrikeKeys = [];
+                    foreach (StoreLnAddresses::listForStore($storeId) as $row) {
+                        if ($row['type'] === StoreLnAddresses::TYPE_STRIKE) {
+                            $storedStrikeKeys[$row['address']] = true;
+                        }
+                    }
+                    OnchainConfig::gateStrikeOnchainEnable(
+                        $storeId,
+                        $finalStrikeKeys,
+                        $storedStrikeKeys,
+                        OnchainConfig::strikeEnabledForStore($storeId)
+                    );
+                }
+
                 // Replace the whole ordered chain in one transaction.
                 StoreLnAddresses::replaceForStore($storeId, $entries);
+                if ($strikeOnchainParam !== null) {
+                    OnchainConfig::setStrikeEnabled($storeId, (int)$strikeOnchainParam);
+                }
 
                 echo json_encode([
                     'success' => true,
                     // Per-address LUD-21 results, in priority order.
                     'addresses' => $addressResults,
+                    'strikeOnchainEnabled' => OnchainConfig::strikeEnabledForStore($storeId),
                 ]);
             } catch (Exception $e) {
                 cashupay_status(400);
@@ -5584,15 +5679,29 @@ header('Cache-Control: no-cache, must-revalidate');
                                     (API Keys section) with <em>only</em> the
                                     <strong>create invoices</strong>, <strong>generate invoice
                                     quotes</strong> and <strong>read invoices</strong> scopes
-                                    &mdash; such a key cannot spend or withdraw funds. New keys are
-                                    tested with a 1-sat test invoice when you save (it&rsquo;s never
-                                    paid). Saved keys show only a masked label; the key stays on
-                                    the server.
+                                    (plus <strong>create receive requests</strong> if you tick the
+                                    on-chain option below) &mdash; such a key cannot spend or
+                                    withdraw funds. New keys are tested with a 1-sat test invoice
+                                    when you save (it&rsquo;s never paid). Saved keys show only a
+                                    masked label; the key stays on the server.
                                 </p>
                                 <div id="auto-melt-strike-list"></div>
                                 <button type="button" class="btn btn-secondary" id="btn-add-strike" style="margin-top: 0.5rem;">
                                     + Add Strike API key
                                 </button>
+                                <label style="display:block; margin-top: 0.75rem; font-size: 0.9rem;">
+                                    <input type="checkbox" id="strike-onchain-checkbox">
+                                    Also accept on-chain payments via Strike
+                                </label>
+                                <p class="form-help" style="margin: 0.35rem 0 0 1.5rem;">
+                                    Each invoice&rsquo;s Bitcoin address is then created in your
+                                    Strike account (your xpub / static address stays the fallback
+                                    when Strike is unreachable). The key additionally needs the
+                                    <strong>create receive requests</strong> scope
+                                    (<code>partner.receive-request.create</code>); it&rsquo;s tested
+                                    when you save. Mainnet only. This setting also appears in the
+                                    On-chain Bitcoin payments card.
+                                </p>
                             </div>
 
                             <div class="form-group" id="auto-melt-address-group">
@@ -5836,6 +5945,29 @@ header('Cache-Control: no-cache, must-revalidate');
                                     mean some wallets can&rsquo;t make payment to you. Additionally, if your
                                     LNURL/noffer/mint is down, it may leave you with no way to accept payment.
                                 </div>
+                            </div>
+
+                            <!-- "Also accept on-chain payments via Strike": invoice addresses
+                                 are minted in the merchant's Strike account (receive request);
+                                 the xpub/static source below stays the fallback. Saves
+                                 instantly on change; enabling probes the key's
+                                 receive-request scope server-side. -->
+                            <div class="form-group" id="onchain-strike-group">
+                                <div class="toggle-container">
+                                    <span>Also accept on-chain payments via Strike</span>
+                                    <label class="toggle">
+                                        <input type="checkbox" id="onchain-strike-toggle" onchange="onchainStrikeChanged()">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <p class="form-help" id="onchain-strike-help">
+                                    Each invoice&rsquo;s Bitcoin address is created in your Strike
+                                    account, so on-chain payments land there like your Strike
+                                    Lightning payments do. The xpub / static address below is the
+                                    fallback when Strike is unreachable. Needs a Strike API key
+                                    (Lightning payments card) with the
+                                    <strong>create receive requests</strong> scope; mainnet only.
+                                </p>
                             </div>
 
                             <div class="form-group">
@@ -9869,10 +10001,16 @@ header('Cache-Control: no-cache, must-revalidate');
                 const strikeIdPart = inv.strikeInvoiceId
                     ? ` ${renderCopyMono(inv.strikeInvoiceId, 'Strike invoice ID')}`
                     : '';
+                // On-chain addresses minted via a Strike receive request carry
+                // that request's id the same way (reconciles in the Strike
+                // dashboard under Receive requests).
+                const strikeRrPart = inv.strikeReceiveRequestId
+                    ? ` ${renderCopyMono(inv.strikeReceiveRequestId, 'Strike receive request ID')}`
+                    : '';
                 const destCell = inv.destination
                     ? `<span class="inv-mono">${inv.destinationIsLightning
                         ? renderCopyMono(inv.destination, 'Lightning destination')
-                        : renderMonoLink('address', inv.destination, network)}${strikeIdPart}</span>`
+                        : renderMonoLink('address', inv.destination, network)}${strikeIdPart}${strikeRrPart}</span>`
                     : (inv.strikeInvoiceId
                         ? `<span class="inv-mono">${renderCopyMono(inv.strikeInvoiceId, 'Strike invoice ID')}</span>`
                         : '<span style="color: var(--text-secondary);">—</span>');
@@ -10648,6 +10786,23 @@ header('Cache-Control: no-cache, must-revalidate');
             const offerEff = document.getElementById('onchain-offer-effective');
             if (offerSel) offerSel.value = oc.offerEnabled ? '1' : '0';
             if (offerEff) offerEff.textContent = oc.offerEnabled ? 'on' : 'off';
+            // "Also accept on-chain payments via Strike" — the same flag backs
+            // the toggle here and the checkbox in the Lightning payments card.
+            // Without a Strike key the controls stay visible but disabled, so
+            // the operator learns where to add one.
+            const strikeToggle = document.getElementById('onchain-strike-toggle');
+            const strikeCheckbox = document.getElementById('strike-onchain-checkbox');
+            const hasStrikeKey = !!oc.strikeKeyConfigured;
+            for (const el of [strikeToggle, strikeCheckbox]) {
+                if (!el) continue;
+                el.checked = !!oc.strikeOnchainEnabled;
+                el.disabled = !hasStrikeKey && !oc.strikeOnchainEnabled;
+            }
+            const strikeHelp = document.getElementById('onchain-strike-help');
+            if (strikeHelp && !hasStrikeKey && !oc.strikeOnchainEnabled) {
+                strikeHelp.innerHTML = 'Add a Strike API key in the <strong>Lightning payments</strong> '
+                    + 'card first — on-chain payments via Strike are minted with that key.';
+            }
             updateOnchainOfferWarning();
             applyOnchainModeVisibility();
         }
@@ -10665,6 +10820,43 @@ header('Cache-Control: no-cache, must-revalidate');
         function onchainOfferChanged() {
             updateOnchainOfferWarning();
             saveOnchainOffer();
+        }
+
+        // On-chain card toggle for "also accept on-chain payments via Strike".
+        // Saves instantly; enabling runs the server-side receive-request scope
+        // probe, so a failure reverts the toggle and surfaces the reason.
+        async function onchainStrikeChanged() {
+            const toggle = document.getElementById('onchain-strike-toggle');
+            if (!toggle) return;
+            if (!currentStoreId) {
+                showToast('No store selected', 'error');
+                toggle.checked = !toggle.checked;
+                return;
+            }
+            const wanted = toggle.checked ? '1' : '0';
+            toggle.disabled = true;
+            try {
+                const response = await postWithCsrf(adminUrl,
+                    `action=save_onchain_strike&store_id=${encodeURIComponent(currentStoreId)}&strike_onchain=${wanted}`);
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showToast(wanted === '1'
+                        ? 'On-chain payments via Strike enabled'
+                        : 'On-chain payments via Strike disabled', 'success');
+                    const mirror = document.getElementById('strike-onchain-checkbox');
+                    if (mirror) mirror.checked = wanted === '1';
+                    await loadDashboard();
+                    renderOnchainDashboard();
+                } else {
+                    toggle.checked = wanted !== '1';
+                    showToast(result.error || 'Failed to save the Strike on-chain setting', 'error');
+                }
+            } catch (e) {
+                toggle.checked = wanted !== '1';
+                showToast('Failed to save the Strike on-chain setting', 'error');
+            } finally {
+                toggle.disabled = false;
+            }
         }
 
         async function saveOnchainOffer() {
@@ -10988,6 +11180,12 @@ header('Cache-Control: no-cache, must-revalidate');
                 for (const s of strikeEntries) {
                     body += `&strike%5B%5D=${encodeURIComponent(s)}`;
                 }
+                // "Also accept on-chain payments via Strike" rides this save;
+                // the server probes the receive-request scope when enabling.
+                const strikeOnchainEl = document.getElementById('strike-onchain-checkbox');
+                if (strikeOnchainEl) {
+                    body += `&strike_onchain=${strikeOnchainEl.checked ? '1' : '0'}`;
+                }
 
                 const response = await postWithCsrf(adminUrl, body);
 
@@ -10995,6 +11193,13 @@ header('Cache-Control: no-cache, must-revalidate');
 
                 if (response.ok) {
                     showToast('Settings saved!', 'success');
+                    // Mirror the saved Strike on-chain flag onto the on-chain
+                    // card's toggle (both controls back the same store flag).
+                    if (typeof result.strikeOnchainEnabled === 'boolean') {
+                        const strikeOnchainToggle = document.getElementById('onchain-strike-toggle');
+                        if (strikeOnchainToggle) strikeOnchainToggle.checked = result.strikeOnchainEnabled;
+                        if (strikeOnchainEl) strikeOnchainEl.checked = result.strikeOnchainEnabled;
+                    }
                     // Surface the NWC probe's spend-permission warning (the
                     // connection works but can also pay out of the wallet).
                     const nwcWarnEl = document.getElementById('auto-melt-nwc-warning');

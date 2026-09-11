@@ -503,6 +503,7 @@ class Stats {
             'nwc_payment_hash', 'nwc_preimage',
             'cashu_offline_allow_any_mint', 'cashu_offline_fail_reason',
             'cart_purchase_counted', 'strike_invoice_id',
+            'strike_receive_request_id',
         ];
     }
 

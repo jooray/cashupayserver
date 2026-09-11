@@ -15,6 +15,7 @@ require_once __DIR__ . '/urls.php';
 require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
 require_once __DIR__ . '/onchain/payments.php';
 require_once __DIR__ . '/onchain/config.php';
+require_once __DIR__ . '/onchain/address_check.php';
 require_once __DIR__ . '/swap/factory.php';
 require_once __DIR__ . '/swap/config.php';
 require_once __DIR__ . '/swap/quote_fetcher.php';
@@ -279,12 +280,32 @@ class Invoice {
                 . 'on-chain xpub, or a Lightning destination (address, NWC, or noffer).'
             );
         }
+        // Strike on-chain: the operator opted to mint the invoice's on-chain
+        // address in their Strike account (a fresh address per invoice via a
+        // receive request). Only live when a Strike key is configured and the
+        // store's on-chain network is mainnet — Strike itself is mainnet-only,
+        // and the chain watcher polls the store's provider, which follows
+        // onchain_network. A store with no xpub/static address at all still
+        // defaults onchain_network to mainnet, so Strike can be its only
+        // on-chain source. The keys are walked in chain priority order.
+        $strikeOnchainKeys = [];
+        if (!empty($store['onchain_strike_enabled'])
+            && (($store['onchain_network'] ?? 'mainnet') ?: 'mainnet') === 'mainnet') {
+            foreach ($destinations as $dest) {
+                if ($dest['type'] === StoreLnAddresses::TYPE_STRIKE) {
+                    $strikeOnchainKeys[] = $dest['value'];
+                }
+            }
+        }
         // Whether to OFFER the on-chain rail to customers. A store can keep its
         // xpub configured (submarine swaps still settle on-chain to it) while
         // turning off the customer-facing pay-to-address for a Lightning-only
         // checkout. The swap path below keeps using $onchainConfigured — it
-        // needs the xpub regardless of what the customer is shown.
-        $onchainOffered = $onchainConfigured && OnchainConfig::isEnabledForStore($storeId);
+        // needs the xpub regardless of what the customer is shown. Strike
+        // on-chain makes the rail offerable even without an xpub/static
+        // address (the address then has no local fallback source).
+        $onchainOffered = ($onchainConfigured || $strikeOnchainKeys !== [])
+            && OnchainConfig::isEnabledForStore($storeId);
 
         $exchangeFee = (float)($store['exchange_fee_percent'] ?? 0);
         $primaryProvider = $store['price_provider_primary'] ?? 'coingecko';
@@ -693,25 +714,88 @@ class Invoice {
         $onchainAmountSat = null;
         $onchainAmountTweakSats = null;
         $onchainCreatedTipHeight = null;
+        // Set when the address was minted in the merchant's Strike account.
+        // Persisted for dashboard reconciliation AND read by the chain
+        // watcher: a Strike address is invoice-unique, so pollInvoice never
+        // applies static-mode amount matching to it.
+        $strikeReceiveRequestId = null;
         if ($onchainOffered && $feeOnchain === null) {
             $baseAmountSat = (int)ExchangeRates::convertToSats((string)$amount, $currency, 'sat');
-            try {
-                $allocation = OnchainPayments::allocateAddress($storeId, $baseAmountSat);
-            } catch (RuntimeException $e) {
-                if ($e->getMessage() === OnchainPayments::ERR_TWEAK_SLOTS_EXHAUSTED) {
-                    throw new RuntimeException(
-                        'All on-chain payment slots are temporarily reserved. Please try again in a few minutes.'
-                    );
+
+            // ---- Strike on-chain: mint a fresh address in the merchant's
+            // Strike account. Tried before the local xpub/static allocation;
+            // any failure falls back to it (and is only surfaced to the payer
+            // when no fallback produced an address — a working on-chain rail
+            // shouldn't carry a scary banner). Keys walk in priority order,
+            // mirroring the Lightning chain above. ----
+            $strikeOnchainErrors = [];
+            if ($strikeOnchainKeys !== [] && $baseAmountSat > 0) {
+                foreach ($strikeOnchainKeys as $priority => $skey) {
+                    try {
+                        $made = StrikeClient::createOnchainReceiveRequest(
+                            $skey,
+                            $baseAmountSat,
+                            self::directReceiveTimeoutSec('STRIKE_TIMEOUT_SEC')
+                        );
+                        // Never watch (or show a customer) a string we can't
+                        // verify is a mainnet Bitcoin address.
+                        $addrCheck = AddressCheck::validate($made['address'], 'mainnet');
+                        if (!$addrCheck['valid']) {
+                            throw new StrikeException('Strike returned an invalid on-chain address');
+                        }
+                    } catch (Throwable $e) {
+                        error_log(sprintf(
+                            '[strike-onchain] receive request failed store=%s priority=%d dest=%s: %s; falling back',
+                            $storeId, $priority, StrikeClient::maskKey($skey), $e->getMessage()
+                        ));
+                        $strikeOnchainErrors[] = [
+                            'type' => 'strike',
+                            'reason' => StrikeClient::describeFailure($e),
+                        ];
+                        AdminLog::log('strike', 'onchain', $storeId, null,
+                            StrikeClient::maskKey($skey), $e->getMessage());
+                        continue;
+                    }
+                    $onchainAddress = $made['address'];
+                    $onchainIndex = null;
+                    $onchainAmountTweakSats = null;
+                    $onchainAmountSat = $baseAmountSat;
+                    $strikeReceiveRequestId = $made['receive_request_id'];
+                    $onchainCreatedTipHeight = OnchainPayments::currentTipBestEffort($store);
+                    if ($priority > 0) {
+                        error_log("[strike-onchain] using fallback Strike key store={$storeId} priority={$priority}");
+                    }
+                    break;
                 }
-                throw $e;
             }
-            if ($allocation !== null) {
-                $onchainAddress = $allocation['address'];
-                $onchainIndex = $allocation['index'];
-                $onchainCreatedTipHeight = $allocation['tip_height'] ?? null;
-                $tweak = $allocation['tweak'] ?? null;
-                $onchainAmountTweakSats = $tweak;
-                $onchainAmountSat = $baseAmountSat + ($tweak !== null ? (int)$tweak : 0);
+
+            if ($onchainAddress === null && $onchainConfigured) {
+                try {
+                    $allocation = OnchainPayments::allocateAddress($storeId, $baseAmountSat);
+                } catch (RuntimeException $e) {
+                    if ($e->getMessage() === OnchainPayments::ERR_TWEAK_SLOTS_EXHAUSTED) {
+                        throw new RuntimeException(
+                            'All on-chain payment slots are temporarily reserved. Please try again in a few minutes.'
+                        );
+                    }
+                    throw $e;
+                }
+                if ($allocation !== null) {
+                    $onchainAddress = $allocation['address'];
+                    $onchainIndex = $allocation['index'];
+                    $onchainCreatedTipHeight = $allocation['tip_height'] ?? null;
+                    $tweak = $allocation['tweak'] ?? null;
+                    $onchainAmountTweakSats = $tweak;
+                    $onchainAmountSat = $baseAmountSat + ($tweak !== null ? (int)$tweak : 0);
+                }
+            }
+
+            // Strike failed AND no local source rescued the rail: tell the
+            // payer why on-chain is missing from this invoice.
+            if ($onchainAddress === null && $strikeOnchainErrors !== []) {
+                foreach ($strikeOnchainErrors as $err) {
+                    $receiveErrors[] = $err;
+                }
             }
         }
 
@@ -901,6 +985,7 @@ class Invoice {
             'nwc_payment_hash' => $nwcPaymentHash,
             'strike_invoice_id' => $strikeInvoiceId,
             'strike_api_key' => $strikeApiKey,
+            'strike_receive_request_id' => $strikeReceiveRequestId,
             'fee_redirect_note' => $feeNote,
             'fee_redirect_destination' => $feeDestination,
             'fee_redirect_rails' => $feeRails ? implode(',', $feeRails) : null,
@@ -2259,6 +2344,14 @@ class Invoice {
         // rides an API payload.
         if ($rail === 'strike' && !empty($invoice['strike_invoice_id'])) {
             $result['strikeInvoiceId'] = $invoice['strike_invoice_id'];
+        }
+
+        // Strike on-chain: the address was minted in the merchant's Strike
+        // account via a receive request; its id lets the operator match the
+        // incoming payment in Strike's dashboard. Independent of payment_rail
+        // — the on-chain rail rides alongside whatever Lightning rail won.
+        if (!empty($invoice['strike_receive_request_id'])) {
+            $result['strikeReceiveRequestId'] = $invoice['strike_receive_request_id'];
         }
 
         // Aggregate payment methods (Lightning + on-chain, both optional).

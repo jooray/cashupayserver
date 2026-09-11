@@ -184,7 +184,9 @@ class OnchainPayments {
         return null;
     }
 
-    private static function currentTipBestEffort(array $store): ?int {
+    /** Public: Invoice::create also stamps a Strike-minted address with the
+     *  allocation-time tip, using the same best-effort semantics. */
+    public static function currentTipBestEffort(array $store): ?int {
         // Capture the chain tip at allocation time. The poller compares
         // each observation's block_height against this to discard payments
         // that existed on a re-used address BEFORE the invoice was created.
@@ -352,7 +354,13 @@ class OnchainPayments {
 
         $minConfs = (int)($store['onchain_min_confs'] ?? 1);
         $now = time();
-        $isStaticMode = ($store['onchain_address_mode'] ?? 'xpub') === 'static';
+        // A Strike-minted address (strike_receive_request_id set) is fresh
+        // per invoice, so it always uses the unambiguous unique-address
+        // attribution below — even when the STORE is in static mode (the
+        // static config is then only the fallback source for invoices where
+        // the Strike call failed).
+        $isStaticMode = ($store['onchain_address_mode'] ?? 'xpub') === 'static'
+            && empty($invoice['strike_receive_request_id']);
 
         // Filter out historical UTXOs on a re-used address — any tx confirmed
         // strictly before the invoice was created. onchain_created_tip_height

@@ -77,6 +77,39 @@ your signing wallet displays the same address at the same derivation index.
 > Replacing the xpub resets the derivation counter to zero, so the new
 > wallet's address derivation starts where its receive screen starts.
 
+## On-chain payments via Strike
+
+Stores that take Lightning payments through the **Strike API** can also have
+their on-chain payments land in the same Strike account. Tick **"Also accept
+on-chain payments via Strike"** — the checkbox lives in the Strike API
+section of the Lightning payments settings (and the setup wizard's Strike
+step), and is mirrored in the On-chain Bitcoin payments card.
+
+How it works:
+
+1. At checkout, the invoice's Bitcoin address is minted **in your Strike
+   account** via a Strike *receive request* (a fresh address per invoice,
+   never reused). The receive-request id is stored on the invoice and shown
+   in the admin invoice list so you can match the payment in Strike's
+   dashboard.
+2. Settlement stays with the normal chain watcher: the configured Esplora /
+   Bitcoin Core provider watches the Strike address and the invoice follows
+   the standard `New` → `Processing` → `Settled` lifecycle, including your
+   store's confirmation policy below.
+3. If the Strike API is unreachable at checkout, the store's own
+   xpub / static address (when configured) transparently takes over as the
+   fallback address source, so on-chain never drops off the checkout. A
+   store can also run Strike-only (no xpub at all) — then a Strike outage
+   simply leaves that invoice Lightning-only.
+
+Requirements: a Strike API key with the additional **Create receive
+requests** scope (`partner.receive-request.create`) — enabling the option
+tests the key with a real 1-sat receive request (never paid) and refuses
+keys missing the scope — and a **mainnet** on-chain configuration (Strike
+doesn't do testnets). Note that funds received this way are custodied by
+Strike, like your Strike Lightning receipts; conversion follows your Strike
+account settings.
+
 ## Confirmation policy
 
 Two related settings per store:

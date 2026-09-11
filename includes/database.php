@@ -103,7 +103,7 @@ class Database {
             // on existing installs that haven't yet picked it up. All migrations
             // are idempotent, so a fire is safe.
             $hasLatestMigration = $hasConfig
-                && self::columnExists(self::$instance, 'melts', 'strike_invoice_id');
+                && self::columnExists(self::$instance, 'invoices', 'strike_receive_request_id');
             // The auto-withdraw → auto-cashout rename is a data-only migration
             // (config key + notification event labels) with no schema artifact
             // to mark it done, so probe for the legacy config key directly. The
@@ -1697,10 +1697,26 @@ HTACCESS;
         // pays a bolt11 quoted from a Strike invoice created in the merchant's
         // account; recording that invoice's id lets the merchant match the
         // incoming payment in their Strike dashboard (the receive side already
-        // records invoices.strike_invoice_id). melts.strike_invoice_id is the
-        // "latest" migration marker (see getInstance), so this stays last.
+        // records invoices.strike_invoice_id).
         if (!self::columnExists($pdo, 'melts', 'strike_invoice_id')) {
             $pdo->exec("ALTER TABLE melts ADD COLUMN strike_invoice_id TEXT DEFAULT NULL");
+        }
+
+        // Strike on-chain receive: when enabled (and a Strike key is
+        // configured), the invoice's on-chain address is minted in the
+        // merchant's Strike account via a receive request instead of being
+        // derived from the store's xpub / static address, with a fallback to
+        // those when the Strike call fails. Settlement stays with the normal
+        // chain watcher — the receive-request id is recorded only so the
+        // merchant can match the payment in Strike's dashboard and so the
+        // poller knows the address is invoice-unique (never static-mode
+        // amount-matched). invoices.strike_receive_request_id is the "latest"
+        // migration marker (see getInstance), so this block stays last.
+        if (!self::columnExists($pdo, 'stores', 'onchain_strike_enabled')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_strike_enabled INTEGER NOT NULL DEFAULT 0");
+        }
+        if (!self::columnExists($pdo, 'invoices', 'strike_receive_request_id')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN strike_receive_request_id TEXT DEFAULT NULL");
         }
     }
 
