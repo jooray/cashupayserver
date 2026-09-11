@@ -312,6 +312,12 @@ def _write_apache_conf(
     """Returns {host_path: container_path} mounts."""
     (conf_dir / "ports.conf").write_text(f"Listen 127.0.0.1:{port}\n")
     override = "All" if allow_override else "None"
+    # The rewrite-hostile shape (AllowOverride None) still models a stock
+    # WordPress host: URLs that map to no real file must land in WordPress's
+    # front controller (nginx-hostile does this via try_files ... /index.php),
+    # not in Apache's own 404. FallbackResource is that front controller when
+    # .htaccess rewrites are off; the friendly shape gets it from .htaccess.
+    fallback = "" if allow_override else "    FallbackResource /index.php\n"
     (conf_dir / "site.conf").write_text(
         f"""<VirtualHost 127.0.0.1:{port}>
     ServerName 127.0.0.1
@@ -321,7 +327,7 @@ def _write_apache_conf(
         AllowOverride {override}
         Require all granted
     </Directory>
-    ErrorLog /proc/self/fd/2
+{fallback}    ErrorLog /proc/self/fd/2
     CustomLog /proc/self/fd/1 combined
 {_setenv_lines(env)}
 </VirtualHost>
