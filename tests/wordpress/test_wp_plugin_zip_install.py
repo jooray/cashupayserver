@@ -20,7 +20,7 @@ pytestmark = pytest.mark.wordpress
 
 # What the GPL plugin zip contains — nothing more, nothing less (plus assets/).
 EXPECTED_FILES = [
-    "cashupay.php",
+    "barebits.php",
     "state.php",
     "installer.php",
     "onboarding.php",
@@ -61,26 +61,26 @@ def test_shipped_zip_installs_and_activates(
 ) -> None:
     wp = wordpress_bare
 
-    # Precondition: a bare WP has no cashupay plugin at all.
+    # Precondition: a bare WP has no barebits plugin at all.
     before = wp.wp_cli("plugin", "list", "--field=name")
-    assert "cashupay" not in before.stdout.split(), "bare WP should have no cashupay plugin"
+    assert "barebits" not in before.stdout.split(), "bare WP should have no barebits plugin"
 
     # Install + activate the real artifact.
     res = _install_zip(wp, wp_plugin_zip)
     assert res.returncode == 0, f"plugin install failed:\n{res.stdout}\n{res.stderr}"
 
     # wp-cli reports it active — activation ran every __DIR__ require
-    # (cashupay.php -> state.php / installer.php / onboarding.php ...)
+    # (barebits.php -> state.php / installer.php / onboarding.php ...)
     # against the installed tree without a fatal.
     active = wp.wp_cli("plugin", "list", "--field=name", "--status=active").stdout.split()
-    assert "cashupay" in active, f"cashupay not active after install; active: {active}"
+    assert "barebits" in active, f"barebits not active after install; active: {active}"
 
     # Header metadata parsed from the installed main file.
-    version = wp.wp_cli("plugin", "get", "cashupay", "--field=version").stdout.strip()
-    assert version, "plugin version header empty — cashupay.php header not parsed"
+    version = wp.wp_cli("plugin", "get", "barebits", "--field=version").stdout.strip()
+    assert version, "plugin version header empty — barebits.php header not parsed"
 
     # GPL-only layout: exactly the WordPress glue landed ...
-    plugin_dir = wp.wp_root / "wp-content" / "plugins" / "cashupay"
+    plugin_dir = wp.wp_root / "wp-content" / "plugins" / "barebits"
     for rel in EXPECTED_FILES:
         assert (plugin_dir / rel).is_file(), f"{rel} missing from the installed zip"
 

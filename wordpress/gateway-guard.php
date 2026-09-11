@@ -1,6 +1,6 @@
 <?php
 /**
- * CashuPay BTCPay gateway guard
+ * Barebits BTCPay gateway guard
  *
  * The upstream BTCPay Greenfield gateway's process_payment() implicitly
  * returns null when invoice creation fails (AbstractGateway::createInvoice
@@ -34,13 +34,13 @@ if (!defined('ABSPATH')) {
  * stored settings, the blocks checkout integration, and the plugin's
  * webhook endpoint all keep working unchanged.
  */
-function cashupay_guarded_btcpay_gateway_class(): ?string {
+function barebits_guarded_btcpay_gateway_class(): ?string {
     if (!class_exists('BTCPayServer\\WC\\Gateway\\DefaultGateway')) {
         return null;
     }
 
-    if (!class_exists('CashuPay_Guarded_BTCPay_Gateway', false)) {
-        class CashuPay_Guarded_BTCPay_Gateway extends \BTCPayServer\WC\Gateway\DefaultGateway {
+    if (!class_exists('Barebits_Guarded_BTCPay_Gateway', false)) {
+        class Barebits_Guarded_BTCPay_Gateway extends \BTCPayServer\WC\Gateway\DefaultGateway {
             public function process_payment($orderId) {
                 $result = parent::process_payment($orderId);
                 if (!is_array($result)) {
@@ -54,7 +54,7 @@ function cashupay_guarded_btcpay_gateway_class(): ?string {
         }
     }
 
-    return 'CashuPay_Guarded_BTCPay_Gateway';
+    return 'Barebits_Guarded_BTCPay_Gateway';
 }
 
 /**
@@ -65,7 +65,7 @@ function cashupay_guarded_btcpay_gateway_class(): ?string {
  * Only the exact stock class name is replaced: if another plugin already
  * substituted its own subclass, that customization wins over the guard.
  */
-function cashupay_guard_btcpay_gateways($gateways) {
+function barebits_guard_btcpay_gateways($gateways) {
     if (!is_array($gateways)) {
         return $gateways;
     }
@@ -75,7 +75,7 @@ function cashupay_guard_btcpay_gateways($gateways) {
                 || ltrim($gateway, '\\') !== 'BTCPayServer\\WC\\Gateway\\DefaultGateway') {
             continue;
         }
-        $guarded = cashupay_guarded_btcpay_gateway_class();
+        $guarded = barebits_guarded_btcpay_gateway_class();
         if ($guarded === null) {
             break; // Registered but not loadable: leave the list untouched.
         }
@@ -84,4 +84,4 @@ function cashupay_guard_btcpay_gateways($gateways) {
 
     return $gateways;
 }
-add_filter('woocommerce_payment_gateways', 'cashupay_guard_btcpay_gateways', 20);
+add_filter('woocommerce_payment_gateways', 'barebits_guard_btcpay_gateways', 20);

@@ -70,9 +70,9 @@ def test_clones_are_isolated_and_self_addressed(two_clones) -> None:
 
     # An option written in one clone is invisible in the other.
     marker = f"clone-isolation-{uuid.uuid4().hex[:8]}"
-    a.wp_cli("option", "update", "cashupay_test_marker", marker)
-    assert wp_option(a, "cashupay_test_marker") == marker
-    assert wp_option(b, "cashupay_test_marker") == ""
+    a.wp_cli("option", "update", "barebits_test_marker", marker)
+    assert wp_option(a, "barebits_test_marker") == marker
+    assert wp_option(b, "barebits_test_marker") == ""
 
 
 @pytest.mark.skipif(
@@ -91,13 +91,13 @@ def test_cloning_does_not_mutate_the_golden(two_clones) -> None:
     assert f"http://127.0.0.1:{a.port}" not in golden_config
 
     # And a clone's DB write must not land in the golden's DB.
-    a.wp_cli("option", "update", "cashupay_golden_probe", "leaked")
+    a.wp_cli("option", "update", "barebits_golden_probe", "leaked")
     golden_db = golden_wp_root / "wp-content" / "database" / "wordpress.sqlite"
     conn = sqlite3.connect(f"file:{golden_db}?mode=ro", uri=True)
     try:
         rows = conn.execute(
             "SELECT option_value FROM wp_options WHERE option_name = ?",
-            ("cashupay_golden_probe",),
+            ("barebits_golden_probe",),
         ).fetchall()
     finally:
         conn.close()

@@ -1,7 +1,7 @@
 """WordPress "leave us a review" admin banner.
 
 Once the plugin is configured (a server URL is connected and the WooCommerce
-wiring recorded cashupay_wired_at), cashupay_admin_notice() swaps the
+wiring recorded barebits_wired_at), barebits_admin_notice() swaps the
 "Configure BareBits" nag for a dismissible review banner linking to the
 wordpress.org plugin search. Dismissal is persisted site-wide through a
 wp_ajax endpoint (nonce-gated): each dismissal hides the banner for 30 days,
@@ -30,15 +30,15 @@ pytestmark = pytest.mark.wordpress
 REVIEW_COPY = "Enjoying having control of your money with"
 REVIEW_LINK = "https://wordpress.org/plugins/search/barebits/"
 CONFIGURE_COPY = "Configure BareBits"
-OPTION = "cashupay_review_banner"
+OPTION = "barebits_review_banner"
 
 
 def _mark_configured(wp: WordPressHandle) -> None:
-    """The banner's precondition — cashupay_is_configured(): a server URL is
-    stored and the WooCommerce wiring stamped cashupay_wired_at. Mirrors what
+    """The banner's precondition — barebits_is_configured(): a server URL is
+    stored and the WooCommerce wiring stamped barebits_wired_at. Mirrors what
     finishing the real onboarding flow leaves behind."""
-    wp.wp_cli("option", "update", "cashupay_server_url", "http://127.0.0.1:1/barebits")
-    wp.wp_cli("option", "update", "cashupay_wired_at", str(int(time.time())))
+    wp.wp_cli("option", "update", "barebits_server_url", "http://127.0.0.1:1/barebits")
+    wp.wp_cli("option", "update", "barebits_wired_at", str(int(time.time())))
 
 
 def _dashboard(wp: WordPressHandle, session: requests.Session) -> str:
@@ -65,7 +65,7 @@ def _set_banner_state(wp: WordPressHandle, dismissed_at: int, count: int) -> Non
 def _dismiss(wp: WordPressHandle, session: requests.Session, nonce: str) -> requests.Response:
     return session.post(
         f"{wp.url}/wp-admin/admin-ajax.php",
-        data={"action": "cashupay_dismiss_review", "nonce": nonce},
+        data={"action": "barebits_dismiss_review", "nonce": nonce},
         timeout=30,
     )
 
@@ -84,7 +84,7 @@ def test_review_banner_lifecycle(wordpress: WordPressHandle) -> None:
     assert CONFIGURE_COPY not in html
     assert REVIEW_COPY in html
     assert REVIEW_LINK in html
-    m = re.search(r'id="cashupay-review-notice" data-nonce="([^"]+)"', html)
+    m = re.search(r'id="barebits-review-notice" data-nonce="([^"]+)"', html)
     assert m, "banner should carry the dismiss nonce"
     nonce = m.group(1)
 
@@ -110,11 +110,11 @@ def test_review_banner_lifecycle(wordpress: WordPressHandle) -> None:
     assert REVIEW_COPY in html
 
     # Two more dismissals reach the permanent cap.
-    nonce = re.search(r'id="cashupay-review-notice" data-nonce="([^"]+)"', html).group(1)
+    nonce = re.search(r'id="barebits-review-notice" data-nonce="([^"]+)"', html).group(1)
     assert _dismiss(wordpress, session, nonce).json()["success"] is True
     _set_banner_state(wordpress, _banner_state(wordpress)["dismissed_at"] - 31 * 86400, 2)
     html = _dashboard(wordpress, session)
-    nonce = re.search(r'id="cashupay-review-notice" data-nonce="([^"]+)"', html).group(1)
+    nonce = re.search(r'id="barebits-review-notice" data-nonce="([^"]+)"', html).group(1)
     assert _dismiss(wordpress, session, nonce).json()["success"] is True
     assert _banner_state(wordpress)["count"] == 3
 
@@ -130,7 +130,7 @@ def test_dismiss_requires_authentication(wordpress: WordPressHandle) -> None:
     _mark_configured(wordpress)
     r = requests.post(
         f"{wordpress.url}/wp-admin/admin-ajax.php",
-        data={"action": "cashupay_dismiss_review", "nonce": "whatever"},
+        data={"action": "barebits_dismiss_review", "nonce": "whatever"},
         timeout=30,
     )
     assert r.status_code in (400, 403), f"anonymous dismiss got {r.status_code}"

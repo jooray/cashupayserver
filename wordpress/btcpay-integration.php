@@ -19,12 +19,12 @@ if (!defined('ABSPATH')) {
  * Check if a real BTCPay Server (not the connected BareBits server) is
  * configured in the gateway plugin.
  */
-function cashupay_is_real_btcpay_configured(): bool {
+function barebits_is_real_btcpay_configured(): bool {
     $url = get_option('btcpay_gf_url', '');
     if (empty($url)) {
         return false;
     }
-    $ours = cashupay_server_url();
+    $ours = barebits_server_url();
     if ($ours !== '' && strpos($url, $ours) === 0) {
         return false; // Already ours
     }
@@ -48,11 +48,11 @@ function cashupay_is_real_btcpay_configured(): bool {
  * merchant connected later.
  *
  * Pure (no WordPress calls) so tests/php can pin the matrix without a
- * WordPress install; cashupay_btcpay_takeover_state() is the live wrapper.
+ * WordPress install; barebits_btcpay_takeover_state() is the live wrapper.
  */
-function cashupay_btcpay_takeover_decision(string $configuredUrl, string $ourUrl, string $consentUrl): string {
+function barebits_btcpay_takeover_decision(string $configuredUrl, string $ourUrl, string $consentUrl): string {
     $configuredUrl = trim($configuredUrl);
-    // Mirrors cashupay_is_real_btcpay_configured(): empty or prefixed by our
+    // Mirrors barebits_is_real_btcpay_configured(): empty or prefixed by our
     // own URL means the config is ours (or absent), not a real server's.
     if ($configuredUrl === '' || ($ourUrl !== '' && strpos($configuredUrl, $ourUrl) === 0)) {
         return 'none';
@@ -65,11 +65,11 @@ function cashupay_btcpay_takeover_decision(string $configuredUrl, string $ourUrl
  * an option (not the PHP session) because it can be granted on one onboarding
  * screen and consumed on a later request.
  */
-function cashupay_btcpay_takeover_state(): string {
-    return cashupay_btcpay_takeover_decision(
+function barebits_btcpay_takeover_state(): string {
+    return barebits_btcpay_takeover_decision(
         (string) get_option('btcpay_gf_url', ''),
-        cashupay_server_url(),
-        (string) get_option('cashupay_btcpay_override_consent', '')
+        barebits_server_url(),
+        (string) get_option('barebits_btcpay_override_consent', '')
     );
 }
 
@@ -78,10 +78,10 @@ function cashupay_btcpay_takeover_state(): string {
  * Server connection. Stores the exact URL being replaced, so the consent is
  * scoped to that server and a later reconnection to a different one re-warns.
  */
-function cashupay_record_btcpay_override_consent(): void {
+function barebits_record_btcpay_override_consent(): void {
     $url = trim((string) get_option('btcpay_gf_url', ''));
     if ($url !== '') {
-        update_option('cashupay_btcpay_override_consent', $url);
+        update_option('barebits_btcpay_override_consent', $url);
     }
 }
 
@@ -97,7 +97,7 @@ function cashupay_record_btcpay_override_consent(): void {
  * hardcoded list keeps this correct across gateway-plugin versions; each name
  * goes through delete_option() so the options cache stays coherent.
  */
-function cashupay_reset_btcpay_plugin_settings(): void {
+function barebits_reset_btcpay_plugin_settings(): void {
     global $wpdb;
     // Internal bookkeeping the gateway plugin keeps alongside its settings —
     // not configuration of the old server, so it survives the wipe.
@@ -135,7 +135,7 @@ function cashupay_reset_btcpay_plugin_settings(): void {
  * Fully qualified plugin file for the BTCPay Greenfield WooCommerce gateway,
  * as WordPress identifies it (folder/entry-file).
  */
-function cashupay_btcpay_plugin_file(): string {
+function barebits_btcpay_plugin_file(): string {
     return 'btcpay-greenfield-for-woocommerce/btcpay-greenfield-for-woocommerce.php';
 }
 
@@ -143,11 +143,11 @@ function cashupay_btcpay_plugin_file(): string {
  * Whether the BTCPay Greenfield WooCommerce gateway plugin is installed AND
  * active.
  */
-function cashupay_is_btcpay_plugin_active(): bool {
+function barebits_is_btcpay_plugin_active(): bool {
     if (!function_exists('is_plugin_active')) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
     }
-    return is_plugin_active(cashupay_btcpay_plugin_file());
+    return is_plugin_active(barebits_btcpay_plugin_file());
 }
 
 /**
@@ -155,14 +155,16 @@ function cashupay_is_btcpay_plugin_active(): bool {
  *
  * WooCommerce stores each gateway's config under
  * woocommerce_{gateway_id}_settings; the Greenfield gateway's id is
- * btcpaygf_default (see the plugin's DefaultGateway). Merchants normally flip
+ * btcpaygf_default (see the plugin's DefaultGateway) — so the option name is
+ * WooCommerce's own convention, deliberately outside this plugin's barebits_
+ * prefix. Merchants normally flip
  * this by hand under WooCommerce → Settings → Payments; doing it here removes
  * that last manual step so payments work the moment onboarding finishes.
  */
-function cashupay_enable_btcpay_gateway(): void {
+function barebits_enable_btcpay_gateway(): void {
     // Raw read on purpose: read-modify-write of this option must bypass the
     // discount title suffix payment-discount.php applies at read time.
-    $settings = cashupay_gateway_stored_settings();
+    $settings = barebits_gateway_stored_settings();
     $settings['enabled'] = 'yes';
     update_option('woocommerce_btcpaygf_default_settings', $settings);
 }
@@ -179,13 +181,13 @@ function cashupay_enable_btcpay_gateway(): void {
  * wide wordmark. With no registered sizes WordPress falls back to the
  * original file.
  */
-function cashupay_ensure_gateway_icon_attachment(): int {
-    $existing = (int) get_option('cashupay_gateway_icon_attachment_id', 0);
+function barebits_ensure_gateway_icon_attachment(): int {
+    $existing = (int) get_option('barebits_gateway_icon_attachment_id', 0);
     if ($existing > 0 && wp_get_attachment_url($existing) !== false) {
         return $existing;
     }
 
-    $src = CASHUPAY_PLUGIN_DIR . '/assets/img/barebits-gateway-logo.png';
+    $src = BAREBITS_PLUGIN_DIR . '/assets/img/barebits-gateway-logo.png';
     if (!is_file($src)) {
         return 0;
     }
@@ -215,7 +217,7 @@ function cashupay_ensure_gateway_icon_attachment(): int {
         'file'   => _wp_relative_upload_path($bits['file']),
     ]);
 
-    update_option('cashupay_gateway_icon_attachment_id', (int) $attachmentId);
+    update_option('barebits_gateway_icon_attachment_id', (int) $attachmentId);
     return (int) $attachmentId;
 }
 
@@ -233,12 +235,12 @@ function cashupay_ensure_gateway_icon_attachment(): int {
  * advertised percentage always tracks the current setting without ever
  * touching a title the merchant may have customized.
  */
-function cashupay_apply_btcpay_gateway_branding(): void {
+function barebits_apply_btcpay_gateway_branding(): void {
     $optionKey = 'woocommerce_btcpaygf_default_settings';
     // Raw read on purpose: this is a read-modify-write, and reading through
     // the discount title filter would bake the runtime suffix into the
     // stored title.
-    $settings = cashupay_gateway_stored_settings();
+    $settings = barebits_gateway_stored_settings();
 
     // Stock defaults from the BTCPay plugin's DefaultGateway::getTitle() /
     // getDescription(). Anything else means the merchant customized it.
@@ -257,7 +259,7 @@ function cashupay_apply_btcpay_gateway_branding(): void {
     }
 
     if (empty($settings['icon_media_id'])) {
-        $iconId = cashupay_ensure_gateway_icon_attachment();
+        $iconId = barebits_ensure_gateway_icon_attachment();
         if ($iconId > 0) {
             $settings['icon_media_id'] = (string) $iconId;
         }
@@ -279,7 +281,7 @@ function cashupay_apply_btcpay_gateway_branding(): void {
  * The full mapping array is always written because the plugin's webhook
  * handler indexes every state without isset() checks once the option exists.
  */
-function cashupay_apply_btcpay_order_states(): void {
+function barebits_apply_btcpay_order_states(): void {
     // Stock defaults from the plugin's OrderStates::getDefaultOrderStateMappings().
     $defaults = [
         'New'                => 'wc-pending',
@@ -302,6 +304,9 @@ function cashupay_apply_btcpay_order_states(): void {
         return; // The merchant picked something else on purpose.
     }
 
+    // btcpay_gf_order_states is the BTCPay for WooCommerce plugin's own
+    // option (deliberately outside this plugin's barebits_ prefix): writing
+    // it is how that plugin's order-state mapping gets configured.
     update_option(
         'btcpay_gf_order_states',
         array_merge($defaults, $states, ['Expired' => 'wc-failed'])
@@ -312,7 +317,7 @@ function cashupay_apply_btcpay_order_states(): void {
  * Redirect a payer whose invoice expired back to a page where they can pay.
  *
  * The install's payment page links here (CASHUPAY_RETRY_URL_TEMPLATE, written
- * by the installer) as /?cashupay-retry={invoiceId}. Resolves the invoice
+ * by the installer) as /?barebits-retry={invoiceId}. Resolves the invoice
  * back to its WooCommerce order via the BTCPay_id order meta (the same lookup
  * the gateway's webhook handler uses), then sends the customer to
  * WooCommerce's order-pay page — where clicking "Pay" makes the gateway
@@ -320,7 +325,7 @@ function cashupay_apply_btcpay_order_states(): void {
  * longer need payment (paid meanwhile, cancelled, refunded) go to the
  * order-received page instead, which explains the order's actual state.
  */
-function cashupay_maybe_handle_retry(): void {
+function barebits_maybe_handle_retry(): void {
     // A payer-facing link from the install's payment page. No nonce exists or
     // can exist: the payer has no WordPress session (nonces are bound to one),
     // and the link is minted by the BareBits payment page, which cannot create
@@ -331,8 +336,8 @@ function cashupay_maybe_handle_retry(): void {
     // The id must match the server's invoice-id shape before it touches the
     // database; anything else is ignored outright.
     // phpcs:disable WordPress.Security.NonceVerification.Recommended
-    $invoiceId = isset($_GET['cashupay-retry'])
-        ? sanitize_text_field((string) wp_unslash($_GET['cashupay-retry']))
+    $invoiceId = isset($_GET['barebits-retry'])
+        ? sanitize_text_field((string) wp_unslash($_GET['barebits-retry']))
         : '';
     // phpcs:enable
     if ($invoiceId === '' || !preg_match('/^[A-Za-z0-9_-]{1,64}$/', $invoiceId)) {
@@ -373,7 +378,7 @@ function cashupay_maybe_handle_retry(): void {
     wp_safe_redirect($order->get_checkout_order_received_url());
     exit;
 }
-add_action('template_redirect', 'cashupay_maybe_handle_retry');
+add_action('template_redirect', 'barebits_maybe_handle_retry');
 
 /**
  * Whether this WordPress install can install plugins programmatically without
@@ -385,7 +390,7 @@ add_action('template_redirect', 'cashupay_maybe_handle_retry');
  * on managed hosts) blocks all plugin installs outright. When either check
  * fails we fall back to asking the merchant to install the plugin by hand.
  */
-function cashupay_can_install_plugins(): bool {
+function barebits_can_install_plugins(): bool {
     if (defined('DISALLOW_FILE_MODS') && DISALLOW_FILE_MODS) {
         return false;
     }
@@ -406,8 +411,8 @@ function cashupay_can_install_plugins(): bool {
  *
  * @return array{success:bool, installed:bool, error?:string, message?:string}
  */
-function cashupay_install_btcpay_plugin(): array {
-    $pluginFile = cashupay_btcpay_plugin_file();
+function barebits_install_btcpay_plugin(): array {
+    $pluginFile = barebits_btcpay_plugin_file();
 
     if (!function_exists('get_plugins')) {
         require_once ABSPATH . 'wp-admin/includes/plugin.php';
@@ -417,7 +422,7 @@ function cashupay_install_btcpay_plugin(): array {
     $freshlyInstalled = false;
 
     if (!$alreadyInstalled) {
-        if (!cashupay_can_install_plugins()) {
+        if (!barebits_can_install_plugins()) {
             return [
                 'success' => false,
                 'installed' => false,
@@ -509,11 +514,11 @@ function cashupay_install_btcpay_plugin(): array {
  *
  * @return array{status:string, auto_installed:bool, message?:string, current_url?:string, replaced_url?:string, webhook?:mixed}
  */
-function cashupay_ensure_woocommerce_integration(string $store_id, string $api_key): array {
+function barebits_ensure_woocommerce_integration(string $store_id, string $api_key): array {
     // A real BTCPay Server connection is only replaced after the merchant
     // explicitly consented on the onboarding screen. Without that consent:
     // hands off entirely.
-    $takeover = cashupay_btcpay_takeover_state();
+    $takeover = barebits_btcpay_takeover_state();
     if ($takeover === 'needs_consent') {
         return [
             'status' => 'existing_btcpay',
@@ -529,8 +534,8 @@ function cashupay_ensure_woocommerce_integration(string $store_id, string $api_k
     }
 
     $autoInstalled = false;
-    if (!cashupay_is_btcpay_plugin_active()) {
-        $install = cashupay_install_btcpay_plugin();
+    if (!barebits_is_btcpay_plugin_active()) {
+        $install = barebits_install_btcpay_plugin();
         if (empty($install['success'])) {
             return [
                 'status' => 'needs_plugin',
@@ -551,10 +556,10 @@ function cashupay_ensure_woocommerce_integration(string $store_id, string $api_k
     $replacedUrl = '';
     if ($takeover === 'consented') {
         $replacedUrl = (string) get_option('btcpay_gf_url', '');
-        cashupay_reset_btcpay_plugin_settings();
+        barebits_reset_btcpay_plugin_settings();
     }
 
-    $config = cashupay_configure_btcpay_plugin($store_id, $api_key);
+    $config = barebits_configure_btcpay_plugin($store_id, $api_key);
     if (empty($config['success'])) {
         return [
             'status' => 'error',
@@ -563,17 +568,17 @@ function cashupay_ensure_woocommerce_integration(string $store_id, string $api_k
         ];
     }
 
-    cashupay_enable_btcpay_gateway();
-    cashupay_apply_btcpay_gateway_branding();
-    cashupay_apply_btcpay_order_states();
-    cashupay_pin_order_storage_for_sqlite();
+    barebits_enable_btcpay_gateway();
+    barebits_apply_btcpay_gateway_branding();
+    barebits_apply_btcpay_order_states();
+    barebits_pin_order_storage_for_sqlite();
 
     // Consent is single-use: it covered the server that was just replaced.
     // Deleted on every successful wiring (not only a consented takeover) so
     // no stale approval lingers — if the merchant ever reconnects a real
     // BTCPay Server, even the same one, the onboarding must warn again rather
     // than silently re-clobber it.
-    delete_option('cashupay_btcpay_override_consent');
+    delete_option('barebits_btcpay_override_consent');
 
     return [
         'status' => 'ready',
@@ -607,7 +612,7 @@ function cashupay_ensure_woocommerce_integration(string $store_id, string $api_k
  *
  * Returns 'pin' or 'leave'.
  */
-function cashupay_order_storage_pin_decision(bool $sqliteEngine, bool $hposEnabled, int $hposOrderCount): string {
+function barebits_order_storage_pin_decision(bool $sqliteEngine, bool $hposEnabled, int $hposOrderCount): string {
     if (!$sqliteEngine) {
         return 'leave'; // real MySQL DECIMAL columns round-trip exactly
     }
@@ -618,7 +623,7 @@ function cashupay_order_storage_pin_decision(bool $sqliteEngine, bool $hposEnabl
 }
 
 /**
- * Apply cashupay_order_storage_pin_decision on this host: pin order storage
+ * Apply barebits_order_storage_pin_decision on this host: pin order storage
  * to the posts table, and drop the "newly installed" flag WooCommerce's
  * deferred HPOS-for-new-shops job keys off (without that, the job flips
  * HPOS back on minutes after the wiring ran).
@@ -627,7 +632,7 @@ function cashupay_order_storage_pin_decision(bool $sqliteEngine, bool $hposEnabl
  * so a shop whose host later gains the auto-enabled flag gets re-pinned
  * the next time the merchant re-wires.
  */
-function cashupay_pin_order_storage_for_sqlite(): void {
+function barebits_pin_order_storage_for_sqlite(): void {
     global $wpdb;
     $sqlite = (defined('DB_ENGINE') && DB_ENGINE === 'sqlite')
         || class_exists('WP_SQLite_Translator', false)
@@ -652,7 +657,11 @@ function cashupay_pin_order_storage_for_sqlite(): void {
         $wpdb->suppress_errors($suppress);
     }
 
-    if (cashupay_order_storage_pin_decision($sqlite, $hposEnabled, $hposOrderCount) === 'pin') {
+    // woocommerce_custom_orders_table_enabled and woocommerce_newly_installed
+    // are WooCommerce core's own options (deliberately outside this plugin's
+    // barebits_ prefix): pinning the store's order-storage mode is the whole
+    // point of this function — see the decision docblock above.
+    if (barebits_order_storage_pin_decision($sqlite, $hposEnabled, $hposOrderCount) === 'pin') {
         try {
             update_option('woocommerce_custom_orders_table_enabled', 'no');
         } catch (\Throwable $e) {
@@ -671,8 +680,8 @@ function cashupay_pin_order_storage_for_sqlite(): void {
 /**
  * Point the BTCPay WooCommerce plugin at the connected BareBits server.
  */
-function cashupay_configure_btcpay_plugin(string $store_id, string $api_key): array {
-    if (cashupay_is_real_btcpay_configured()) {
+function barebits_configure_btcpay_plugin(string $store_id, string $api_key): array {
+    if (barebits_is_real_btcpay_configured()) {
         return [
             'success' => false,
             'error' => 'existing_btcpay',
@@ -684,13 +693,16 @@ function cashupay_configure_btcpay_plugin(string $store_id, string $api_key): ar
 
     // The gateway base: api.php's query-transport form for a same-origin
     // alongside install (one loopback deep on every host — see
-    // cashupay_gateway_base_url), the canonical URL for remote servers.
-    update_option('btcpay_gf_url', cashupay_gateway_server_url());
+    // barebits_gateway_base_url), the canonical URL for remote servers.
+    // The btcpay_gf_* names below are the BTCPay for WooCommerce plugin's
+    // own options (deliberately outside this plugin's barebits_ prefix):
+    // writing them is how that gateway plugin gets configured.
+    update_option('btcpay_gf_url', barebits_gateway_server_url());
     update_option('btcpay_gf_api_key', $api_key);
     update_option('btcpay_gf_store_id', $store_id);
 
     // Register the invoice-events webhook with the BareBits server.
-    $webhookResult = cashupay_register_webhook($store_id, $api_key);
+    $webhookResult = barebits_register_webhook($store_id, $api_key);
     if (empty($webhookResult['success'])) {
         return [
             'success' => false,
@@ -717,11 +729,11 @@ function cashupay_configure_btcpay_plugin(string $store_id, string $api_key): ar
  *
  * @return array{success:bool, webhook_id?:string, existing?:bool, error?:string}
  */
-function cashupay_register_webhook(string $store_id, string $api_key): array {
+function barebits_register_webhook(string $store_id, string $api_key): array {
     $webhookUrl = site_url('/?wc-api=btcpaygf_default');
     $base = '/api/v1/stores/' . rawurlencode($store_id) . '/webhooks';
 
-    $list = cashupay_api_request('GET', $base, null, $api_key);
+    $list = barebits_api_request('GET', $base, null, $api_key);
     if ($list['error'] !== null || $list['code'] !== 200 || !is_array($list['body'])) {
         return ['success' => false, 'error' => $list['error'] ?? ('HTTP ' . $list['code'] . ' listing webhooks')];
     }
@@ -737,10 +749,10 @@ function cashupay_register_webhook(string $store_id, string $api_key): array {
             return ['success' => true, 'webhook_id' => (string) $hook['id'], 'existing' => true];
         }
         // A webhook for our URL whose secret we no longer hold — replace it.
-        cashupay_api_request('DELETE', $base . '/' . rawurlencode((string) $hook['id']), null, $api_key);
+        barebits_api_request('DELETE', $base . '/' . rawurlencode((string) $hook['id']), null, $api_key);
     }
 
-    $create = cashupay_api_request('POST', $base, [
+    $create = barebits_api_request('POST', $base, [
         'url' => $webhookUrl,
         'enabled' => true,
         'authorizedEvents' => [

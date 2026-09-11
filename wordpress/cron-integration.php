@@ -2,7 +2,7 @@
 /**
  * BareBits plugin — WP-cron pinger for an alongside install.
  *
- * A BareBits server installed by this plugin declared CASHUPAY_EXTERNAL_CRON
+ * A BareBits server installed by this plugin declared BAREBITS_EXTERNAL_CRON
  * at install time: its setup wizard skipped the crontab screen because WE
  * promised to tick its cron endpoint. This file keeps that promise — an
  * every-minute WP-cron event fires an authenticated HTTP request to the
@@ -24,14 +24,14 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-add_action('cashupay_cron_tick', 'cashupay_cron_tick');
-add_action('init', 'cashupay_cron_reschedule');
-add_filter('cron_schedules', 'cashupay_register_cron_interval');
+add_action('barebits_cron_tick', 'barebits_cron_tick');
+add_action('init', 'barebits_cron_reschedule');
+add_filter('cron_schedules', 'barebits_register_cron_interval');
 
 // When a ping fails (host blocks self-requests, install broken), don't burn
 // ~15s of every minute's wp-cron request timing out — back off to this
 // cadence until a ping succeeds again.
-const CASHUPAY_CRON_BACKOFF_SECONDS = 600;
+const BAREBITS_CRON_BACKOFF_SECONDS = 600;
 
 /**
  * Whether this site owes the alongside install a cron heartbeat: an install
@@ -40,14 +40,14 @@ const CASHUPAY_CRON_BACKOFF_SECONDS = 600;
  * one-time), and the install needs its heartbeat even mid-"Start over" or
  * after being reconnected by URL.
  */
-function cashupay_cron_needed(): bool {
-    return cashupay_install_url() !== ''
-        && (string) get_option('cashupay_cron_key', '') !== '';
+function barebits_cron_needed(): bool {
+    return barebits_install_url() !== ''
+        && (string) get_option('barebits_cron_key', '') !== '';
 }
 
-function cashupay_register_cron_interval(array $schedules): array {
-    if (!isset($schedules['every_minute'])) {
-        $schedules['every_minute'] = [
+function barebits_register_cron_interval(array $schedules): array {
+    if (!isset($schedules['barebits_every_minute'])) {
+        $schedules['barebits_every_minute'] = [
             'interval' => 60,
             'display' => 'Every minute',
         ];
@@ -60,11 +60,11 @@ function cashupay_register_cron_interval(array $schedules): array {
  * plugins both lose events). wp_next_scheduled reads the already-loaded cron
  * option, so this is cheap enough for init. Also the activation hook's body.
  */
-function cashupay_cron_reschedule(): void {
-    if (!cashupay_cron_needed()) {
+function barebits_cron_reschedule(): void {
+    if (!barebits_cron_needed()) {
         return;
     }
-    if (!wp_next_scheduled('cashupay_cron_tick')) {
+    if (!wp_next_scheduled('barebits_cron_tick')) {
         // First run a minute out, not now: this is (re)scheduled in the same
         // request that just proved the endpoint synchronously (credential
         // collection), and an immediately-due event would pile a full cron
@@ -72,17 +72,17 @@ function cashupay_cron_reschedule(): void {
         // page itself — which on tight per-site worker pools (Local WP) is
         // the starvation pattern. Cron work has waited this long; one more
         // minute costs nothing.
-        wp_schedule_event(time() + 60, 'every_minute', 'cashupay_cron_tick');
+        wp_schedule_event(time() + 60, 'barebits_every_minute', 'barebits_cron_tick');
     }
 }
 
-function cashupay_cron_unschedule(): void {
-    $timestamp = wp_next_scheduled('cashupay_cron_tick');
+function barebits_cron_unschedule(): void {
+    $timestamp = wp_next_scheduled('barebits_cron_tick');
     if ($timestamp) {
-        wp_unschedule_event($timestamp, 'cashupay_cron_tick');
+        wp_unschedule_event($timestamp, 'barebits_cron_tick');
     }
-    delete_option('cashupay_cron_backoff_until');
-    delete_option('cashupay_cron_last_ok');
+    delete_option('barebits_cron_backoff_until');
+    delete_option('barebits_cron_last_ok');
 }
 
 /**
@@ -90,7 +90,7 @@ function cashupay_cron_unschedule(): void {
  * true when cron.php itself answered — it always returns JSON with a 'mode'
  * field (full / essentials / lock-bounce / ping alike); a 200 carrying
  * anything else means some other page answered and must read as failure.
- * Every success stamps cashupay_cron_last_ok, which the wp-admin
+ * Every success stamps barebits_cron_last_ok, which the wp-admin
  * stale-heartbeat warning (admin-menu.php) reads.
  *
  * $ping asks for cron.php's reachability-ping mode (?ping=1): routing and
@@ -102,11 +102,11 @@ function cashupay_cron_unschedule(): void {
  * it and does a full run: same JSON shape, same success signal. The
  * scheduled tick keeps full runs — that IS the heartbeat.
  */
-function cashupay_fire_cron_endpoint(int $timeoutSeconds, bool $ping = false): bool {
+function barebits_fire_cron_endpoint(int $timeoutSeconds, bool $ping = false): bool {
     // Always the install's own URL — never the connected server, which may
     // be a different host entirely after a reconnect.
-    $server = cashupay_install_url();
-    $cronKey = (string) get_option('cashupay_cron_key', '');
+    $server = barebits_install_url();
+    $cronKey = (string) get_option('barebits_cron_key', '');
     if ($server === '' || $cronKey === '') {
         return false;
     }
@@ -115,7 +115,7 @@ function cashupay_fire_cron_endpoint(int $timeoutSeconds, bool $ping = false): b
         'redirection' => 2,
         // Same-origin self-request; mirrors WordPress core's own loopbacks,
         // which skip peer verification for local/self-signed HTTPS.
-        'sslverify' => !cashupay_is_same_host_url($server),
+        'sslverify' => !barebits_is_same_host_url($server),
         'headers' => ['X-CRON-KEY' => $cronKey],
     ]);
     if (is_wp_error($response)) {
@@ -128,22 +128,22 @@ function cashupay_fire_cron_endpoint(int $timeoutSeconds, bool $ping = false): b
     if (!is_array($body) || !array_key_exists('mode', $body)) {
         return false;
     }
-    update_option('cashupay_cron_last_ok', time(), false);
+    update_option('barebits_cron_last_ok', time(), false);
     return true;
 }
 
 /** The every-minute WP-cron callback. */
-function cashupay_cron_tick(): void {
-    if (!cashupay_cron_needed()) {
+function barebits_cron_tick(): void {
+    if (!barebits_cron_needed()) {
         return;
     }
     $now = time();
-    if ($now < (int) get_option('cashupay_cron_backoff_until', 0)) {
+    if ($now < (int) get_option('barebits_cron_backoff_until', 0)) {
         return;
     }
-    if (cashupay_fire_cron_endpoint(15)) {
-        delete_option('cashupay_cron_backoff_until');
+    if (barebits_fire_cron_endpoint(15)) {
+        delete_option('barebits_cron_backoff_until');
         return;
     }
-    update_option('cashupay_cron_backoff_until', $now + CASHUPAY_CRON_BACKOFF_SECONDS, false);
+    update_option('barebits_cron_backoff_until', $now + BAREBITS_CRON_BACKOFF_SECONDS, false);
 }

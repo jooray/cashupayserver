@@ -1,14 +1,14 @@
 """BareBits branding of the BTCPay WooCommerce gateway settings.
 
-cashupay_apply_btcpay_gateway_branding() runs as part of the WooCommerce
-wiring (cashupay_ensure_woocommerce_integration) and must set the checkout
+barebits_apply_btcpay_gateway_branding() runs as part of the WooCommerce
+wiring (barebits_ensure_woocommerce_integration) and must set the checkout
 title, customer message, and gateway logo — but only when those fields are
 empty or still carry the stock BTCPay defaults, so a merchant's manual
 customization survives re-runs. The logo is sideloaded into the media library
 WITHOUT intermediate sizes (the BTCPay plugin fetches the icon at 'thumbnail'
 size, and a 150x150 crop would truncate the wordmark).
 
-cashupay_apply_btcpay_order_states() applies the same conservatism to the
+barebits_apply_btcpay_order_states() applies the same conservatism to the
 Expired→wc-failed remap: WooCommerce keeps failed orders payable, so an
 expired invoice leaves the customer a retry affordance, but a merchant's
 deliberate mapping choice is never overwritten.
@@ -36,16 +36,16 @@ BAREBITS_DESCRIPTION = (
 STOCK_TITLE = "BTCPay (Bitcoin, Lightning Network, ...)"
 STOCK_DESCRIPTION = "You will be redirected to BTCPay to complete your purchase."
 
-APPLY = "cashupay_apply_btcpay_gateway_branding();"
+APPLY = "barebits_apply_btcpay_gateway_branding();"
 # A wp-cli eval is not a wp-admin request, so a plain get_option runs through
 # payment-discount.php's runtime title filter — that read is what customers
 # see. The RAW dump bypasses the filter to inspect what is actually stored.
 DUMP = "echo json_encode(get_option('woocommerce_btcpaygf_default_settings'));"
 DUMP_RAW = (
-    "echo json_encode(cashupay_gateway_stored_settings());"
+    "echo json_encode(barebits_gateway_stored_settings());"
 )
 
-APPLY_STATES = "cashupay_apply_btcpay_order_states();"
+APPLY_STATES = "barebits_apply_btcpay_order_states();"
 DUMP_STATES = "echo json_encode(get_option('btcpay_gf_order_states'));"
 
 
@@ -65,9 +65,9 @@ def _stored_settings(wp: WordPressHandle) -> dict:
 
 def _set_discount(wp: WordPressHandle, value: str | None) -> None:
     if value is None:
-        wp.wp_cli("option", "delete", "cashupay_discount_percent", check=False)
+        wp.wp_cli("option", "delete", "barebits_discount_percent", check=False)
     else:
-        wp.wp_cli("option", "update", "cashupay_discount_percent", value, check=False)
+        wp.wp_cli("option", "update", "barebits_discount_percent", value, check=False)
 
 
 def _order_states(wp: WordPressHandle) -> dict:

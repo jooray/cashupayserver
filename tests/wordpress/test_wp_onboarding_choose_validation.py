@@ -20,14 +20,14 @@ pytestmark = pytest.mark.wordpress
 
 
 def _login_and_open_onboarding(page, wp: WordPressHandle) -> None:
-    onboarding = f"{wp.url}/wp-admin/admin.php?page=cashupay"
+    onboarding = f"{wp.url}/wp-admin/admin.php?page=barebits"
     # The fixture's php -S router cannot serve the bare /wp-admin/ directory,
     # so send the post-login redirect straight to the plugin page.
     page.goto(f"{wp.url}/wp-login.php?redirect_to={onboarding}")
     page.fill("#user_login", WP_ADMIN_USER)
     page.fill("#user_pass", WP_ADMIN_PASSWORD)
     page.click("#wp-submit")
-    page.wait_for_selector("#cashupay-mode-install")
+    page.wait_for_selector("#barebits-mode-install")
 
 
 def test_stale_url_text_does_not_block_install_mode(wordpress, page) -> None:
@@ -37,14 +37,14 @@ def test_stale_url_text_does_not_block_install_mode(wordpress, page) -> None:
     wp = wordpress
     _login_and_open_onboarding(page, wp)
 
-    page.fill("#cashupay-server-url", "pay.example.com")
-    page.check("#cashupay-mode-install")
+    page.fill("#barebits-server-url", "pay.example.com")
+    page.check("#barebits-mode-install")
     # Selecting install mode takes the URL field out of the game entirely.
-    assert page.is_disabled("#cashupay-server-url")
+    assert page.is_disabled("#barebits-server-url")
 
     page.click("#submit")
     page.wait_for_selector("h2:has-text('Install BareBits alongside WordPress')")
-    assert wp.wp_cli("option", "get", "cashupay_mode").stdout.strip() == "install"
+    assert wp.wp_cli("option", "get", "barebits_mode").stdout.strip() == "install"
 
 
 def test_maintenance_mode_waits_out_the_submit(wordpress, page) -> None:
@@ -56,7 +56,7 @@ def test_maintenance_mode_waits_out_the_submit(wordpress, page) -> None:
     (the same wait-it-out the setup wizard's return handoff does)."""
     wp = wordpress
     _login_and_open_onboarding(page, wp)
-    page.check("#cashupay-mode-install")
+    page.check("#barebits-mode-install")
 
     # The real thing WordPress core writes: a fresh $upgrading stamp (an
     # empty file would read as >10 minutes old and not trigger maintenance).
@@ -64,10 +64,10 @@ def test_maintenance_mode_waits_out_the_submit(wordpress, page) -> None:
     flag.write_text("<?php $upgrading = time(); ?>")
     try:
         page.click("#submit")
-        page.wait_for_selector("#cashupay-maintenance-waiting", state="visible")
+        page.wait_for_selector("#barebits-maintenance-waiting", state="visible")
         # Still on the chooser: the POST was held back, not swallowed by the
         # maintenance screen.
-        assert page.is_visible("#cashupay-mode-install")
+        assert page.is_visible("#barebits-mode-install")
     finally:
         flag.unlink()
 
@@ -76,7 +76,7 @@ def test_maintenance_mode_waits_out_the_submit(wordpress, page) -> None:
     page.wait_for_selector(
         "h2:has-text('Install BareBits alongside WordPress')", timeout=15_000
     )
-    assert wp.wp_cli("option", "get", "cashupay_mode").stdout.strip() == "install"
+    assert wp.wp_cli("option", "get", "barebits_mode").stdout.strip() == "install"
 
 
 def test_password_reveal_retries_through_maintenance(wordpress, page) -> None:
@@ -87,23 +87,23 @@ def test_password_reveal_retries_through_maintenance(wordpress, page) -> None:
     wp = wordpress
     # Fake a surviving alongside-install record so the chooser renders the
     # reconnect hint with the reveal button.
-    wp.wp_cli("option", "update", "cashupay_install_dir", str(wp.wp_root / "barebits"))
-    wp.wp_cli("option", "update", "cashupay_install_url", f"{wp.url}/barebits")
-    wp.wp_cli("option", "update", "cashupay_admin_password", "guard-test-password")
+    wp.wp_cli("option", "update", "barebits_install_dir", str(wp.wp_root / "barebits"))
+    wp.wp_cli("option", "update", "barebits_install_url", f"{wp.url}/barebits")
+    wp.wp_cli("option", "update", "barebits_admin_password", "guard-test-password")
     _login_and_open_onboarding(page, wp)
-    page.wait_for_selector("#cashupay-reveal-password")
+    page.wait_for_selector("#barebits-reveal-password")
 
     flag = wp.wp_root / ".maintenance"
     flag.write_text("<?php $upgrading = time(); ?>")
     try:
-        page.click("#cashupay-reveal-password")
-        page.wait_for_selector("#cashupay-reveal-password:has-text('Waiting for WordPress')")
+        page.click("#barebits-reveal-password")
+        page.wait_for_selector("#barebits-reveal-password:has-text('Waiting for WordPress')")
     finally:
         flag.unlink()
 
     # The next retry (≤5s out) gets through and reveals the password.
     page.wait_for_selector(
-        "#cashupay-admin-password:has-text('guard-test-password')", timeout=15_000
+        "#barebits-admin-password:has-text('guard-test-password')", timeout=15_000
     )
 
 
@@ -115,16 +115,16 @@ def test_url_mode_requires_a_url(wordpress, page) -> None:
     _login_and_open_onboarding(page, wp)
 
     # Flip to install and back: the field must re-enable.
-    page.check("#cashupay-mode-install")
-    page.check("#cashupay-mode-url")
-    assert page.is_enabled("#cashupay-server-url")
+    page.check("#barebits-mode-install")
+    page.check("#barebits-mode-url")
+    assert page.is_enabled("#barebits-server-url")
 
     page.click("#submit")
     # The native `required` bubble held the submit; still on the chooser,
     # nothing chosen server-side.
-    assert page.is_visible("#cashupay-mode-url")
+    assert page.is_visible("#barebits-mode-url")
     message = page.eval_on_selector(
-        "#cashupay-server-url", "el => el.validationMessage"
+        "#barebits-server-url", "el => el.validationMessage"
     )
     assert message, "expected the browser's required-field message"
-    assert wp.wp_cli("option", "get", "cashupay_mode", check=False).stdout.strip() == ""
+    assert wp.wp_cli("option", "get", "barebits_mode", check=False).stdout.strip() == ""

@@ -12,7 +12,7 @@ checkout fails instead — see includes/api/invoices.php). The host is not
 hypothetical: any SQLite-drop-in WordPress gets WooCommerce's HPOS
 auto-enable out of the box.
 
-The plugin's answer is cashupay_pin_order_storage_for_sqlite (decision
+The plugin's answer is barebits_pin_order_storage_for_sqlite (decision
 matrix pinned by tests/php/test_wp_order_storage_pin.php): every wiring run
 pins order storage to the immune posts table on SQLite hosts — unless the
 HPOS table already holds orders, which a flip would orphan. This module

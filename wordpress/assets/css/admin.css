@@ -1,46 +1,46 @@
 /**
  * Shared styles for the BareBits wp-admin pages (onboarding + Connection).
- * Enqueued by cashupay_admin_enqueue_assets() on the plugin's own pages only
+ * Enqueued by barebits_admin_enqueue_assets() on the plugin's own pages only
  * (wordpress.org guideline: no inline <style> blocks or style attributes).
  */
 
-.cashupay-wrap { max-width: 720px; }
-.cashupay-table { max-width: 680px; }
-.cashupay-section { margin-top: 1em; }
-.cashupay-subheading { font-size: 1.1em; }
-.cashupay-percent-field { width: 6em; }
-.cashupay-radio-cell { vertical-align: top; }
+.barebits-wrap { max-width: 720px; }
+.barebits-table { max-width: 680px; }
+.barebits-section { margin-top: 1em; }
+.barebits-subheading { font-size: 1.1em; }
+.barebits-percent-field { width: 6em; }
+.barebits-radio-cell { vertical-align: top; }
 /* Notices that lead into the form below them (reconnect hint, degraded-build
    warning) instead of carrying the default notice margins. */
-.cashupay-notice-lead { margin: 0 0 1em; }
+.barebits-notice-lead { margin: 0 0 1em; }
 
 /* The maintenance-mode waiting note: revealed by maintenance-guard.js while
    it holds a submit back. The [hidden] rule keeps the attribute authoritative
    even if an admin stylesheet ever sets a display on .notice. */
-#cashupay-maintenance-waiting { margin: 1em 0 0; }
-#cashupay-maintenance-waiting[hidden] { display: none; }
+#barebits-maintenance-waiting { margin: 1em 0 0; }
+#barebits-maintenance-waiting[hidden] { display: none; }
 
 /* Wire step: the BTCPay takeover consent must stand out from the form. */
-.cashupay-btcpay-consent { border-left: 4px solid #d63638; padding-left: 8px; }
+.barebits-btcpay-consent { border-left: 4px solid #d63638; padding-left: 8px; }
 
 /* "Start over" reads as destructive. */
-.cashupay-reset-form { margin-top: 2em; }
-.cashupay-reset-form .button-link { color: #b32d2e; }
+.barebits-reset-form { margin-top: 2em; }
+.barebits-reset-form .button-link { color: #b32d2e; }
 
 /* Provision step: the setup wizard iframe, collapsed (in-page) state. */
-#cashupay-wizard-frame {
+#barebits-wizard-frame {
     width: 100%;
     height: 70vh;
     border: 1px solid #c3c4c7;
     border-radius: 4px;
     background: #fff;
 }
-#cashupay-wizard-shell { position: relative; }
+#barebits-wizard-shell { position: relative; }
 /* Expanded: fill the whole wp-admin viewport except the admin bar and the
    left menu, tracking WordPress's own menu breakpoints (folded 36px, hidden
    + 46px-tall bar on mobile). z-index sits just under the admin bar's 99999
    so the bar stays usable. */
-#cashupay-wizard-shell.cashupay-expanded {
+#barebits-wizard-shell.barebits-expanded {
     position: fixed;
     top: 32px;
     left: 160px;
@@ -50,25 +50,25 @@
     margin: 0;
     background: #fff;
 }
-#cashupay-wizard-shell.cashupay-expanded #cashupay-wizard-frame {
+#barebits-wizard-shell.barebits-expanded #barebits-wizard-frame {
     width: 100%;
     height: 100%;
     border: 0;
     border-radius: 0;
     display: block;
 }
-body.folded #cashupay-wizard-shell.cashupay-expanded { left: 36px; }
+body.folded #barebits-wizard-shell.barebits-expanded { left: 36px; }
 @media screen and (max-width: 960px) {
-    #cashupay-wizard-shell.cashupay-expanded { left: 36px; }
+    #barebits-wizard-shell.barebits-expanded { left: 36px; }
 }
 @media screen and (max-width: 782px) {
-    #cashupay-wizard-shell.cashupay-expanded { left: 0; top: 46px; }
+    #barebits-wizard-shell.barebits-expanded { left: 0; top: 46px; }
 }
-#cashupay-wizard-exit {
+#barebits-wizard-exit {
     display: none;
     position: absolute;
     top: 8px;
     right: 24px;
     z-index: 1;
 }
-#cashupay-wizard-shell.cashupay-expanded #cashupay-wizard-exit { display: block; }
+#barebits-wizard-shell.barebits-expanded #barebits-wizard-exit { display: block; }

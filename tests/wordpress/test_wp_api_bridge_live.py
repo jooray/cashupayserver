@@ -33,7 +33,7 @@ from fixtures.wordpress import WordPressHandle
 
 pytestmark = pytest.mark.wordpress
 
-MAX_BODY_BYTES = 1048576  # mirrors CASHUPAY_BRIDGE_MAX_BODY_BYTES
+MAX_BODY_BYTES = 1048576  # mirrors BAREBITS_BRIDGE_MAX_BODY_BYTES
 
 
 def _assert_replayed(r: requests.Response) -> None:
@@ -55,8 +55,8 @@ def test_bridge_validates_before_replaying(wordpress_hostile_host: WordPressHand
     # is recorded. The install's own setup wizard is deliberately NOT walked
     # (see the module docstring).
     s = wp_login(wp)
-    post_onboarding(s, wp, "cashupay_choose_mode", {"cashupay_mode": "install"})
-    body = post_onboarding(s, wp, "cashupay_run_install")
+    post_onboarding(s, wp, "barebits_choose_mode", {"barebits_mode": "install"})
+    body = post_onboarding(s, wp, "barebits_run_install")
     assert "BareBits is installed at" in body, body[:2000]
 
     # This URL has no .php and no rewrites serve it on this host: it provably

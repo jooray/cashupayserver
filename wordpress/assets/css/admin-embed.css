@@ -6,7 +6,7 @@
 
 #wpcontent, #wpbody-content { padding: 0; }
 #wpfooter { display: none; }
-#cashupay-admin-frame {
+#barebits-admin-frame {
     display: block;
     width: 100%;
     /* WP 5.9+ exposes the admin-bar height (32px, 46px on small screens) as

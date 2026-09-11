@@ -11,7 +11,7 @@ the server must answer both forms of the link:
     itself), serving the payment page directly;
   - the query transport api.php?cashupay_path=/i/{id} — what the gateway
     produces when configured with the alongside install's query base
-    (cashupay_gateway_base_url) — answering with a redirect to the page.
+    (barebits_gateway_base_url) — answering with a redirect to the page.
 
 Before these routes existed, every "pay again" click 404'd on every host.
 """

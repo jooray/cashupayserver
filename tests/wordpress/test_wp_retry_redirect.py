@@ -1,4 +1,4 @@
-"""The shop-side expired-invoice retry endpoint (/?cashupay-retry={invoiceId}).
+"""The shop-side expired-invoice retry endpoint (/?barebits-retry={invoiceId}).
 
 The install's payment page links expired e-commerce invoices here (via
 CASHUPAY_RETRY_URL_TEMPLATE). The plugin resolves the invoice back to its
@@ -53,7 +53,7 @@ echo json_encode([
 
 def _retry(wp: WordPressHandle, invoice_id: str) -> requests.Response:
     return requests.get(
-        f"{wp.url}/?cashupay-retry={invoice_id}",
+        f"{wp.url}/?barebits-retry={invoice_id}",
         timeout=30,
         allow_redirects=False,
     )
@@ -113,7 +113,7 @@ def test_retry_malformed_id_never_reaches_the_database(wordpress) -> None:
         "a" * 65,               # over the length bound
     ):
         r = requests.get(
-            f"{wp.url}/?cashupay-retry={bad}", timeout=30, allow_redirects=False
+            f"{wp.url}/?barebits-retry={bad}", timeout=30, allow_redirects=False
         )
         assert r.status_code == 200, (
             f"malformed id {bad!r} must be ignored (plain page render), "

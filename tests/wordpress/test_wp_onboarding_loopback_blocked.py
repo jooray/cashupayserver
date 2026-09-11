@@ -43,11 +43,11 @@ def test_install_warns_accurately_when_loopback_is_blocked(wordpress_install_mod
     wp = wordpress_install_mode
     mu = wp.wp_root / "wp-content" / "mu-plugins"
     mu.mkdir(parents=True, exist_ok=True)
-    (mu / "cashupay-test-loopback-block.php").write_text(BLOCK_MU_PLUGIN)
+    (mu / "barebits-test-loopback-block.php").write_text(BLOCK_MU_PLUGIN)
 
     s = wp_login(wp)
-    post_onboarding(s, wp, "cashupay_choose_mode", {"cashupay_mode": "install"})
-    body = post_onboarding(s, wp, "cashupay_run_install")
+    post_onboarding(s, wp, "barebits_choose_mode", {"barebits_mode": "install"})
+    body = post_onboarding(s, wp, "barebits_run_install")
 
     # The install itself lands (the release download is not loopback traffic)...
     assert "BareBits is installed at" in body, body[:2000]

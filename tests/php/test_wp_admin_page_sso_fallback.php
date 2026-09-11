@@ -1,7 +1,7 @@
 <?php
 /**
  * The wp-admin "BareBits" page's embed source (admin-menu.php +
- * state.php's cashupay_sso_login_url).
+ * state.php's barebits_sso_login_url).
  *
  * For a wired alongside install the page embeds the BareBits admin behind a
  * freshly minted one-time SSO URL. Every failure of that mint — server
@@ -50,13 +50,13 @@ function wp_remote_retrieve_body($response) { return $response['body'] ?? ''; }
 
 // The onboarding renderer + flash live in onboarding.php, which needs the
 // whole admin-post surface; the page under test only *calls* these two.
-function cashupay_render_onboarding(): void { echo 'ONBOARDING-FLOW'; }
-function cashupay_take_flash(): ?array { return null; }
+function barebits_render_onboarding(): void { echo 'ONBOARDING-FLOW'; }
+function barebits_take_flash(): ?array { return null; }
 // Likewise the discount settings block (payment-discount.php, the whole
 // WooCommerce surface): the Connection page under test only *calls* it.
-function cashupay_render_discount_settings(): void { echo 'DISCOUNT-SETTINGS'; }
+function barebits_render_discount_settings(): void { echo 'DISCOUNT-SETTINGS'; }
 // And the wait-out-maintenance form gate (onboarding.php as well).
-function cashupay_render_maintenance_guard(): void { echo 'MAINTENANCE-GUARD'; }
+function barebits_render_maintenance_guard(): void { echo 'MAINTENANCE-GUARD'; }
 
 require __DIR__ . '/wp_compat_stubs.php';
 require dirname(__DIR__, 2) . '/wordpress/state.php';
@@ -64,13 +64,13 @@ require dirname(__DIR__, 2) . '/wordpress/admin-menu.php';
 
 function render_admin_page(): string {
     ob_start();
-    cashupay_admin_page();
+    barebits_admin_page();
     return (string)ob_get_clean();
 }
 
 /** The iframe's src attribute, or null when the page rendered no iframe. */
 function iframe_src(string $html): ?string {
-    if (!preg_match('/<iframe id="cashupay-admin-frame" src="([^"]*)"/', $html, $m)) {
+    if (!preg_match('/<iframe id="barebits-admin-frame" src="([^"]*)"/', $html, $m)) {
         return null;
     }
     return html_entity_decode($m[1], ENT_QUOTES);
@@ -86,11 +86,11 @@ assert_null(iframe_src($html), 'and no iframe');
 
 // --- Wired install mode, SSO mint succeeds: embed behind the one-time URL ----
 $GLOBALS['wp_options'] = [
-    'cashupay_mode' => 'install',
-    'cashupay_server_url' => SERVER,
-    'cashupay_wired_at' => 1700000000,
-    'cashupay_sso_key' => $ssoKey,
-    'cashupay_store_id' => 'store_x',
+    'barebits_mode' => 'install',
+    'barebits_server_url' => SERVER,
+    'barebits_wired_at' => 1700000000,
+    'barebits_sso_key' => $ssoKey,
+    'barebits_store_id' => 'store_x',
 ];
 $token = str_repeat('f', 64);
 $GLOBALS['sso_response'] = ['code' => 200, 'body' => json_encode(['status' => 'ready', 'token' => $token])];
@@ -117,32 +117,32 @@ foreach ([
 }
 
 // --- SSO not provisioned (an old alongside install): straight to fallback ----
-unset($GLOBALS['wp_options']['cashupay_sso_key']);
+unset($GLOBALS['wp_options']['barebits_sso_key']);
 $GLOBALS['sso_post'] = null;
 $html = render_admin_page();
 assert_eq(SERVER . '/admin.php', iframe_src($html), 'no SSO key embeds the plain admin URL');
 assert_null($GLOBALS['sso_post'], 'and never even attempts a mint');
 
 // --- URL mode never embeds: the connection panel renders instead -------------
-$GLOBALS['wp_options']['cashupay_mode'] = 'url';
+$GLOBALS['wp_options']['barebits_mode'] = 'url';
 $html = render_admin_page();
 assert_null(iframe_src($html), 'a remote server is not embedded');
 assert_true(str_contains($html, 'WooCommerce is connected'), 'the connection panel renders instead');
 assert_true(str_contains($html, 'Existing server (connected by URL)'), 'labelled as a URL-mode connection');
 
-// --- cashupay_is_same_host_url: full origin, not hostname --------------------
+// --- barebits_is_same_host_url: full origin, not hostname --------------------
 //
 // The check decides which requests may skip TLS peer verification (and so
 // where the plaintext SSO/cron/provision keys travel unverified). Only this
 // site's own origin — scheme AND host AND port (the stubbed site_url is
 // http://wp.test, so port 80) — qualifies; a different service on another
 // port of the same host is a different server.
-assert_true(cashupay_is_same_host_url('http://wp.test/barebits'), 'the site\'s own origin matches');
-assert_true(cashupay_is_same_host_url('http://WP.TEST:80/x'), 'host case and an explicit default port are normalized');
-assert_false(cashupay_is_same_host_url('http://wp.test:8080/x'), 'another port on the same host is NOT this site');
-assert_false(cashupay_is_same_host_url('https://wp.test/x'), 'another scheme is NOT this site');
-assert_false(cashupay_is_same_host_url('http://evil.test/x'), 'another host is NOT this site');
-assert_false(cashupay_is_same_host_url('not a url'), 'garbage never matches');
-assert_false(cashupay_is_same_host_url(''), 'nor does an empty URL');
+assert_true(barebits_is_same_host_url('http://wp.test/barebits'), 'the site\'s own origin matches');
+assert_true(barebits_is_same_host_url('http://WP.TEST:80/x'), 'host case and an explicit default port are normalized');
+assert_false(barebits_is_same_host_url('http://wp.test:8080/x'), 'another port on the same host is NOT this site');
+assert_false(barebits_is_same_host_url('https://wp.test/x'), 'another scheme is NOT this site');
+assert_false(barebits_is_same_host_url('http://evil.test/x'), 'another host is NOT this site');
+assert_false(barebits_is_same_host_url('not a url'), 'garbage never matches');
+assert_false(barebits_is_same_host_url(''), 'nor does an empty URL');
 
 echo "test_wp_admin_page_sso_fallback: ok\n";

@@ -31,17 +31,17 @@ pytestmark = pytest.mark.wordpress
 # Connection-page discount save. All share the inline capability+nonce
 # preamble the static gate enforces.
 PROTECTED_ACTIONS = {
-    "cashupay_choose_mode": {"cashupay_mode": "url", "cashupay_server_url": "https://evil.example"},
-    "cashupay_finish": {"cashupay_discount_percent": "99"},
-    "cashupay_reset_onboarding": {},
-    "cashupay_save_discount": {"cashupay_discount_percent": "99"},
+    "barebits_choose_mode": {"barebits_mode": "url", "barebits_server_url": "https://evil.example"},
+    "barebits_finish": {"barebits_discount_percent": "99"},
+    "barebits_reset_onboarding": {},
+    "barebits_save_discount": {"barebits_discount_percent": "99"},
 }
 
 
 def _assert_nothing_stored(wp: WordPressHandle) -> None:
-    assert wp_option(wp, "cashupay_mode") == ""
-    assert wp_option(wp, "cashupay_server_url") == ""
-    assert wp_option(wp, "cashupay_discount_percent") == ""
+    assert wp_option(wp, "barebits_mode") == ""
+    assert wp_option(wp, "barebits_server_url") == ""
+    assert wp_option(wp, "barebits_discount_percent") == ""
 
 
 def test_admin_post_refused_without_nonce(wordpress) -> None:
@@ -82,7 +82,7 @@ def test_pairing_callback_refuses_forged_state(wordpress) -> None:
 
     # With no pairing in flight there is no expected state: any state fails.
     r = requests.post(
-        f"{wp.url}/wp-admin/admin-post.php?action=cashupay_pairing_callback&state=" + "ab" * 16,
+        f"{wp.url}/wp-admin/admin-post.php?action=barebits_pairing_callback&state=" + "ab" * 16,
         data={"apiKey": "f" * 64, "storeId": "store_attacker"},
         timeout=30,
         allow_redirects=False,
@@ -92,13 +92,13 @@ def test_pairing_callback_refuses_forged_state(wordpress) -> None:
     # Start a real pairing to mint a state token. The server URL never gets
     # contacted by start_pairing (it only builds the redirect), so a dead
     # address is fine — everything asserted here refuses locally.
-    wp.wp_cli("option", "update", "cashupay_mode", "url")
-    wp.wp_cli("option", "update", "cashupay_server_url", "http://127.0.0.1:9")
+    wp.wp_cli("option", "update", "barebits_mode", "url")
+    wp.wp_cli("option", "update", "barebits_server_url", "http://127.0.0.1:9")
     s = wp_login(wp)
     nonces = page_nonces(onboarding_page(s, wp))
     r = s.post(
         f"{wp.url}/wp-admin/admin-post.php",
-        data={"action": "cashupay_start_pairing", "_wpnonce": nonces["cashupay_start_pairing"]},
+        data={"action": "barebits_start_pairing", "_wpnonce": nonces["barebits_start_pairing"]},
         timeout=30,
         allow_redirects=False,
     )
@@ -115,8 +115,8 @@ def test_pairing_callback_refuses_forged_state(wordpress) -> None:
         allow_redirects=False,
     )
     assert r.status_code == 403, r.text[:300]
-    assert wp_option(wp, "cashupay_api_key") == ""
-    assert wp_option(wp, "cashupay_store_id") == ""
+    assert wp_option(wp, "barebits_api_key") == ""
+    assert wp_option(wp, "barebits_store_id") == ""
 
     # ...and burns the expected token doing so: the REAL state is now dead
     # too (single use, success or not), so the guess had exactly one shot.
@@ -127,19 +127,19 @@ def test_pairing_callback_refuses_forged_state(wordpress) -> None:
         allow_redirects=False,
     )
     assert r.status_code == 403, r.text[:300]
-    assert wp_option(wp, "cashupay_api_key") == ""
+    assert wp_option(wp, "barebits_api_key") == ""
 
 
 def test_reveal_password_ajax_needs_nonce(wordpress) -> None:
     wp = wordpress
     sentinel = "hunter2-sentinel-password"
-    wp.wp_cli("option", "update", "cashupay_admin_password", sentinel)
+    wp.wp_cli("option", "update", "barebits_admin_password", sentinel)
 
     # Logged in but no nonce: check_ajax_referer dies before the handler.
     s = wp_login(wp)
     r = s.post(
         f"{wp.url}/wp-admin/admin-ajax.php",
-        data={"action": "cashupay_reveal_password"},
+        data={"action": "barebits_reveal_password"},
         timeout=30,
     )
     assert sentinel not in r.text, "password leaked without a nonce"
@@ -147,7 +147,7 @@ def test_reveal_password_ajax_needs_nonce(wordpress) -> None:
     # Logged out entirely: no nopriv registration, WP refuses the action.
     r = requests.post(
         f"{wp.url}/wp-admin/admin-ajax.php",
-        data={"action": "cashupay_reveal_password", "nonce": "0123456789"},
+        data={"action": "barebits_reveal_password", "nonce": "0123456789"},
         timeout=30,
     )
     assert sentinel not in r.text, "password leaked to a logged-out client"

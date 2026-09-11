@@ -13,7 +13,7 @@ bare cURL 28 timeout. That was the exact failure merchants hit at "Last
 step: connect WooCommerce" on Local WP.
 
 The fix routes the plugin's own Greenfield calls to the install's api.php
-directly (the query-path transport — see cashupay_api_transport_url), one
+directly (the query-path transport — see barebits_api_transport_url), one
 loopback deep. This test recreates the starved host deterministically:
 PHP_CLI_SERVER_WORKERS=2 yields three serving processes (the master accepts
 too), and one of them is pinned for the whole test by a long-running
@@ -52,12 +52,12 @@ def _pin_one_worker(wp: WordPressHandle) -> None:
     never interrupts it). Waits until the sleeper has provably STARTED — a
     pin that is still in the listen queue would not constrain anything."""
     marker = wp.workdir / "pin-started"
-    (wp.wp_root / "cashupay-test-pin.php").write_text(
+    (wp.wp_root / "barebits-test-pin.php").write_text(
         "<?php touch(" + repr(str(marker)) + "); sleep(" + str(PIN_SECONDS) + ");\n"
     )
     def _hold() -> None:
         try:
-            requests.get(f"{wp.url}/cashupay-test-pin.php", timeout=PIN_SECONDS + 30)
+            requests.get(f"{wp.url}/barebits-test-pin.php", timeout=PIN_SECONDS + 30)
         except requests.RequestException:
             pass  # server torn down mid-sleep at test end — expected
 
@@ -89,8 +89,8 @@ def test_onboarding_completes_on_a_starved_worker_pool(wordpress_hostile_tight_p
     _pin_one_worker(wp)
     s = wp_login(wp)
 
-    post_onboarding(s, wp, "cashupay_choose_mode", {"cashupay_mode": "install"})
-    body = post_onboarding(s, wp, "cashupay_run_install")
+    post_onboarding(s, wp, "barebits_choose_mode", {"barebits_mode": "install"})
+    body = post_onboarding(s, wp, "barebits_run_install")
     assert "BareBits is installed at" in body, body[:2000]
     # Loopback works on this host — only the canonical /api/v1 bridge chain
     # starves. The probe goes to api.php directly (one loopback deep, one
@@ -105,9 +105,9 @@ def test_onboarding_completes_on_a_starved_worker_pool(wordpress_hostile_tight_p
 
     _walk_wizard_declining_everything(wp)
 
-    body = post_onboarding(s, wp, "cashupay_collect_provision")
+    body = post_onboarding(s, wp, "barebits_collect_provision")
     assert "Connected!" in body, body[:2000]
-    store_id = wp_option(wp, "cashupay_store_id")
+    store_id = wp_option(wp, "barebits_store_id")
     assert store_id
 
     # The step that used to die with "Wiring failed: cURL error 28" on Local
@@ -115,11 +115,11 @@ def test_onboarding_completes_on_a_starved_worker_pool(wordpress_hostile_tight_p
     # on this starved pool it only survives via the direct api.php transport
     # (two simultaneous requests, not the bridge chain's three).
     install_woocommerce(wp)
-    body = post_onboarding(s, wp, "cashupay_finish", {"cashupay_discount_percent": "0"})
+    body = post_onboarding(s, wp, "barebits_finish", {"barebits_discount_percent": "0"})
     assert "WooCommerce now takes Bitcoin" in body, body[:2000]
 
     assert wp_option(wp, "btcpay_gf_url") == wp.barebits_gateway_url
-    assert wp_option(wp, "cashupay_wired_at") != ""
+    assert wp_option(wp, "barebits_wired_at") != ""
     # The webhook really landed on the server, secret shared with the gateway.
     webhook_opt = json.loads(
         wp.wp_cli("option", "get", "btcpay_gf_webhook", "--format=json").stdout.strip()

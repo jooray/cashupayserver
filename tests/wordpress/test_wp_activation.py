@@ -2,7 +2,7 @@
 
 The plugin is WordPress-only glue: no BareBits server code ships inside it,
 so activation must neither define the old embedded-mode constants nor
-register any /cashupay/* front-end routes. What it must do: register the
+register any /barebits/* front-end routes. What it must do: register the
 top-level BareBits admin page (which renders the onboarding chooser until a
 server is wired), expose the installer entry point, and nag unconfigured
 admins toward setup — without ever leaking that nag to the storefront.
@@ -28,15 +28,15 @@ def test_wp_install_is_reachable(wordpress: WordPressHandle) -> None:
     assert "wordpress" in r.text.lower() or "html" in r.headers.get("Content-Type", "").lower()
 
 
-def test_cashupay_plugin_activates_cleanly(wordpress: WordPressHandle) -> None:
+def test_barebits_plugin_activates_cleanly(wordpress: WordPressHandle) -> None:
     """The copied-source plugin tree is active (the fixture activates it, which
     already ran every __DIR__ require without a fatal) and its header parses."""
     result = wordpress.wp_cli("plugin", "list", "--field=name", "--status=active")
     active = result.stdout.split()
-    assert "cashupay" in active, f"cashupay not active; active plugins: {active}"
+    assert "barebits" in active, f"barebits not active; active plugins: {active}"
 
-    version = wordpress.wp_cli("plugin", "get", "cashupay", "--field=version").stdout.strip()
-    assert version, "plugin version header empty — cashupay.php header not parsed"
+    version = wordpress.wp_cli("plugin", "get", "barebits", "--field=version").stdout.strip()
+    assert version, "plugin version header empty — barebits.php header not parsed"
 
 
 def test_no_embedded_server_constants(wordpress: WordPressHandle) -> None:
@@ -51,9 +51,9 @@ def test_no_embedded_server_constants(wordpress: WordPressHandle) -> None:
     )
 
     exists = wordpress.wp_cli(
-        "eval", "var_export(function_exists('cashupay_run_install'));"
+        "eval", "var_export(function_exists('barebits_run_install'));"
     ).stdout.strip()
-    assert exists == "true", "cashupay_run_install (installer.php) must be loaded"
+    assert exists == "true", "barebits_run_install (installer.php) must be loaded"
 
 
 def test_plugin_uri_points_at_barebits_repo(wordpress: WordPressHandle) -> None:
@@ -62,7 +62,7 @@ def test_plugin_uri_points_at_barebits_repo(wordpress: WordPressHandle) -> None:
     result = wordpress.wp_cli(
         "eval",
         "require_once ABSPATH . 'wp-admin/includes/plugin.php';"
-        "echo get_plugin_data(WP_PLUGIN_DIR . '/cashupay/cashupay.php', false, false)['PluginURI'];",
+        "echo get_plugin_data(WP_PLUGIN_DIR . '/barebits/barebits.php', false, false)['PluginURI'];",
     )
     uri = result.stdout.strip()
     assert uri == "https://github.com/BareBits/cashupayserver", uri
@@ -77,9 +77,9 @@ def test_admin_menu_is_a_top_level_section_not_under_tools(wordpress: WordPressH
         "do_action('admin_menu');"
         "global $menu, $submenu;"
         "$top = false;"
-        "foreach ((array)$menu as $m) { if (($m[2] ?? '') === 'cashupay') $top = true; }"
+        "foreach ((array)$menu as $m) { if (($m[2] ?? '') === 'barebits') $top = true; }"
         "$underTools = false;"
-        "foreach ((array)($submenu['tools.php'] ?? []) as $m) { if (($m[2] ?? '') === 'cashupay') $underTools = true; }"
+        "foreach ((array)($submenu['tools.php'] ?? []) as $m) { if (($m[2] ?? '') === 'barebits') $underTools = true; }"
         "echo ($top ? '1' : '0') . '|' . ($underTools ? '1' : '0');"
     )
     top, under_tools = wordpress.wp_cli("eval", snippet).stdout.strip().split("|")
@@ -101,7 +101,7 @@ def test_admin_page_requires_authentication(wordpress: WordPressHandle) -> None:
     bounces it to the login screen before the plugin renders anything."""
     r = requests.get(
         f"{wordpress.url}/wp-admin/admin.php",
-        params={"page": "cashupay"},
+        params={"page": "barebits"},
         timeout=30,
         allow_redirects=False,
     )
@@ -119,7 +119,7 @@ def test_unconfigured_admin_notice_invites_configuration(wordpress: WordPressHan
     r = s.get(f"{wordpress.url}/wp-admin/index.php", timeout=30)
     assert r.status_code == 200, f"dashboard returned {r.status_code}"
     assert "Configure BareBits" in r.text, r.text[:400]
-    assert "admin.php?page=cashupay" in r.text, (
+    assert "admin.php?page=barebits" in r.text, (
         "notice must link to the BareBits admin page"
     )
 

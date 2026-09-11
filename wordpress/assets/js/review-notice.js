@@ -5,12 +5,12 @@
  * hides the notice for this page load; we just persist it.
  */
 document.addEventListener('click', function (e) {
-    const notice = e.target.closest('#cashupay-review-notice');
+    const notice = e.target.closest('#barebits-review-notice');
     if (!notice || !e.target.closest('.notice-dismiss')) {
         return;
     }
     const body = new URLSearchParams();
-    body.set('action', 'cashupay_dismiss_review');
+    body.set('action', 'barebits_dismiss_review');
     body.set('nonce', notice.dataset.nonce);
     fetch(ajaxurl, {
         method: 'POST',

@@ -49,11 +49,11 @@ def _install_and_check(wp: WordPressHandle, zip_path: Path) -> list[tuple[str, s
     install_plugin_check(wp)
 
     # --slug: the wordpress.org uploader checks against the slug it derives
-    # from the Plugin Name, not the install folder (which stays `cashupay/`).
+    # from the Plugin Name, not the install folder (which stays `barebits/`).
     # Without the override, Plugin Check falls back to the folder name and the
     # textdomain_mismatch warning the uploader emits never reproduces locally.
     res = wp.wp_cli(
-        "plugin", "check", "cashupay",
+        "plugin", "check", "barebits",
         "--slug=barebits-lightning-payments-via-bitcoin", check=False,
     )
     assert res.returncode == 0, f"wp plugin check failed to run:\n{res.stdout}\n{res.stderr}"
@@ -85,14 +85,14 @@ def _assert_clean(rows: list[tuple[str, str, str]]) -> None:
 
 def _readme_headers(zip_path: Path) -> dict[str, str]:
     with zipfile.ZipFile(zip_path) as zf:
-        readme = zf.read("cashupay/readme.txt").decode()
+        readme = zf.read("barebits/readme.txt").decode()
     headers = {}
     for line in readme.splitlines():
         m = re.match(r"^([A-Za-z ]+): (.+)$", line.strip())
         if m:
             headers[m.group(1)] = m.group(2).strip()
     with zipfile.ZipFile(zip_path) as zf:
-        main = zf.read("cashupay/cashupay.php").decode()
+        main = zf.read("barebits/barebits.php").decode()
     version = re.search(r"^ \* Version: (.+)$", main, re.M)
     headers["_plugin_version"] = version.group(1).strip() if version else ""
     return headers
@@ -232,12 +232,12 @@ NONCE_EXEMPT_ADMIN_POST = {
     # auth cookie, so a session-bound WP nonce could never verify. The
     # compensating control is the single-use, time-boxed pairing state token
     # compared with hash_equals().
-    "cashupay_handle_pairing_callback": "hash_equals(",
+    "barebits_handle_pairing_callback": "hash_equals(",
     # Return link minted by the BareBits setup wizard (which cannot create WP
     # nonces); idempotent state advance, gated on the admin capability.
-    "cashupay_handle_provision_return": "current_user_can(",
+    "barebits_handle_provision_return": "current_user_can(",
     # nopriv twin of the above: redirects to the login screen, touches nothing.
-    "cashupay_handle_provision_return_nopriv": "wp_login_url(",
+    "barebits_handle_provision_return_nopriv": "wp_login_url(",
 }
 
 
@@ -342,15 +342,15 @@ INPUT_READ_APPROVED = (
 # wrong tool there and what handles the input instead.
 RAW_INPUT_ALLOWLIST = {
     # The bridged query string is re-encoded pair by pair by
-    # cashupay_api_bridge_query() — sanitize_text_field would corrupt
+    # barebits_api_bridge_query() — sanitize_text_field would corrupt
     # legitimate API parameters; percent re-encoding cannot. The call being
     # ON the access line is exactly what this gate pins.
-    ("api-bridge.php", "cashupay_api_bridge_query("),
+    ("api-bridge.php", "barebits_api_bridge_query("),
     # The bridged request body: a bounded read (the cap constant on the line
-    # is the control), validated as JSON by cashupay_api_bridge_body_refusal()
+    # is the control), validated as JSON by barebits_api_bridge_body_refusal()
     # immediately after — sanitizing bytes that must reach the API verbatim
     # would corrupt payloads.
-    ("api-bridge.php", "CASHUPAY_BRIDGE_MAX_BODY_BYTES"),
+    ("api-bridge.php", "BAREBITS_BRIDGE_MAX_BODY_BYTES"),
 }
 
 
@@ -451,6 +451,179 @@ def test_output_echoes_are_escaped() -> None:
     )
 
 
+# --- Generic-name gate (wordpress.org review, third round) -----------------
+#
+# Every name the plugin INTRODUCES into WordPress's shared namespaces —
+# functions, classes, constants, options, transients, cron hooks, ajax and
+# admin-post actions, asset handles — must carry the plugin's own prefix so
+# it can never collide with another plugin or theme.
+
+PLUGIN_PREFIX = "barebits"
+
+# Names the plugin deliberately writes/deletes that belong to OTHER
+# components — configuring them is the plugin's job, so they must keep their
+# owners' prefixes. Extending this set is a review-level decision: each entry
+# names its owner.
+THIRD_PARTY_NAMES = {
+    # Owned by the BTCPay for WooCommerce gateway plugin; writing them is how
+    # that plugin gets configured (btcpay-integration.php).
+    "btcpay_gf_url",
+    "btcpay_gf_api_key",
+    "btcpay_gf_store_id",
+    "btcpay_gf_webhook",
+    "btcpay_gf_order_states",
+    # WooCommerce's own per-gateway settings convention
+    # (woocommerce_{gateway_id}_settings, gateway id btcpaygf_default).
+    "woocommerce_btcpaygf_default_settings",
+    # WooCommerce core options the SQLite order-storage pin must flip.
+    "woocommerce_custom_orders_table_enabled",
+    "woocommerce_newly_installed",
+}
+
+# The literal string "cashupay" (the pre-review prefix) may survive in the
+# plugin ONLY as part of the payment server's own contract — names the SERVER
+# defines and the plugin merely speaks: its HTTP transport, its repository,
+# its user_config.php constants (the installer writes the server's config
+# file, in the server's namespace), and its API's self-identification marker.
+SERVER_CONTRACT_TOKENS = (
+    "cashupay_path",    # api.php's query-path transport parameter
+    "cashupay.path",    # its PHP-normalization spelling in the bridge docs
+    "cashupayserver",   # the GitHub repository name in URLs
+    "isCashuPayServer",  # the health endpoint's self-identification field
+    "CASHUPAY_DATA_DIR",
+    "CASHUPAY_BASE_URL",
+    "CASHUPAY_MANAGED_INSTALL",
+    "CASHUPAY_SHOP_URL",
+    "CASHUPAY_RETRY_URL_TEMPLATE",
+    "CASHUPAY_ADMIN_PASSWORD_HASH",
+    "CASHUPAY_SSO_KEY_HASH",
+    "CASHUPAY_PROVISION_TOKEN_HASH",
+    "CASHUPAY_MANAGED_RETURN_URL",
+)
+
+
+def _statement_start(line: str) -> str:
+    """The stripped line, for statement-position checks (string-built config
+    like installer.php's user_config writer starts with a concatenation dot,
+    not with define/const, and is the server's namespace, not WordPress's)."""
+    return line.strip()
+
+
+def test_all_introduced_names_carry_plugin_prefix() -> None:
+    """wordpress.org review gate (2026-09 submission feedback, third round —
+    'Generic function/class/define/namespace/option names'): every function,
+    class, top-level constant, written option/transient, cron hook, ajax/
+    admin-post action, and asset handle the plugin introduces must start with
+    the plugin prefix — or sit on the documented THIRD_PARTY_NAMES list."""
+    offenders = []
+    for php in sorted((REPO_ROOT / "wordpress").glob("*.php")):
+        src = php.read_text()
+        lines = src.splitlines()
+
+        # Functions (top level, column 0 — class methods are indented and are
+        # namespaced by their class).
+        for m in re.finditer(r"^function\s+([A-Za-z0-9_]+)\s*\(", src, re.M):
+            if not m.group(1).startswith(PLUGIN_PREFIX + "_"):
+                offenders.append(f"{php.name}: function {m.group(1)}() lacks the prefix")
+
+        # Classes (declaration statements only — matched at line start after
+        # stripping, so prose like "the class is …" in comments never trips).
+        for lineno, line in enumerate(lines, 1):
+            text = _statement_start(line)
+            if text.startswith(("*", "//", "#", "/*")):
+                continue
+            m = re.match(r"(?:abstract\s+|final\s+)?class\s+([A-Za-z0-9_]+)", text)
+            if m and not m.group(1).lower().startswith(PLUGIN_PREFIX + "_"):
+                offenders.append(f"{php.name}:{lineno} class {m.group(1)} lacks the prefix")
+
+        # Constants: define() calls and const declarations in statement
+        # position (installer.php builds the SERVER's user_config.php out of
+        # "define('CASHUPAY_…')" string literals — those lines start with a
+        # concatenation dot and are the server's namespace, not WordPress's).
+        for lineno, line in enumerate(lines, 1):
+            text = _statement_start(line)
+            m = re.match(r"define\(\s*['\"]([A-Za-z0-9_]+)['\"]", text)
+            if m and not m.group(1).startswith(PLUGIN_PREFIX.upper() + "_"):
+                offenders.append(f"{php.name}:{lineno} define {m.group(1)} lacks the prefix")
+            m = re.match(r"const\s+([A-Za-z0-9_]+)\s*=", text)
+            if m and not m.group(1).startswith(PLUGIN_PREFIX.upper() + "_"):
+                offenders.append(f"{php.name}:{lineno} const {m.group(1)} lacks the prefix")
+
+        # Options and transients the plugin WRITES or DELETES (creating a
+        # name is what claims the namespace; reading someone else's option is
+        # ordinary interop and stays unrestricted).
+        for m in re.finditer(
+            r"\b(update_option|add_option|delete_option|set_transient|delete_transient)"
+            r"\(\s*['\"]([A-Za-z0-9_\-]+)['\"]",
+            src,
+        ):
+            name = m.group(2)
+            if not name.startswith(PLUGIN_PREFIX + "_") and name not in THIRD_PARTY_NAMES:
+                offenders.append(
+                    f"{php.name}: {m.group(1)}('{name}') — neither prefixed nor on "
+                    "THIRD_PARTY_NAMES"
+                )
+
+        # Cron hooks AND recurrence names the plugin schedules/clears: every
+        # string literal in a scheduling call is a shared-namespace name (the
+        # hook, and the plugin-registered interval name).
+        for m in re.finditer(
+            r"\b(?:wp_schedule_event|wp_schedule_single_event|wp_next_scheduled|"
+            r"wp_unschedule_event|wp_clear_scheduled_hook)\(([^;]*?)\)",
+            src,
+        ):
+            for name in re.findall(r"['\"]([A-Za-z0-9_]+)['\"]", m.group(1)):
+                if not name.startswith(PLUGIN_PREFIX + "_"):
+                    offenders.append(f"{php.name}: cron name '{name}' lacks the prefix")
+
+        # Ajax / admin-post action names (the suffix after the WordPress part
+        # is the name the plugin introduces).
+        for m in re.finditer(
+            r"add_action\(\s*['\"](?:wp_ajax_(?:nopriv_)?|admin_post_(?:nopriv_)?)"
+            r"([A-Za-z0-9_]+)['\"]",
+            src,
+        ):
+            if not m.group(1).startswith(PLUGIN_PREFIX + "_"):
+                offenders.append(f"{php.name}: ajax/admin-post action '{m.group(1)}' lacks the prefix")
+
+        # Script/style handles: direct enqueues/registrations plus the
+        # plugin's own enqueue helpers.
+        for m in re.finditer(
+            r"\b(?:wp_enqueue_script|wp_enqueue_style|wp_register_script|"
+            r"wp_register_style|" + PLUGIN_PREFIX + r"_enqueue_admin_script|"
+            + PLUGIN_PREFIX + r"_enqueue_admin_style)\(\s*['\"]([A-Za-z0-9\-_]+)['\"]",
+            src,
+        ):
+            if not m.group(1).startswith(PLUGIN_PREFIX + "-"):
+                offenders.append(f"{php.name}: asset handle '{m.group(1)}' lacks the prefix")
+
+    assert offenders == [], (
+        "names introduced without the plugin prefix (wordpress.org review "
+        "rejects generic names):\n" + "\n".join(offenders)
+    )
+
+
+def test_pre_review_prefix_never_returns() -> None:
+    """Tripwire for the 2026-09 prefix migration: the old 'cashupay' prefix
+    must never reappear in the plugin (copy-paste from old branches is the
+    realistic vector) — except as the server's own HTTP contract tokens,
+    which the plugin speaks but does not define."""
+    offenders = []
+    for f in sorted((REPO_ROOT / "wordpress").rglob("*")):
+        if f.suffix not in (".php", ".js", ".css", ".txt"):
+            continue
+        for lineno, line in enumerate(f.read_text().splitlines(), 1):
+            scrubbed = line
+            for token in SERVER_CONTRACT_TOKENS:
+                scrubbed = scrubbed.replace(token, "")
+            if "cashupay" in scrubbed.lower():
+                offenders.append(f"{f.relative_to(REPO_ROOT)}:{lineno}: {line.strip()[:120]}")
+    assert offenders == [], (
+        "the retired 'cashupay' prefix crept back into the plugin:\n"
+        + "\n".join(offenders)
+    )
+
+
 def test_plugin_check_full_zip(wordpress_bare: WordPressHandle, wp_plugin_zip: Path) -> None:
     rows = _install_and_check(wordpress_bare, wp_plugin_zip)
     _assert_clean(rows)
@@ -462,8 +635,8 @@ def test_plugin_check_wporg_zip(wordpress_bare: WordPressHandle, wp_plugin_wporg
     # the full zip's expected file list.
     with zipfile.ZipFile(wp_plugin_wporg_zip) as zf:
         names = zf.namelist()
-    assert "cashupay/installer.php" not in names, "installer.php must not ship to wordpress.org"
-    assert "cashupay/cashupay.php" in names and "cashupay/readme.txt" in names
+    assert "barebits/installer.php" not in names, "installer.php must not ship to wordpress.org"
+    assert "barebits/barebits.php" in names and "barebits/readme.txt" in names
 
     rows = _install_and_check(wordpress_bare, wp_plugin_wporg_zip)
     _assert_clean(rows)
@@ -471,19 +644,19 @@ def test_plugin_check_wporg_zip(wordpress_bare: WordPressHandle, wp_plugin_wporg
 
     wp = wordpress_bare
     active = wp.wp_cli("plugin", "list", "--field=name", "--status=active").stdout.split()
-    assert "cashupay" in active, f"wporg variant not active after install; active: {active}"
+    assert "barebits" in active, f"wporg variant not active after install; active: {active}"
 
     # Onboarding offers only connect-by-URL: no install radio, no server-check
     # table, and the URL form still renders.
     s = wp_login(wp)
     body = onboarding_page(s, wp)
-    assert 'name="cashupay_server_url"' in body, body[-1500:]
+    assert 'name="barebits_server_url"' in body, body[-1500:]
     assert "Install BareBits alongside WordPress" not in body
     assert "Server checks for installing alongside" not in body
 
     # The disabled radio was only ever markup — a hand-crafted install-mode
     # POST must be refused server-side too.
-    after = post_onboarding(s, wp, "cashupay_choose_mode", {"cashupay_mode": "install"})
+    after = post_onboarding(s, wp, "barebits_choose_mode", {"barebits_mode": "install"})
     assert "cannot install BareBits alongside" in after
-    mode = wp.wp_cli("option", "get", "cashupay_mode", check=False)
+    mode = wp.wp_cli("option", "get", "barebits_mode", check=False)
     assert mode.stdout.strip() == "", f"install mode must not be stored: {mode.stdout!r}"

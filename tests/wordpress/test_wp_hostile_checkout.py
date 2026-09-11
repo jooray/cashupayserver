@@ -63,7 +63,7 @@ def _pin_one_worker_releasable(wp: WordPressHandle):
     hold = wp.workdir / "pin-hold"
     hold.touch()
     started = wp.workdir / "pin-started"
-    (wp.wp_root / "cashupay-test-pin.php").write_text(
+    (wp.wp_root / "barebits-test-pin.php").write_text(
         "<?php touch(" + repr(str(started)) + ");\n"
         "$deadline = time() + " + str(PIN_SECONDS) + ";\n"
         "while (file_exists(" + repr(str(hold)) + ") && time() < $deadline) { sleep(1); }\n"
@@ -71,7 +71,7 @@ def _pin_one_worker_releasable(wp: WordPressHandle):
 
     def _hold() -> None:
         try:
-            requests.get(f"{wp.url}/cashupay-test-pin.php", timeout=PIN_SECONDS + 30)
+            requests.get(f"{wp.url}/barebits-test-pin.php", timeout=PIN_SECONDS + 30)
         except requests.RequestException:
             pass  # server torn down mid-sleep at test end — expected
 
@@ -114,15 +114,15 @@ def test_checkout_and_settlement_on_starved_hostile_host(
     # (checkout needs an invoice that can actually be paid), collect
     # credentials, wire WooCommerce. All of this is proven to survive the
     # starved pool by the onboarding suites; it is scaffolding here.
-    post_onboarding(s, wp, "cashupay_choose_mode", {"cashupay_mode": "install"})
-    body = post_onboarding(s, wp, "cashupay_run_install")
+    post_onboarding(s, wp, "barebits_choose_mode", {"barebits_mode": "install"})
+    body = post_onboarding(s, wp, "barebits_run_install")
     assert "BareBits is installed at" in body, body[:2000]
     _walk_barebits_wizard(wp, mint.url, backup_mint.url)
-    body = post_onboarding(s, wp, "cashupay_collect_provision")
+    body = post_onboarding(s, wp, "barebits_collect_provision")
     assert "Connected!" in body, body[:2000]
 
     info = install_woocommerce(wp)
-    body = post_onboarding(s, wp, "cashupay_finish", {"cashupay_discount_percent": "0"})
+    body = post_onboarding(s, wp, "barebits_finish", {"barebits_discount_percent": "0"})
     assert "WooCommerce now takes Bitcoin" in body, body[:2000]
     # The wiring must have handed the gateway the direct api.php base — the
     # canonical bare URL is exactly what starves this host at checkout.
@@ -145,7 +145,7 @@ def test_checkout_and_settlement_on_starved_hostile_host(
     # The buyer's redirect target must be the BareBits payment page — served
     # by the install, not the surrounding WordPress site's themed 404. Fetch
     # the invoice's checkoutLink the way the buyer's browser would.
-    store_id = wp_option(wp, "cashupay_store_id")
+    store_id = wp_option(wp, "barebits_store_id")
     checkout_link = _invoice(wp, store_id, invoice_id)["checkoutLink"]
     page = requests.get(checkout_link, timeout=30)
     assert page.status_code == 200, (
@@ -179,7 +179,7 @@ def test_checkout_and_settlement_on_starved_hostile_host(
     # makes every minute, driven externally here. During each drain the shop
     # host runs cron.php, the wc-api webhook handler, and the gateway's
     # verify call concurrently: exactly the three workers now free.
-    cron_key = wp_option(wp, "cashupay_cron_key")
+    cron_key = wp_option(wp, "barebits_cron_key")
     deadline = time.monotonic() + 60
     status = None
     while time.monotonic() < deadline:

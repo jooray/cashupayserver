@@ -1,6 +1,6 @@
 /**
  * Gate every admin-post.php form on WordPress not being in maintenance mode
- * — see cashupay_render_maintenance_guard(), which renders the waiting note
+ * — see barebits_render_maintenance_guard(), which renders the waiting note
  * this script keys off. 503 is the ONLY status that waits; anything else
  * (including errors a broken probe might fabricate) falls through to a plain
  * submit — this guard may delay the merchant, never trap them. A second
@@ -8,7 +8,7 @@
  * form submits exactly as before.
  */
 (function () {
-    const note = document.getElementById('cashupay-maintenance-waiting');
+    const note = document.getElementById('barebits-maintenance-waiting');
     if (!note) {
         return;
     }
@@ -24,7 +24,7 @@
             if (cleared) {
                 return; // the probe said go
             }
-            if (form.dataset.cashupayWaiting === '1') {
+            if (form.dataset.barebitsWaiting === '1') {
                 cleared = true; // second click while waiting: manual override
                 return;
             }
@@ -34,7 +34,7 @@
             // prototype: WordPress's submit_button() renders an input
             // NAMED "submit", which shadows form.submit with the element.
             e.preventDefault();
-            form.dataset.cashupayWaiting = '1';
+            form.dataset.barebitsWaiting = '1';
             const go = function () {
                 cleared = true;
                 HTMLFormElement.prototype.submit.call(form);

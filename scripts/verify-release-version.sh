@@ -6,7 +6,7 @@
 # release would ship advertising the wrong version:
 #
 #   - CASHUPAY_VERSION in includes/config.php   (standalone app + BUILD_INFO)
-#   - the `Version:` header in wordpress/cashupay.php (what WordPress displays)
+#   - the `Version:` header in wordpress/barebits.php (what WordPress displays)
 #
 # Enforcing the match here means the version bump has to be committed BEFORE
 # the tag is pushed — the tag can never silently disagree with the code.
@@ -51,13 +51,13 @@ elif [ "$config_version" != "$EXPECTED" ]; then
 fi
 
 # WordPress plugin header: `* Version: X.Y.Z` in the plugin's docblock.
-wp_version="$(grep -oE "^\s*\*?\s*Version:\s*\S+" wordpress/cashupay.php \
+wp_version="$(grep -oE "^\s*\*?\s*Version:\s*\S+" wordpress/barebits.php \
     | sed -E "s/.*Version:\s*//" | head -1)"
 if [ -z "$wp_version" ]; then
-    echo "ERROR: could not read Version header from wordpress/cashupay.php" >&2
+    echo "ERROR: could not read Version header from wordpress/barebits.php" >&2
     fail=1
 elif [ "$wp_version" != "$EXPECTED" ]; then
-    echo "ERROR: wordpress/cashupay.php Version ('$wp_version') != tag ('$EXPECTED')" >&2
+    echo "ERROR: wordpress/barebits.php Version ('$wp_version') != tag ('$EXPECTED')" >&2
     echo "       Update the 'Version:' plugin header and re-tag." >&2
     fail=1
 fi

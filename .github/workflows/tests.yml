@@ -270,8 +270,8 @@ jobs:
         # from the plugin root. Also asserts no BareBits server code leaks
         # into the GPL-only plugin zip.
         run: |
-          php scripts/verify-plugin-build.php build/cashupay \
-            cashupay.php \
+          php scripts/verify-plugin-build.php build/wp/barebits \
+            barebits.php \
             uninstall.php \
             state.php \
             installer.php \
@@ -294,7 +294,7 @@ jobs:
             assets/css/admin.css \
             assets/css/admin-embed.css
           for leaked in includes vendor setup.php admin.php api.php cron.php payment.php; do
-            if [ -e "build/cashupay/$leaked" ]; then
+            if [ -e "build/wp/barebits/$leaked" ]; then
               echo "BareBits server code leaked into the GPL plugin build: $leaked" >&2
               exit 1
             fi
@@ -305,8 +305,8 @@ jobs:
         # guidelines forbid plugins fetching executable code, so the variant
         # must never ship the install-alongside downloader.
         run: |
-          php scripts/verify-plugin-build.php build/wporg/cashupay \
-            cashupay.php \
+          php scripts/verify-plugin-build.php build/wporg/barebits \
+            barebits.php \
             uninstall.php \
             state.php \
             onboarding.php \
@@ -328,7 +328,7 @@ jobs:
             assets/css/admin.css \
             assets/css/admin-embed.css
           for leaked in installer.php includes vendor setup.php admin.php api.php cron.php payment.php; do
-            if [ -e "build/wporg/cashupay/$leaked" ]; then
+            if [ -e "build/wporg/barebits/$leaked" ]; then
               echo "forbidden file in the wordpress.org plugin build: $leaked" >&2
               exit 1
             fi
