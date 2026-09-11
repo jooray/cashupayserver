@@ -381,6 +381,77 @@ def test_request_input_reads_are_sanitized() -> None:
     )
 
 
+# Escaping calls that justify a variable inside an echo/print statement: the
+# context-appropriate WordPress escapers the plugin uses (esc_html/esc_attr/
+# esc_url and their __()/_e() translation forms via prefix match), wp_kses for
+# HTML fragments, wp_json_encode for JSON responses, and integer casts.
+OUTPUT_ESCAPE_APPROVED = (
+    "esc_html",
+    "esc_attr",
+    "esc_url",
+    "esc_js",
+    "esc_textarea",
+    "wp_kses",
+    "wp_json_encode(",
+    "absint(",
+    "(int)",
+    "number_format_i18n(",
+)
+
+# The only echo statements allowed to output a variable with no escaper,
+# keyed by (file, substring that must appear in the statement — the
+# compensating control). Extending this map is a review-level decision, not
+# a convenience: each entry documents why escaping is the wrong tool there.
+RAW_OUTPUT_ALLOWLIST = {
+    # The bridge's proxy passthrough: the install's API response body is
+    # relayed byte-for-byte under the install's own Content-Type (JSON),
+    # never rendered as this site's HTML — escaping would corrupt the API
+    # payload the WooCommerce gateway and external clients parse.
+    ("api-bridge.php", "wp_remote_retrieve_body("),
+}
+
+
+def test_output_echoes_are_escaped() -> None:
+    """wordpress.org review gate (2026-09 submission feedback, second round —
+    'Escape Late'): every echo/print statement in the plugin that outputs a
+    variable must carry a WordPress escaper in the statement — or a documented
+    entry in RAW_OUTPUT_ALLOWLIST. A tripwire against `echo $foo;` creeping
+    back in, not a proof of correctness: it checks that AN escaper appears in
+    the statement, not that every concatenated part is wrapped — that remains
+    a review-time judgement, like choosing the right esc_*() for the context."""
+    output_token = re.compile(r"\becho\b|\bprint\b|\bprintf\b|<\?=")
+    variable = re.compile(r"\$[A-Za-z_]")
+    offenders = []
+    for php in sorted((REPO_ROOT / "wordpress").glob("*.php")):
+        lines = php.read_text().splitlines()
+        i = 0
+        while i < len(lines):
+            # Strip //-comments (but not URLs' ://) so a comment mentioning
+            # echo or a variable never trips the gate.
+            text = re.sub(r"(?<!:)//.*", "", lines[i]).strip()
+            i += 1
+            if text.startswith(("*", "#", "/*")) or not output_token.search(text):
+                continue
+            # Accumulate the whole statement: echoes may wrap across lines.
+            lineno = i  # 1-based line of the echo itself
+            statement = text
+            while ";" not in statement and i < len(lines):
+                statement += " " + lines[i].strip()
+                i += 1
+            if not variable.search(statement):
+                continue  # pure literals are fine unescaped
+            if any(fn in statement for fn in OUTPUT_ESCAPE_APPROVED):
+                continue
+            if any(f == php.name and snippet in statement for f, snippet in RAW_OUTPUT_ALLOWLIST):
+                continue
+            offenders.append(f"{php.name}:{lineno} unescaped output: {statement[:120]}")
+    assert offenders == [], (
+        "echo/print of a variable without an esc_*()/wp_kses()/wp_json_encode() "
+        "in the statement (wordpress.org review rejects these):\n"
+        + "\n".join(offenders)
+    )
+
+
 def test_plugin_check_full_zip(wordpress_bare: WordPressHandle, wp_plugin_zip: Path) -> None:
     rows = _install_and_check(wordpress_bare, wp_plugin_zip)
     _assert_clean(rows)
