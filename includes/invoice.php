@@ -1511,17 +1511,30 @@ class Invoice {
         // - Not recently polled (respects minInterval)
         // - Ordered by last_polled_at (NULL first = never polled)
         // - Limited batch size to avoid hammering mint
+        //
+        // The throttle MUST be `last_polled_at <= cutoff`, never
+        // `(? - last_polled_at) >= ?`: PDO binds execute() params as TEXT,
+        // and while a bare column comparison coerces the param via the
+        // column's INTEGER affinity, an arithmetic expression has no
+        // affinity — the old shape compared integer against text, which is
+        // ALWAYS false in SQLite (integers sort below text). Every batch
+        // poller carried it, so a stamped invoice was never re-polled and
+        // cron could only settle payments made before its FIRST pass (the
+        // payment page's 2s poll masked this for open tabs). Same quirk
+        // SwapPoller::pollPending and OnchainPayments::pollPending document.
+        // The four rail pollers below follow this same pattern.
+        $cutoff = $now - $minInterval;
         $pendingInvoices = Database::fetchAll(
             "SELECT * FROM invoices
              WHERE status = 'New'
              AND quote_id IS NOT NULL
              AND expiration_time > ?
-             AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+             AND (last_polled_at IS NULL OR last_polled_at <= ?)
              ORDER BY
                  CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
                  last_polled_at ASC
              LIMIT ?",
-            [$now, $now, $minInterval, $batchLimit]
+            [$now, $cutoff, $batchLimit]
         );
 
         if (empty($pendingInvoices)) {
@@ -1620,18 +1633,21 @@ class Invoice {
         self::markExpiredInvoices();
         $now = time();
 
+        // Cutoff comparison — see pollPendingQuotes for the PDO TEXT-affinity
+        // quirk the old `(? - last_polled_at) >= ?` shape tripped over.
+        $cutoff = $now - $minInterval;
         $pending = Database::fetchAll(
             "SELECT * FROM invoices
               WHERE status = 'New'
                 AND payment_rail = 'lnaddress'
                 AND lnurl_verify_url IS NOT NULL
                 AND expiration_time > ?
-                AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+                AND (last_polled_at IS NULL OR last_polled_at <= ?)
               ORDER BY
                   CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
                   last_polled_at ASC
               LIMIT ?",
-            [$now, $now, $minInterval, $batchLimit]
+            [$now, $cutoff, $batchLimit]
         );
 
         if (empty($pending)) {
@@ -1758,18 +1774,21 @@ class Invoice {
         self::markExpiredInvoices();
         $now = time();
 
+        // Cutoff comparison — see pollPendingQuotes for the PDO TEXT-affinity
+        // quirk the old `(? - last_polled_at) >= ?` shape tripped over.
+        $cutoff = $now - $minInterval;
         $pending = Database::fetchAll(
             "SELECT * FROM invoices
               WHERE status = 'New'
                 AND payment_rail = 'nwc'
                 AND nwc_payment_hash IS NOT NULL
                 AND expiration_time > ?
-                AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+                AND (last_polled_at IS NULL OR last_polled_at <= ?)
               ORDER BY
                   CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
                   last_polled_at ASC
               LIMIT ?",
-            [$now, $now, $minInterval, $batchLimit]
+            [$now, $cutoff, $batchLimit]
         );
 
         foreach ($pending as $invoice) {
@@ -1901,18 +1920,21 @@ class Invoice {
         self::markExpiredInvoices();
         $now = time();
 
+        // Cutoff comparison — see pollPendingQuotes for the PDO TEXT-affinity
+        // quirk the old `(? - last_polled_at) >= ?` shape tripped over.
+        $cutoff = $now - $minInterval;
         $pending = Database::fetchAll(
             "SELECT * FROM invoices
               WHERE status = 'New'
                 AND payment_rail = 'strike'
                 AND strike_invoice_id IS NOT NULL
                 AND expiration_time > ?
-                AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+                AND (last_polled_at IS NULL OR last_polled_at <= ?)
               ORDER BY
                   CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
                   last_polled_at ASC
               LIMIT ?",
-            [$now, $now, $minInterval, $batchLimit]
+            [$now, $cutoff, $batchLimit]
         );
 
         foreach ($pending as $invoice) {
@@ -2067,18 +2089,21 @@ class Invoice {
         self::markExpiredInvoices();
         $now = time();
 
+        // Cutoff comparison — see pollPendingQuotes for the PDO TEXT-affinity
+        // quirk the old `(? - last_polled_at) >= ?` shape tripped over.
+        $cutoff = $now - $minInterval;
         $pending = Database::fetchAll(
             "SELECT * FROM invoices
               WHERE status = 'New'
                 AND payment_rail = 'noffer'
                 AND noffer_request_event_id IS NOT NULL
                 AND expiration_time > ?
-                AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
+                AND (last_polled_at IS NULL OR last_polled_at <= ?)
               ORDER BY
                   CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
                   last_polled_at ASC
               LIMIT ?",
-            [$now, $now, $minInterval, $batchLimit]
+            [$now, $cutoff, $batchLimit]
         );
 
         foreach ($pending as $invoice) {
