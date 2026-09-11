@@ -83,7 +83,7 @@ from fixtures.swap_stack import (  # noqa: E402
     stop_fulcrum,
     stop_payserver,
     wait_for_lightning_route,
-    ELECTRUM,
+    electrum_bin,
 )
 
 
@@ -355,7 +355,7 @@ def launch_electrum_gui(electrum: swap_stack.ElectrumProc) -> None:
     env = os.environ.copy()
     env.setdefault("APPIMAGE_EXTRACT_AND_RUN", "1")
     electrum.gui_process = subprocess.Popen(
-        [str(ELECTRUM), "--regtest", "--dir", str(electrum.datadir),
+        [str(electrum_bin()), "--regtest", "--dir", str(electrum.datadir),
          "--wallet", str(electrum.wallet_path)],
         env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )

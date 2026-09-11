@@ -163,16 +163,15 @@ ELECTRUM = FileSpec(
 # e2e inject this into the extracted Electrum AppImage as an internal plugin so
 # a wallet can act as a CLINK noffer service (see tests/fixtures/electrum.py).
 #
-# Caveat: the upstream release tag is the rolling `latest`, so the asset URL is
-# stable but its bytes can change when the plugin is rebuilt. The sha256 below
-# pins the build we tested against; if a rebuild lands upstream the download
-# will fail the checksum and this needs re-pinning (or point
-# CASHUPAY_TEST_CLINK_PLUGIN at a local zip).
+# Upstream publishes immutable versioned releases (the old rolling `latest`
+# tag is gone — its URL now 404s), so URL and sha256 stay valid until we
+# deliberately bump the version here (or point CASHUPAY_TEST_CLINK_PLUGIN at
+# a local zip).
 CLINK_PLUGIN = FileSpec(
     name="electrum-clink-plugin",
-    version="0.0.1",
-    url="https://github.com/BareBits/electrum_clink/releases/download/latest/clink-0.0.1.zip",
-    sha256="d7c61afe8545a75107ff843cfb2e2557c8b61d85de017d5fa2cc95ea11f51398",
+    version="0.0.12",
+    url="https://github.com/BareBits/electrum_clink/releases/download/v0.0.12/clink-0.0.12.zip",
+    sha256="5a9685ce270995f28bffcd2b340f23284175a8caf3ebbfc61939a902f4f331ae",
     filename="clink-plugin.zip",
     env_override="CASHUPAY_TEST_CLINK_PLUGIN",
 )
