@@ -1,6 +1,6 @@
 <?php
 /**
- * Onboarding "Start over" (cashupay_handle_reset_onboarding).
+ * Onboarding "Start over" (barebits_handle_reset_onboarding).
  *
  * The reset forgets the plugin's CONNECTION state — wiring, credentials for
  * the shop side, pairing/provision leftovers — and never touches the
@@ -20,7 +20,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 
-$T = sys_get_temp_dir() . '/cashupay_reset_' . bin2hex(random_bytes(6));
+$T = sys_get_temp_dir() . '/barebits_reset_' . bin2hex(random_bytes(6));
 mkdir($T, 0750, true);
 register_shutdown_function(function () use ($T) { @cleanup_db($T); });
 
@@ -33,28 +33,28 @@ define('ABSPATH', '/tmp/');
 
 // --- minimal WordPress stubs -------------------------------------------------
 $GLOBALS['wp_options'] = [
-    'cashupay_mode' => getenv('T_MODE') ?: 'install',
-    'cashupay_server_url' => 'http://wp.test/barebits',
-    'cashupay_store_id' => 'store_x',
-    'cashupay_api_key' => str_repeat('a', 64),
-    'cashupay_cron_key' => str_repeat('b', 64),
-    'cashupay_wired_at' => 1700000000,
-    'cashupay_discount_percent' => 3,
-    'cashupay_pairing_expected' => ['state' => 'x', 'at' => 1700000000],
-    'cashupay_provision_token' => str_repeat('c', 64),
-    'cashupay_admin_password' => 'super-secret',
-    'cashupay_sso_key' => str_repeat('d', 64),
-    'cashupay_btcpay_override_consent' => 'https://old.example',
+    'barebits_mode' => getenv('T_MODE') ?: 'install',
+    'barebits_server_url' => 'http://wp.test/barebits',
+    'barebits_store_id' => 'store_x',
+    'barebits_api_key' => str_repeat('a', 64),
+    'barebits_cron_key' => str_repeat('b', 64),
+    'barebits_wired_at' => 1700000000,
+    'barebits_discount_percent' => 3,
+    'barebits_pairing_expected' => ['state' => 'x', 'at' => 1700000000],
+    'barebits_provision_token' => str_repeat('c', 64),
+    'barebits_admin_password' => 'super-secret',
+    'barebits_sso_key' => str_repeat('d', 64),
+    'barebits_btcpay_override_consent' => 'https://old.example',
     // NOT a connection option: the reset must leave it alone (review-banner
     // dismissals are UI state, not onboarding state).
-    'cashupay_review_banner' => ['count' => 2, 'dismissed_at' => 1700000000],
+    'barebits_review_banner' => ['count' => 2, 'dismissed_at' => 1700000000],
 ];
 if ((getenv('T_MODE') ?: 'install') === 'install') {
     $GLOBALS['wp_options'] += [
-        'cashupay_install_dir' => '/var/www/barebits',
-        'cashupay_install_data_dir' => '/var/www/barebits-data-abc123def456',
-        'cashupay_install_dirname' => 'barebits',
-        // Deliberately NOT seeding cashupay_install_url: the reset must
+        'barebits_install_dir' => '/var/www/barebits',
+        'barebits_install_data_dir' => '/var/www/barebits-data-abc123def456',
+        'barebits_install_dirname' => 'barebits',
+        // Deliberately NOT seeding barebits_install_url: the reset must
         // backfill it from the connected URL before forgetting the mode.
     ];
 }
@@ -89,7 +89,7 @@ register_shutdown_function(function () {
     echo "\nSTATE:" . json_encode([
         'options' => $GLOBALS['wp_options'],
         'unscheduled' => $GLOBALS['unscheduled'],
-        'flash' => $GLOBALS['transients']['cashupay_flash'] ?? null,
+        'flash' => $GLOBALS['transients']['barebits_flash'] ?? null,
         'redirects' => $GLOBALS['redirects'],
     ]);
 });
@@ -98,7 +98,7 @@ require %s;
 require %s;
 require %s;
 
-cashupay_handle_reset_onboarding();
+barebits_handle_reset_onboarding();
 PHP,
     var_export($root . '/wordpress/state.php', true),
     var_export($root . '/wordpress/cron-integration.php', true),
@@ -129,10 +129,10 @@ function run_reset(array $env = []): array {
 
 // The connection state every reset must destroy, whatever the mode.
 const WIPED_ALWAYS = [
-    'cashupay_mode', 'cashupay_store_id', 'cashupay_api_key',
-    'cashupay_wired_at', 'cashupay_discount_percent',
-    'cashupay_pairing_expected', 'cashupay_provision_token',
-    'cashupay_btcpay_override_consent',
+    'barebits_mode', 'barebits_store_id', 'barebits_api_key',
+    'barebits_wired_at', 'barebits_discount_percent',
+    'barebits_pairing_expected', 'barebits_provision_token',
+    'barebits_btcpay_override_consent',
 ];
 
 // --- Install mode: connection wiped, the install record survives -------------
@@ -147,15 +147,15 @@ foreach (WIPED_ALWAYS as $option) {
 // The install record — location, address, the ONLY copy of the admin
 // credentials for a server that keeps running with real money, and the cron
 // key its heartbeat needs — survives.
-foreach (['cashupay_server_url', 'cashupay_install_dir', 'cashupay_install_data_dir',
-          'cashupay_install_dirname', 'cashupay_admin_password', 'cashupay_sso_key',
-          'cashupay_cron_key'] as $option) {
+foreach (['barebits_server_url', 'barebits_install_dir', 'barebits_install_data_dir',
+          'barebits_install_dirname', 'barebits_admin_password', 'barebits_sso_key',
+          'barebits_cron_key'] as $option) {
     assert_true(array_key_exists($option, $options), "{$option} survives an install-mode reset");
 }
-assert_eq('super-secret', $options['cashupay_admin_password'], 'the admin password is intact');
-assert_eq('http://wp.test/barebits', $options['cashupay_install_url'] ?? null,
+assert_eq('super-secret', $options['barebits_admin_password'], 'the admin password is intact');
+assert_eq('http://wp.test/barebits', $options['barebits_install_url'] ?? null,
     'the install\'s own URL is backfilled before the mode is forgotten');
-assert_true(array_key_exists('cashupay_review_banner', $options),
+assert_true(array_key_exists('barebits_review_banner', $options),
     'review-banner UI state survives — the reset only forgets the connection');
 
 assert_eq([], $res['state']['unscheduled'],
@@ -163,20 +163,20 @@ assert_eq([], $res['state']['unscheduled'],
 assert_eq('success', $res['state']['flash']['kind'] ?? null, 'a success notice is queued');
 assert_true(str_contains((string)($res['state']['flash']['message'] ?? ''), 'admin password stay saved'),
     'and it tells the merchant the credentials were kept');
-assert_eq(['http://wp.test/wp-admin/admin.php?page=cashupay'], $res['state']['redirects'],
+assert_eq(['http://wp.test/wp-admin/admin.php?page=barebits'], $res['state']['redirects'],
     'the merchant lands back on the onboarding page');
 
 // --- URL mode (no install): everything goes ----------------------------------
 
 $res = run_reset(['T_MODE' => 'url']);
 $options = $res['state']['options'];
-foreach (array_merge(WIPED_ALWAYS, ['cashupay_server_url', 'cashupay_admin_password',
-        'cashupay_sso_key', 'cashupay_cron_key']) as $option) {
+foreach (array_merge(WIPED_ALWAYS, ['barebits_server_url', 'barebits_admin_password',
+        'barebits_sso_key', 'barebits_cron_key']) as $option) {
     assert_false(array_key_exists($option, $options), "{$option} is deleted by a URL-mode reset");
 }
-assert_eq(['cashupay_cron_tick'], $res['state']['unscheduled'],
+assert_eq(['barebits_cron_tick'], $res['state']['unscheduled'],
     'with no install to tick, the WP-cron pinger is unscheduled');
-assert_true(array_key_exists('cashupay_review_banner', $options), 'UI state still survives');
+assert_true(array_key_exists('barebits_review_banner', $options), 'UI state still survives');
 assert_true(str_contains((string)($res['state']['flash']['message'] ?? ''), 'Nothing on the BareBits side was removed'),
     'the URL-mode flash keeps the nothing-server-side promise');
 
@@ -184,11 +184,11 @@ assert_true(str_contains((string)($res['state']['flash']['message'] ?? ''), 'Not
 
 $res = run_reset(['T_CAN_MANAGE' => '0']);
 assert_true(str_contains($res['raw'], 'WP_DIED:'), 'a non-admin is refused');
-assert_eq('install', $res['state']['options']['cashupay_mode'] ?? null, 'and nothing was deleted');
+assert_eq('install', $res['state']['options']['barebits_mode'] ?? null, 'and nothing was deleted');
 assert_eq([], $res['state']['unscheduled'], 'and the cron pinger is untouched');
 
 $res = run_reset(['T_NONCE_OK' => '0']);
 assert_true(str_contains($res['raw'], 'WP_DIED:nonce failure'), 'a bad nonce is refused');
-assert_eq('install', $res['state']['options']['cashupay_mode'] ?? null, 'and nothing was deleted');
+assert_eq('install', $res['state']['options']['barebits_mode'] ?? null, 'and nothing was deleted');
 
 echo "test_wp_onboarding_reset: ok\n";

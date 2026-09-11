@@ -84,13 +84,13 @@ if ! su -s /bin/bash www-data -c "wp --path=/var/www/html plugin is-installed bt
 fi
 
 # Install CashuPay plugin (copy from staging area)
-if [ ! -d /var/www/html/wp-content/plugins/cashupay ]; then
-    cp -a /usr/src/cashupay-plugin /var/www/html/wp-content/plugins/cashupay
-    chown -R www-data:www-data /var/www/html/wp-content/plugins/cashupay
+if [ ! -d /var/www/html/wp-content/plugins/barebits ]; then
+    cp -a /usr/src/cashupay-plugin /var/www/html/wp-content/plugins/barebits
+    chown -R www-data:www-data /var/www/html/wp-content/plugins/barebits
 fi
 
 # Activate CashuPay plugin
-su -s /bin/bash www-data -c "wp --path=/var/www/html plugin activate cashupay" 2>/dev/null || true
+su -s /bin/bash www-data -c "wp --path=/var/www/html plugin activate barebits" 2>/dev/null || true
 
 # Enable pretty permalinks (required for CashuPay rewrite rules)
 su -s /bin/bash www-data -c "wp --path=/var/www/html rewrite structure '/%postname%/' --hard" 2>/dev/null || true

@@ -3,9 +3,9 @@
 The discount math and the checkout behaviour have their own coverage (the
 pure functions in tests/php, the Store API + browser checkout journeys).
 What this module pins is how the merchant EDITS the percentage — the two
-admin surfaces that share the one cashupay_discount_percent option:
+admin surfaces that share the one barebits_discount_percent option:
 
-  - the BareBits Connection page form (admin-post cashupay_save_discount),
+  - the BareBits Connection page form (admin-post barebits_save_discount),
     driven over HTTP exactly as the browser submits it;
   - the field injected into the BTCPay gateway's own WooCommerce settings
     form, whose value must bridge into the shared option and never persist
@@ -35,11 +35,11 @@ def _mark_wired(wp: WordPressHandle) -> None:
     discount form). The dead server URL proves the form never talks to the
     payserver."""
     for name, value in {
-        "cashupay_mode": "url",
-        "cashupay_server_url": DEAD_SERVER_URL,
-        "cashupay_store_id": "teststore",
-        "cashupay_api_key": "a" * 64,
-        "cashupay_wired_at": "1",
+        "barebits_mode": "url",
+        "barebits_server_url": DEAD_SERVER_URL,
+        "barebits_store_id": "teststore",
+        "barebits_api_key": "a" * 64,
+        "barebits_wired_at": "1",
     }.items():
         wp.wp_cli("option", "update", name, value, check=False)
 
@@ -58,60 +58,60 @@ def test_connection_page_discount_form_saves_and_validates(wordpress: WordPressH
     assert "Bitcoin discount" in body, body[-2000:]
 
     # A fractional percent saves, normalized, and the flash advertises it.
-    body = post_onboarding(s, wp, "cashupay_save_discount",
-                           {"cashupay_discount_percent": "7.25"})
+    body = post_onboarding(s, wp, "barebits_save_discount",
+                           {"barebits_discount_percent": "7.25"})
     assert "7.25% off" in body, body[-2000:]
-    assert wp_option(wp, "cashupay_discount_percent") == "7.25"
+    assert wp_option(wp, "barebits_discount_percent") == "7.25"
 
     # Trailing zeros are trimmed to the canonical form.
-    post_onboarding(s, wp, "cashupay_save_discount",
-                    {"cashupay_discount_percent": "3.50"})
-    assert wp_option(wp, "cashupay_discount_percent") == "3.5"
+    post_onboarding(s, wp, "barebits_save_discount",
+                    {"barebits_discount_percent": "3.50"})
+    assert wp_option(wp, "barebits_discount_percent") == "3.5"
 
     # An invalid value is refused with an error and the old value kept.
-    body = post_onboarding(s, wp, "cashupay_save_discount",
-                           {"cashupay_discount_percent": "150"})
+    body = post_onboarding(s, wp, "barebits_save_discount",
+                           {"barebits_discount_percent": "150"})
     assert "between 0 and 100" in body, body[-2000:]
-    assert wp_option(wp, "cashupay_discount_percent") == "3.5"
+    assert wp_option(wp, "barebits_discount_percent") == "3.5"
 
     # Empty means "no discount", not an error.
-    body = post_onboarding(s, wp, "cashupay_save_discount",
-                           {"cashupay_discount_percent": ""})
+    body = post_onboarding(s, wp, "barebits_save_discount",
+                           {"barebits_discount_percent": ""})
     assert "no discount is applied" in body, body[-2000:]
-    assert wp_option(wp, "cashupay_discount_percent") == "0"
+    assert wp_option(wp, "barebits_discount_percent") == "0"
 
 
 def test_gateway_settings_field_bridges_to_the_shared_option(wordpress: WordPressHandle) -> None:
     wp = wordpress
-    wp.wp_cli("option", "update", "cashupay_discount_percent", "2.5", check=False)
+    wp.wp_cli("option", "update", "barebits_discount_percent", "2.5", check=False)
 
     # The injected field renders with the CURRENT shared value as its default
     # (the gateway's stored settings never hold the key, so the settings API
     # falls back to this default when painting the form).
     fields = _eval_json(
-        wp, "echo json_encode(cashupay_inject_gateway_discount_field([]));"
+        wp, "echo json_encode(barebits_inject_gateway_discount_field([]));"
     )
-    assert fields["cashupay_discount_percent"]["default"] == "2.5", fields
+    assert fields["barebits_discount_percent"]["default"] == "2.5", fields
 
     # Saving the gateway form bridges the posted value into the shared option
     # and strips the key from what WooCommerce persists.
     settings = _eval_json(
         wp,
-        "echo json_encode(cashupay_extract_gateway_discount_field("
-        "['title' => 'T', 'cashupay_discount_percent' => '4.75']));",
+        "echo json_encode(barebits_extract_gateway_discount_field("
+        "['title' => 'T', 'barebits_discount_percent' => '4.75']));",
     )
     assert settings == {"title": "T"}, settings
-    assert wp_option(wp, "cashupay_discount_percent") == "4.75"
+    assert wp_option(wp, "barebits_discount_percent") == "4.75"
 
     # An unusable posted value is stripped but NOT saved — the previous
     # percent survives a mangled form submit.
     settings = _eval_json(
         wp,
-        "echo json_encode(cashupay_extract_gateway_discount_field("
-        "['title' => 'T', 'cashupay_discount_percent' => '999']));",
+        "echo json_encode(barebits_extract_gateway_discount_field("
+        "['title' => 'T', 'barebits_discount_percent' => '999']));",
     )
     assert settings == {"title": "T"}, settings
-    assert wp_option(wp, "cashupay_discount_percent") == "4.75"
+    assert wp_option(wp, "barebits_discount_percent") == "4.75"
 
 
 def test_gateway_settings_form_shows_stored_title_and_injected_field(wordpress: WordPressHandle) -> None:
@@ -121,8 +121,8 @@ def test_gateway_settings_form_shows_stored_title_and_injected_field(wordpress: 
     shared option's value."""
     wp = wordpress
     install_woocommerce(wp)
-    wp.wp_cli("eval", "cashupay_apply_btcpay_gateway_branding();")
-    wp.wp_cli("option", "update", "cashupay_discount_percent", "4", check=False)
+    wp.wp_cli("eval", "barebits_apply_btcpay_gateway_branding();")
+    wp.wp_cli("option", "update", "barebits_discount_percent", "4", check=False)
 
     s = wp_login(wp)
     r = s.get(
@@ -143,7 +143,7 @@ def test_gateway_settings_form_shows_stored_title_and_injected_field(wordpress: 
         "the settings form must render the stored title, never the "
         "runtime-suffixed one — saving it back would bake the suffix in"
     )
-    assert field_value("cashupay_discount_percent") == "4"
+    assert field_value("barebits_discount_percent") == "4"
 
     # And the customer-facing read (any non-admin context) still advertises.
     filtered = _eval_json(
@@ -162,7 +162,7 @@ def test_gateway_settings_form_shows_stored_title_and_injected_field(wordpress: 
         "$gw->update_option('enabled', 'yes');",
     )
     stored = _eval_json(
-        wp, "echo json_encode(cashupay_gateway_stored_settings());"
+        wp, "echo json_encode(barebits_gateway_stored_settings());"
     )
     assert stored["title"] == "BareBits (Bitcoin + Lightning)", (
         "a WC_Settings_API::update_option pass must never bake the runtime "

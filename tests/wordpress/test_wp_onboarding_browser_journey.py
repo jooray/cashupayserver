@@ -49,7 +49,7 @@ from fixtures.wordpress import (
 
 pytestmark = [pytest.mark.wordpress, pytest.mark.ui]
 
-# The wizard iframe on the provision step (see cashupay_render_step_provision).
+# The wizard iframe on the provision step (see barebits_render_step_provision).
 WIZARD_IFRAME = "iframe[title='BareBits setup']"
 
 
@@ -61,15 +61,15 @@ def _login(page, wp: WordPressHandle, redirect_to: str) -> None:
 
 
 def _open_onboarding(page, wp: WordPressHandle) -> None:
-    page.goto(f"{wp.url}/wp-admin/admin.php?page=cashupay")
+    page.goto(f"{wp.url}/wp-admin/admin.php?page=barebits")
     page.wait_for_selector("h1:has-text('BareBits')")
 
 
 def _choose_install_and_run(page, wp: WordPressHandle) -> str:
     """Chooser (checks shown inline) -> confirmation -> run the installer.
     Returns the flash text."""
-    page.wait_for_selector("#cashupay-mode-install")
-    page.check("#cashupay-mode-install")
+    page.wait_for_selector("#barebits-mode-install")
+    page.check("#barebits-mode-install")
     page.click("#submit")
 
     page.wait_for_selector("h2:has-text('Install BareBits alongside WordPress')")
@@ -147,17 +147,17 @@ def _expand_wizard(page) -> None:
     """The provision step opens the embedded wizard in the full-viewport view
     BY DEFAULT (no click — everything except the admin menu + bar); the exit
     control must collapse it and the expand button must bring it back."""
-    page.wait_for_selector("#cashupay-wizard-shell.cashupay-expanded")
-    shell = page.locator("#cashupay-wizard-shell")
+    page.wait_for_selector("#barebits-wizard-shell.barebits-expanded")
+    shell = page.locator("#barebits-wizard-shell")
     # position:fixed makes it viewport-sized; sanity-check it actually grew
     # past the 720px column the step normally renders in.
     box = shell.bounding_box()
     assert box is not None and box["width"] > 800, box
-    page.click("#cashupay-wizard-exit")
-    assert "cashupay-expanded" not in (shell.get_attribute("class") or "")
+    page.click("#barebits-wizard-exit")
+    assert "barebits-expanded" not in (shell.get_attribute("class") or "")
     # Leave it expanded for the walk — the way a merchant would use it.
-    page.click("#cashupay-wizard-expand")
-    assert "cashupay-expanded" in (shell.get_attribute("class") or "")
+    page.click("#barebits-wizard-expand")
+    assert "barebits-expanded" in (shell.get_attribute("class") or "")
 
 
 def _finish_wizard_via_return_during_wp_maintenance(page, wp: WordPressHandle) -> None:
@@ -210,8 +210,8 @@ def _assert_dashboard_reachable(page, wp: WordPressHandle) -> None:
     into the admin at all. Both journeys assert this so the friendly host
     pins the SSO handoff too.
     """
-    page.goto(f"{wp.url}/wp-admin/admin.php?page=cashupay")
-    frame = page.frame_locator("#cashupay-admin-frame")
+    page.goto(f"{wp.url}/wp-admin/admin.php?page=barebits")
+    frame = page.frame_locator("#barebits-admin-frame")
     # Signed in automatically (SSO): the lock screen must be hidden — if the
     # iframe landed on WordPress's 404 neither selector ever appears.
     frame.locator("#lock-screen.hidden").wait_for(state="attached")
@@ -249,15 +249,15 @@ def test_full_merchant_journey_in_browser(wordpress_bare_install, wp_plugin_zip,
 
     # Wire WooCommerce (no discount) and land fully configured.
     page.wait_for_selector("h2:has-text('connect WooCommerce')")
-    page.fill("#cashupay-discount", "0")
+    page.fill("#barebits-discount", "0")
     page.click("#submit")
     page.wait_for_selector(".notice p:has-text('WooCommerce now takes Bitcoin')")
 
-    assert wp_option(wp, "cashupay_store_id") != ""
+    assert wp_option(wp, "barebits_store_id") != ""
     assert wp_option(wp, "btcpay_gf_url") == wp.barebits_gateway_url
-    assert wp_option(wp, "cashupay_wired_at") != ""
+    assert wp_option(wp, "barebits_wired_at") != ""
     # The one-time provisioning token is spent.
-    assert wp_option(wp, "cashupay_provision_token") == ""
+    assert wp_option(wp, "barebits_provision_token") == ""
 
     _assert_dashboard_reachable(page, wp)
 
@@ -269,14 +269,14 @@ def test_full_journey_on_rewrite_hostile_host(wordpress_hostile_host, page) -> N
     replays them against the install's api.php — so the routing probe (which
     rides the canonical /api/v1 URL) must stay quiet, the wizard must walk
     start to finish, and the WooCommerce wiring (whose webhook registration
-    goes to the install's api.php directly — see cashupay_api_transport_url)
+    goes to the install's api.php directly — see barebits_api_transport_url)
     must complete end to end."""
     wp = wordpress_hostile_host
     page.set_default_timeout(60_000)
 
     install_woocommerce(wp)
 
-    _login(page, wp, f"{wp.url}/wp-admin/admin.php?page=cashupay")
+    _login(page, wp, f"{wp.url}/wp-admin/admin.php?page=barebits")
     page.wait_for_selector("h1:has-text('BareBits')")
     flash = _choose_install_and_run(page, wp)
     # The install-time probe goes to the install's api.php directly — a real
@@ -292,20 +292,20 @@ def test_full_journey_on_rewrite_hostile_host(wordpress_hostile_host, page) -> N
     # friendly-host journey drives that link). The wizard opens full screen
     # by default, so a merchant reaching for the fallback form must exit
     # full screen first — the form sits under the fixed overlay.
-    page.click("#cashupay-wizard-exit")
+    page.click("#barebits-wizard-exit")
     _collect_credentials(page)
-    assert wp_option(wp, "cashupay_store_id") != ""
-    assert wp_option(wp, "cashupay_cron_key") != ""
+    assert wp_option(wp, "barebits_store_id") != ""
+    assert wp_option(wp, "barebits_cron_key") != ""
 
     # Wire WooCommerce: registering the invoice webhook is a live Greenfield
     # call to the install (via api.php's query-path transport — one loopback
     # deep, no bridge nesting).
     page.wait_for_selector("h2:has-text('connect WooCommerce')")
-    page.fill("#cashupay-discount", "0")
+    page.fill("#barebits-discount", "0")
     page.click("#submit")
     page.wait_for_selector(".notice p:has-text('WooCommerce now takes Bitcoin')")
     assert wp_option(wp, "btcpay_gf_url") == wp.barebits_gateway_url
-    assert wp_option(wp, "cashupay_wired_at") != ""
+    assert wp_option(wp, "barebits_wired_at") != ""
 
     # The whole point of this host shape: the dashboard must render even
     # though every PATH_INFO URL under /barebits 404s into WordPress.

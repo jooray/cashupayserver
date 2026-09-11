@@ -143,8 +143,8 @@ jobs:
         # The plugin is GPL WordPress glue only — verify no BareBits server
         # code (includes/, vendor/, entry points) leaks into the zip.
         run: |
-          php scripts/verify-plugin-build.php build/cashupay \
-            cashupay.php \
+          php scripts/verify-plugin-build.php build/wp/barebits \
+            barebits.php \
             uninstall.php \
             state.php \
             installer.php \
@@ -160,7 +160,7 @@ jobs:
             assets/js/discount-classic.js \
             assets/js/discount-blocks.js
           for leaked in includes vendor setup.php admin.php api.php cron.php payment.php; do
-            if [ -e "build/cashupay/$leaked" ]; then
+            if [ -e "build/wp/barebits/$leaked" ]; then
               echo "BareBits server code leaked into the GPL plugin build: $leaked" >&2
               exit 1
             fi
@@ -171,8 +171,8 @@ jobs:
         # guidelines forbid plugins fetching executable code, so the variant
         # must never ship the install-alongside downloader.
         run: |
-          php scripts/verify-plugin-build.php build/wporg/cashupay \
-            cashupay.php \
+          php scripts/verify-plugin-build.php build/wporg/barebits \
+            barebits.php \
             uninstall.php \
             state.php \
             onboarding.php \
@@ -187,7 +187,7 @@ jobs:
             assets/js/discount-classic.js \
             assets/js/discount-blocks.js
           for leaked in installer.php includes vendor setup.php admin.php api.php cron.php payment.php; do
-            if [ -e "build/wporg/cashupay/$leaked" ]; then
+            if [ -e "build/wporg/barebits/$leaked" ]; then
               echo "forbidden file in the wordpress.org plugin build: $leaked" >&2
               exit 1
             fi
@@ -217,7 +217,7 @@ jobs:
         # Rename the fixed build outputs to version-stamped asset names. The
         # ZIP internals are untouched: barebits.zip extracts to barebits/
         # (the updater hardcodes that), barebits_wordpress_plugin.zip
-        # contains cashupay/ (the WP plugin slug), and the Windows zip
+        # contains barebits/ (the WP plugin slug), and the Windows zip
         # extracts to BareBits/.
         run: |
           tag="$TAG"

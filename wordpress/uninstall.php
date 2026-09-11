@@ -17,9 +17,9 @@ if (!defined('WP_UNINSTALL_PLUGIN')) {
 
 // Reset BTCPay gateway options only if they point at the server this plugin
 // connected — a hand-configured BTCPay connection is not ours to remove.
-$cashupay_server = rtrim((string) get_option('cashupay_server_url', ''), '/');
-$cashupay_btcpay_url = (string) get_option('btcpay_gf_url', '');
-if ($cashupay_server !== '' && $cashupay_btcpay_url !== '' && strpos($cashupay_btcpay_url, $cashupay_server) === 0) {
+$barebits_server = rtrim((string) get_option('barebits_server_url', ''), '/');
+$barebits_btcpay_url = (string) get_option('btcpay_gf_url', '');
+if ($barebits_server !== '' && $barebits_btcpay_url !== '' && strpos($barebits_btcpay_url, $barebits_server) === 0) {
     delete_option('btcpay_gf_url');
     delete_option('btcpay_gf_api_key');
     delete_option('btcpay_gf_store_id');
@@ -27,35 +27,35 @@ if ($cashupay_server !== '' && $cashupay_btcpay_url !== '' && strpos($cashupay_b
 }
 
 // Stop the WP-cron pinger.
-$cashupay_timestamp = wp_next_scheduled('cashupay_cron_tick');
-if ($cashupay_timestamp) {
-    wp_unschedule_event($cashupay_timestamp, 'cashupay_cron_tick');
+$barebits_timestamp = wp_next_scheduled('barebits_cron_tick');
+if ($barebits_timestamp) {
+    wp_unschedule_event($barebits_timestamp, 'barebits_cron_tick');
 }
 
 // The plugin's own state.
-$cashupay_options = [
-    'cashupay_mode',
-    'cashupay_server_url',
-    'cashupay_store_id',
-    'cashupay_api_key',
-    'cashupay_cron_key',
-    'cashupay_cron_backoff_until',
-    'cashupay_cron_last_ok',
-    'cashupay_wired_at',
-    'cashupay_discount_percent',
-    'cashupay_pairing_expected',
-    'cashupay_provision_token',
-    'cashupay_admin_password',
-    'cashupay_sso_key',
-    'cashupay_install_dir',
-    'cashupay_install_url',
-    'cashupay_install_data_dir',
-    'cashupay_install_dirname',
-    'cashupay_gateway_icon_attachment_id',
+$barebits_options = [
+    'barebits_mode',
+    'barebits_server_url',
+    'barebits_store_id',
+    'barebits_api_key',
+    'barebits_cron_key',
+    'barebits_cron_backoff_until',
+    'barebits_cron_last_ok',
+    'barebits_wired_at',
+    'barebits_discount_percent',
+    'barebits_pairing_expected',
+    'barebits_provision_token',
+    'barebits_admin_password',
+    'barebits_sso_key',
+    'barebits_install_dir',
+    'barebits_install_url',
+    'barebits_install_data_dir',
+    'barebits_install_dirname',
+    'barebits_gateway_icon_attachment_id',
     // A future reinstall must re-warn about replacing a BTCPay connection,
     // not inherit a stale approval.
-    'cashupay_btcpay_override_consent',
-    'cashupay_review_banner',
+    'barebits_btcpay_override_consent',
+    'barebits_review_banner',
 ];
 
 // When this plugin installed a BareBits server alongside WordPress, that
@@ -65,23 +65,23 @@ $cashupay_options = [
 // would lock the merchant out of their own wallet UI. They survive the
 // uninstall deliberately, and a reinstall of this plugin offers to reconnect
 // from them. A site with no alongside install keeps nothing.
-if ((string) get_option('cashupay_install_dir', '') !== '') {
-    $cashupay_options = array_values(array_diff($cashupay_options, [
-        'cashupay_server_url',
-        'cashupay_install_dir',
-        'cashupay_install_url',
-        'cashupay_install_data_dir',
-        'cashupay_install_dirname',
-        'cashupay_admin_password',
-        'cashupay_sso_key',
+if ((string) get_option('barebits_install_dir', '') !== '') {
+    $barebits_options = array_values(array_diff($barebits_options, [
+        'barebits_server_url',
+        'barebits_install_dir',
+        'barebits_install_url',
+        'barebits_install_data_dir',
+        'barebits_install_dirname',
+        'barebits_admin_password',
+        'barebits_sso_key',
         // The heartbeat key too: the install has no crontab of its own and
         // the handshake that minted this key was one-time. The pinger stops
         // with the plugin (the event above is unscheduled), but a reinstall
         // resumes it from this key at activation.
-        'cashupay_cron_key',
+        'barebits_cron_key',
     ]));
 }
 
-foreach ($cashupay_options as $cashupay_option) {
-    delete_option($cashupay_option);
+foreach ($barebits_options as $barebits_option) {
+    delete_option($barebits_option);
 }

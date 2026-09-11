@@ -33,6 +33,9 @@ if (!function_exists('__')) {
 if (!function_exists('esc_html__')) {
     function esc_html__($text, $domain = 'default') { return htmlspecialchars((string) $text, ENT_QUOTES); }
 }
+if (!function_exists('wp_json_encode')) {
+    function wp_json_encode($data, $options = 0, $depth = 512) { return json_encode($data, $options, $depth); }
+}
 if (!function_exists('wp_delete_file')) {
     function wp_delete_file($file) { @unlink($file); }
 }

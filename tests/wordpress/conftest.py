@@ -84,10 +84,10 @@ def testing_release_server(standalone_zip: Path) -> Iterator[ReleaseServer]:
 
 @pytest.fixture
 def wordpress_bare() -> Iterator[WordPressHandle]:
-    """Fresh WordPress install with NO cashupay plugin, so a test can install
+    """Fresh WordPress install with NO barebits plugin, so a test can install
     the built zip itself. Function-scoped — each test gets its own WP root."""
     workdir = SESSION_TMP / f"wp-bare-{uuid.uuid4().hex[:8]}"
-    handle = start_wordpress(workdir, install_cashupay=False)
+    handle = start_wordpress(workdir, install_barebits=False)
     yield handle
     stop_wordpress(handle)
 
@@ -99,7 +99,7 @@ def wordpress_bare_install(release_server: ReleaseServer) -> Iterator[WordPressH
     walk the install-alongside flow the way a real merchant would."""
     workdir = SESSION_TMP / f"wp-bare-inst-{uuid.uuid4().hex[:8]}"
     handle = start_wordpress(
-        workdir, install_cashupay=False, release_api_base=release_server.api_base
+        workdir, install_barebits=False, release_api_base=release_server.api_base
     )
     _allow_nonstandard_ports(handle)
     yield handle
@@ -176,7 +176,7 @@ def _allow_nonstandard_ports(wp: WordPressHandle) -> None:
     # http_request_args (not http_request_reject_unsafe_urls — that filter only
     # sets the DEFAULT, and wp_safe_remote_get overrides it with an explicit
     # true) is the hook that can actually turn validation off per request.
-    (mu / "cashupay-test.php").write_text(
+    (mu / "barebits-test.php").write_text(
         "<?php add_filter('http_request_args', function ($args) {\n"
         "    $args['reject_unsafe_urls'] = false;\n"
         "    return $args;\n"
@@ -221,7 +221,7 @@ def wp_login(wp: WordPressHandle) -> requests.Session:
 
 def onboarding_page(s: requests.Session, wp: WordPressHandle) -> str:
     """GET the BareBits wp-admin page (onboarding flow or status panel)."""
-    r = s.get(f"{wp.url}/wp-admin/admin.php", params={"page": "cashupay"}, timeout=60)
+    r = s.get(f"{wp.url}/wp-admin/admin.php", params={"page": "barebits"}, timeout=60)
     assert r.status_code == 200, f"onboarding page -> {r.status_code}: {r.text[:300]}"
     return r.text
 

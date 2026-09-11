@@ -3,33 +3,33 @@
  * BareBits plugin — configuration state and the HTTP client for talking to
  * the BareBits server.
  *
- * Everything the plugin knows lives in WordPress options with the cashupay_
+ * Everything the plugin knows lives in WordPress options with the barebits_
  * prefix; the BareBits server is only ever reached over HTTP with the
  * BTCPay-compatible `Authorization: token …` scheme. License: GPLv2 or later.
  *
  * Options:
- *   cashupay_mode              'url' (existing server) | 'install' (alongside)
- *   cashupay_server_url        BareBits base URL (the BTCPay "server URL")
- *   cashupay_store_id          store id on that server
- *   cashupay_install_dir       install mode: absolute path of the install
- *   cashupay_install_url       install mode: the alongside install's own base
+ *   barebits_mode              'url' (existing server) | 'install' (alongside)
+ *   barebits_server_url        BareBits base URL (the BTCPay "server URL")
+ *   barebits_store_id          store id on that server
+ *   barebits_install_dir       install mode: absolute path of the install
+ *   barebits_install_url       install mode: the alongside install's own base
  *                              URL — survives mode changes so the cron
  *                              heartbeat can keep finding the install
- *   cashupay_install_data_dir  install mode: absolute path of the data dir
- *   cashupay_provision_token   install mode: one-time token (deleted on use)
- *   cashupay_admin_password    install mode: the BareBits admin password the
+ *   barebits_install_data_dir  install mode: absolute path of the data dir
+ *   barebits_provision_token   install mode: one-time token (deleted on use)
+ *   barebits_admin_password    install mode: the BareBits admin password the
  *                              installer generated (account pre-seeded from
  *                              its hash; revealable on the Connection page)
- *   cashupay_sso_key           install mode: key that mints one-time BareBits
- *                              sign-in tokens (see cashupay_sso_login_url)
- *   cashupay_cron_key          install mode: key for the WP-cron pinger
- *   cashupay_cron_last_ok      install mode: unix ts of the last successful
+ *   barebits_sso_key           install mode: key that mints one-time BareBits
+ *                              sign-in tokens (see barebits_sso_login_url)
+ *   barebits_cron_key          install mode: key for the WP-cron pinger
+ *   barebits_cron_last_ok      install mode: unix ts of the last successful
  *                              cron ping (drives the stale-heartbeat notice)
- *   cashupay_wired_at          unix ts when WooCommerce wiring completed
- *   cashupay_discount_percent  merchant's Bitcoin-checkout discount, percent
+ *   barebits_wired_at          unix ts when WooCommerce wiring completed
+ *   barebits_discount_percent  merchant's Bitcoin-checkout discount, percent
  *                              0-100 with up to two decimals, stored as the
  *                              normalized string payment-discount.php writes
- *   cashupay_pairing_expected  unix ts while a pairing redirect is in flight
+ *   barebits_pairing_expected  unix ts while a pairing redirect is in flight
  */
 
 if (!defined('ABSPATH')) {
@@ -42,25 +42,25 @@ if (!defined('ABSPATH')) {
  * plugins fetching executable code), so every install-related UI element and
  * POST handler gates on this; the GitHub distribution ships the full flow.
  */
-function cashupay_installer_available(): bool {
-    return function_exists('cashupay_run_install');
+function barebits_installer_available(): bool {
+    return function_exists('barebits_run_install');
 }
 
 /** Chosen onboarding mode: 'url', 'install', or '' while undecided. */
-function cashupay_mode(): string {
-    $mode = (string) get_option('cashupay_mode', '');
+function barebits_mode(): string {
+    $mode = (string) get_option('barebits_mode', '');
     return in_array($mode, ['url', 'install'], true) ? $mode : '';
 }
 
 /** The BareBits server base URL (no trailing slash), or '' if not set yet. */
-function cashupay_server_url(): string {
-    return rtrim((string) get_option('cashupay_server_url', ''), '/');
+function barebits_server_url(): string {
+    return rtrim((string) get_option('barebits_server_url', ''), '/');
 }
 
 /**
  * The base URL of the alongside install this plugin provisioned (no trailing
  * slash), or '' when none exists. Deliberately distinct from
- * cashupay_server_url: the CONNECTED server can change — "Start over", then
+ * barebits_server_url: the CONNECTED server can change — "Start over", then
  * reconnecting the install by URL, or connecting some other server entirely —
  * while the install this plugin promised a cron heartbeat to (it was
  * provisioned with its own cron screen skipped) keeps running at its own
@@ -68,11 +68,11 @@ function cashupay_server_url(): string {
  * the connected URL while the plugin is still in install mode, when the two
  * are the same thing by construction.
  */
-function cashupay_install_url(): string {
-    if ((string) get_option('cashupay_install_dir', '') === '') {
+function barebits_install_url(): string {
+    if ((string) get_option('barebits_install_dir', '') === '') {
         return '';
     }
-    $url = rtrim((string) get_option('cashupay_install_url', ''), '/');
+    $url = rtrim((string) get_option('barebits_install_url', ''), '/');
     if ($url !== '') {
         return $url;
     }
@@ -82,19 +82,19 @@ function cashupay_install_url(): string {
     // surviving connected URL is still the best available answer, but only
     // install mode proves it — return it without persisting the guess. In
     // URL mode the connected server may be a different host entirely.
-    if (cashupay_mode() === 'install') {
-        $url = cashupay_server_url();
+    if (barebits_mode() === 'install') {
+        $url = barebits_server_url();
         if ($url !== '') {
-            update_option('cashupay_install_url', $url, false);
+            update_option('barebits_install_url', $url, false);
         }
         return $url;
     }
-    return cashupay_mode() === '' ? cashupay_server_url() : '';
+    return barebits_mode() === '' ? barebits_server_url() : '';
 }
 
 /** Whether onboarding finished: a server is connected and WooCommerce wired. */
-function cashupay_is_configured(): bool {
-    return cashupay_server_url() !== '' && (int) get_option('cashupay_wired_at', 0) > 0;
+function barebits_is_configured(): bool {
+    return barebits_server_url() !== '' && (int) get_option('barebits_wired_at', 0) > 0;
 }
 
 /**
@@ -106,7 +106,7 @@ function cashupay_is_configured(): bool {
  * origin, not the hostname alone: a different service on another port of
  * the same host is NOT this site and gets verified like any remote server.
  */
-function cashupay_is_same_host_url(string $url): bool {
+function barebits_is_same_host_url(string $url): bool {
     $target = wp_parse_url($url);
     $self = wp_parse_url(site_url('/'));
     if (!is_array($target) || !is_array($self) || empty($target['host']) || empty($self['host'])) {
@@ -142,11 +142,11 @@ function cashupay_is_same_host_url(string $url): bool {
  * (URL mode, remote) keeps the canonical URL its operator's setup proved.
  *
  * Pure (no WordPress calls) so tests/php can pin the selection without a
- * WordPress install; cashupay_api_url() is the live wrapper. $server and
+ * WordPress install; barebits_api_url() is the live wrapper. $server and
  * $installUrl arrive normalized (no trailing slash) from
- * cashupay_server_url() / cashupay_install_url().
+ * barebits_server_url() / barebits_install_url().
  */
-function cashupay_api_transport_url(string $server, string $path, string $installUrl): string {
+function barebits_api_transport_url(string $server, string $path, string $installUrl): string {
     if ($server === '' || $installUrl === '' || $server !== $installUrl) {
         return $server . $path;
     }
@@ -163,8 +163,8 @@ function cashupay_api_transport_url(string $server, string $path, string $instal
 }
 
 /** The live wrapper: transport decision against the recorded install. */
-function cashupay_api_url(string $server, string $path): string {
-    return cashupay_api_transport_url($server, $path, cashupay_install_url());
+function barebits_api_url(string $server, string $path): string {
+    return barebits_api_transport_url($server, $path, barebits_install_url());
 }
 
 /**
@@ -183,16 +183,16 @@ function cashupay_api_url(string $server, string $path): string {
  * per-site worker pools (Local WP) starve on that chain at checkout: the
  * invoice-creation call dies as a bare timeout and every single order fails
  * with the generic "payment could not be started" error. Same worker math,
- * same fix as cashupay_api_transport_url() gave the plugin's own calls.
+ * same fix as barebits_api_transport_url() gave the plugin's own calls.
  *
  * Any other server (URL mode, remote) keeps the canonical URL its
  * operator's setup proved.
  *
  * Pure (no WordPress calls) so tests/php can pin the selection;
- * cashupay_gateway_server_url() is the live wrapper. $server and
+ * barebits_gateway_server_url() is the live wrapper. $server and
  * $installUrl arrive normalized (no trailing slash).
  */
-function cashupay_gateway_base_url(string $server, string $installUrl): string {
+function barebits_gateway_base_url(string $server, string $installUrl): string {
     if ($server === '' || $installUrl === '' || $server !== $installUrl) {
         return $server;
     }
@@ -200,8 +200,8 @@ function cashupay_gateway_base_url(string $server, string $installUrl): string {
 }
 
 /** The live wrapper: gateway base decision against the recorded install. */
-function cashupay_gateway_server_url(): string {
-    return cashupay_gateway_base_url(cashupay_server_url(), cashupay_install_url());
+function barebits_gateway_server_url(): string {
+    return barebits_gateway_base_url(barebits_server_url(), barebits_install_url());
 }
 
 /**
@@ -209,7 +209,7 @@ function cashupay_gateway_server_url(): string {
  * require the isCashuPayServer marker. Returns ['ok' => true, 'version' => …]
  * or ['ok' => false, 'message' => operator-facing reason].
  */
-function cashupay_probe_server(string $url): array {
+function barebits_probe_server(string $url): array {
     $url = rtrim(trim($url), '/');
     if ($url === '' || !preg_match('#^https?://#i', $url)) {
         return ['ok' => false, 'message' => 'Enter the full URL, starting with https:// (or http:// for a local server).'];
@@ -217,11 +217,11 @@ function cashupay_probe_server(string $url): array {
     // Reconnecting the alongside install goes through api.php directly, like
     // every other plugin call to it — the canonical /api/v1 form would nest
     // through the bridge on rewrite-hostile hosts (see
-    // cashupay_api_transport_url).
-    $response = wp_remote_get(cashupay_api_url($url, '/api/v1/server/info'), [
+    // barebits_api_transport_url).
+    $response = wp_remote_get(barebits_api_url($url, '/api/v1/server/info'), [
         'timeout' => 10,
         'redirection' => 3,
-        'sslverify' => !cashupay_is_same_host_url($url),
+        'sslverify' => !barebits_is_same_host_url($url),
     ]);
     if (is_wp_error($response)) {
         return ['ok' => false, 'message' => 'Could not reach the server: ' . $response->get_error_message()];
@@ -241,15 +241,15 @@ function cashupay_probe_server(string $url): array {
  * available (URL mode, setup not finished, install unreachable) — callers
  * fall back to the plain admin URL, where BareBits shows its own login.
  */
-function cashupay_sso_login_url(): ?string {
-    $server = cashupay_server_url();
-    $ssoKey = (string) get_option('cashupay_sso_key', '');
+function barebits_sso_login_url(): ?string {
+    $server = barebits_server_url();
+    $ssoKey = (string) get_option('barebits_sso_key', '');
     if ($server === '' || $ssoKey === '') {
         return null;
     }
     $response = wp_remote_post($server . '/sso.php', [
         'timeout' => 10,
-        'sslverify' => !cashupay_is_same_host_url($server),
+        'sslverify' => !barebits_is_same_host_url($server),
         'headers' => ['X-SSO-KEY' => $ssoKey],
     ]);
     if (is_wp_error($response) || (int) wp_remote_retrieve_response_code($response) !== 200) {
@@ -267,8 +267,8 @@ function cashupay_sso_login_url(): ?string {
  * API. $path is relative to the API base (e.g. '/api/v1/stores/x/webhooks').
  * Returns ['code' => int, 'body' => decoded array|null, 'error' => string|null].
  */
-function cashupay_api_request(string $method, string $path, ?array $body = null, ?string $apiKey = null): array {
-    $server = cashupay_server_url();
+function barebits_api_request(string $method, string $path, ?array $body = null, ?string $apiKey = null): array {
+    $server = barebits_server_url();
     if ($server === '') {
         return ['code' => 0, 'body' => null, 'error' => 'No BareBits server configured.'];
     }
@@ -279,7 +279,7 @@ function cashupay_api_request(string $method, string $path, ?array $body = null,
         'method' => $method,
         'timeout' => 15,
         'redirection' => 2,
-        'sslverify' => !cashupay_is_same_host_url($server),
+        'sslverify' => !barebits_is_same_host_url($server),
         'headers' => [
             'Authorization' => 'token ' . $apiKey,
             'Content-Type' => 'application/json',
@@ -288,14 +288,14 @@ function cashupay_api_request(string $method, string $path, ?array $body = null,
     if ($body !== null) {
         $args['body'] = wp_json_encode($body);
     }
-    $response = wp_remote_request(cashupay_api_url($server, $path), $args);
+    $response = wp_remote_request(barebits_api_url($server, $path), $args);
     if (is_wp_error($response)) {
         $message = $response->get_error_message();
         // A timeout against this site's own origin is almost never the
         // server being slow — it is the host refusing or starving loopback
         // requests. Say so where the raw cURL text would send the merchant
         // hunting in the wrong direction.
-        if (cashupay_is_same_host_url($server) && stripos($message, 'timed out') !== false) {
+        if (barebits_is_same_host_url($server) && stripos($message, 'timed out') !== false) {
             $message .= ' — the request went to this site\'s own URL, so this usually means '
                 . 'the host blocks or limits requests from this site to itself (a "loopback" '
                 . 'restriction, or too few PHP workers). Ask your host about allowing loopback requests.';

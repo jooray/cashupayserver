@@ -87,7 +87,7 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
     assert "❌" not in body, "no check may fail on the fixture host"
     assert "does not pass the server checks" not in body
 
-    body = post_onboarding(s, wp, "cashupay_choose_mode", {"cashupay_mode": "install"})
+    body = post_onboarding(s, wp, "barebits_choose_mode", {"barebits_mode": "install"})
     assert "Download and install BareBits" in body, body[:2000]
     # The chooser already showed the checks; the confirmation page stays slim
     # and only resurfaces the table when a check regressed.
@@ -98,7 +98,7 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
     # release as a testing PRERELEASE and the plugin runs on the testing
     # channel — /releases/latest answers 404 here, so a successful install is
     # itself proof the channel logic read the /releases listing.
-    body = post_onboarding(s, wp, "cashupay_run_install")
+    body = post_onboarding(s, wp, "barebits_run_install")
     assert "BareBits is installed at" in body, body[:2000]
     assert "not checksum-verified" not in body, "SHA256SUMS was published; the install must verify it"
     # The wizard is embedded right below this notice — there is nowhere to
@@ -121,13 +121,13 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
     assert "CASHUPAY_PROVISION_TOKEN_HASH" in user_config
     assert f"{wp.url}/barebits" in user_config  # pinned base URL
     # The plugin holds the plaintexts the hashes were derived from.
-    admin_password = wp_option(wp, "cashupay_admin_password")
-    sso_key = wp_option(wp, "cashupay_sso_key")
+    admin_password = wp_option(wp, "barebits_admin_password")
+    sso_key = wp_option(wp, "barebits_sso_key")
     assert len(admin_password) >= 20 and len(sso_key) == 64
     # The data dir landed OUTSIDE the served docroot (sibling of ABSPATH).
     assert wp.barebits_data_dir.is_dir()
-    assert wp_option(wp, "cashupay_server_url") == wp.barebits_url
-    assert wp_option(wp, "cashupay_mode") == "install"
+    assert wp_option(wp, "barebits_server_url") == wp.barebits_url
+    assert wp_option(wp, "barebits_mode") == "install"
 
     # The install is served: pre-setup, the API answers with its 503 guard
     # (setup incomplete) rather than a WordPress 404 — proof the request
@@ -136,7 +136,7 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
     assert info.status_code == 503, info.text[:300]
 
     # Step 3: collecting credentials before the wizard is done must say so.
-    body = post_onboarding(s, wp, "cashupay_collect_provision")
+    body = post_onboarding(s, wp, "barebits_collect_provision")
     assert "not finished yet" in body, body[:2000]
 
     _walk_barebits_wizard(wp, mint.url, backup_mint.url)
@@ -145,17 +145,17 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
     info = requests.get(f"{wp.barebits_url}/api/v1/server/info", timeout=30)
     assert info.status_code == 200 and info.json().get("isCashuPayServer") is True
 
-    body = post_onboarding(s, wp, "cashupay_collect_provision")
+    body = post_onboarding(s, wp, "barebits_collect_provision")
     assert "Connected!" in body, body[:2000]
-    store_id = wp_option(wp, "cashupay_store_id")
+    store_id = wp_option(wp, "barebits_store_id")
     assert store_id
-    assert wp_option(wp, "cashupay_cron_key")
-    assert wp_option(wp, "cashupay_provision_token") == "", "one-time token must be deleted after use"
+    assert wp_option(wp, "barebits_cron_key")
+    assert wp_option(wp, "barebits_provision_token") == "", "one-time token must be deleted after use"
     # Collecting fires one synchronous heartbeat ping to prove the cron loop
     # works while the merchant is still watching; success seeds the stamp the
     # wp-admin stale-heartbeat warning measures from.
-    assert wp_option(wp, "cashupay_cron_last_ok") != "", (
-        "the collect-time cron ping should have stamped cashupay_cron_last_ok"
+    assert wp_option(wp, "barebits_cron_last_ok") != "", (
+        "the collect-time cron ping should have stamped barebits_cron_last_ok"
     )
 
     # The handshake is single-use on the server side too.
@@ -172,7 +172,7 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
 
     # Step 4: WooCommerce wiring with a 3% discount.
     install_woocommerce(wp)
-    body = post_onboarding(s, wp, "cashupay_finish", {"cashupay_discount_percent": "3"})
+    body = post_onboarding(s, wp, "barebits_finish", {"barebits_discount_percent": "3"})
     assert "WooCommerce now takes Bitcoin" in body, body[:2000]
 
     assert wp_option(wp, "btcpay_gf_url") == wp.barebits_gateway_url
@@ -203,26 +203,26 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
     )
     assert gateway["enabled"] == "yes"
     assert "3% discount" in gateway["title"]
-    assert wp_option(wp, "cashupay_discount_percent") == "3"
+    assert wp_option(wp, "barebits_discount_percent") == "3"
 
     # Once wired, clicking "BareBits" in wp-admin embeds the admin behind a
     # one-time SSO sign-in URL — the old windowed experience, no password.
     body = onboarding_page(s, wp)
-    assert 'id="cashupay-admin-frame"' in body, body[-1500:]
+    assert 'id="barebits-admin-frame"' in body, body[-1500:]
     assert "sso.php?token=" in body
     # The Connection page carries the status table and the password reveal.
     conn = s.get(
-        f"{wp.url}/wp-admin/admin.php", params={"page": "cashupay-connection"}, timeout=60
+        f"{wp.url}/wp-admin/admin.php", params={"page": "barebits-connection"}, timeout=60
     ).text
     assert "WooCommerce is connected" in conn
     assert "Installed alongside WordPress" in conn
     # The Connection page's forms (discount save, re-run wiring) carry the
     # same wait-out-WP-maintenance guard as the onboarding forms.
-    assert 'id="cashupay-maintenance-waiting"' in conn
-    nonce = re.search(r'id="cashupay-reveal-password"\s+data-nonce="([^"]+)"', conn).group(1)
+    assert 'id="barebits-maintenance-waiting"' in conn
+    nonce = re.search(r'id="barebits-reveal-password"\s+data-nonce="([^"]+)"', conn).group(1)
     reveal = s.post(
         f"{wp.url}/wp-admin/admin-ajax.php",
-        data={"action": "cashupay_reveal_password", "nonce": nonce},
+        data={"action": "barebits_reveal_password", "nonce": nonce},
         timeout=30,
     ).json()
     assert reveal.get("success") is True and reveal.get("data") == admin_password
@@ -262,7 +262,7 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
 
     # Step 5: the WP-cron pinger reaches the install's cron.php with the
     # provisioned key — the install sees a real external cron run.
-    result = wp.wp_cli("cron", "event", "run", "cashupay_cron_tick")
+    result = wp.wp_cli("cron", "event", "run", "barebits_cron_tick")
     assert result.returncode == 0
     with wp.db() as db:
         stamped = db.execute(
@@ -307,11 +307,11 @@ def test_install_mode_end_to_end(wordpress_install_mode, mint, backup_mint) -> N
     order_page = requests.get(
         f"{wp.barebits_url}/payment.php", params={"id": order_invoice["id"]}, timeout=30
     ).text
-    assert "?cashupay-retry=" in order_page, "retry link missing for an e-commerce invoice"
+    assert "?barebits-retry=" in order_page, "retry link missing for an e-commerce invoice"
     # …and the plugin's endpoint answers it (no matching order here, so it
     # falls back to the shop's front page rather than a dead end).
     bounced = requests.get(
-        f"{wp.url}/?cashupay-retry={order_invoice['id']}",
+        f"{wp.url}/?barebits-retry={order_invoice['id']}",
         timeout=30, allow_redirects=False,
     )
     assert bounced.status_code in (301, 302), bounced.text[:300]
@@ -327,20 +327,20 @@ def test_failing_check_disables_and_refuses_install(wordpress) -> None:
     # folder name the installer's target resolution refuses (too long), which
     # fails the writable-location check.
     bad_dirname = "a" * 70
-    wp.wp_cli("option", "update", "cashupay_install_dirname", bad_dirname)
+    wp.wp_cli("option", "update", "barebits_install_dirname", bad_dirname)
     s = wp_login(wp)
 
     body = onboarding_page(s, wp)
     assert "❌" in body, body[:3000]
     assert "does not pass the server checks below yet" in body
-    assert re.search(r'id="cashupay-mode-install"\s+disabled', body), "install radio must be disabled"
+    assert re.search(r'id="barebits-mode-install"\s+disabled', body), "install radio must be disabled"
 
     body = post_onboarding(
-        s, wp, "cashupay_choose_mode",
-        {"cashupay_mode": "install", "cashupay_install_dirname": bad_dirname},
+        s, wp, "barebits_choose_mode",
+        {"barebits_mode": "install", "barebits_install_dirname": bad_dirname},
     )
     assert "does not pass the server checks" in body, body[:2000]
-    assert wp_option(wp, "cashupay_mode") == ""
+    assert wp_option(wp, "barebits_mode") == ""
 
 
 def test_install_refuses_checksum_mismatch(standalone_zip) -> None:
@@ -364,11 +364,11 @@ def test_install_refuses_checksum_mismatch(standalone_zip) -> None:
 
         _allow_nonstandard_ports(wp)
         s = wp_login(wp)
-        post_onboarding(s, wp, "cashupay_choose_mode", {"cashupay_mode": "install"})
-        body = post_onboarding(s, wp, "cashupay_run_install")
+        post_onboarding(s, wp, "barebits_choose_mode", {"barebits_mode": "install"})
+        body = post_onboarding(s, wp, "barebits_run_install")
         assert "Checksum mismatch" in body, body[:2000]
         assert not wp.barebits_dir.exists(), "a failed-verification zip must never be unpacked"
-        assert wp_option(wp, "cashupay_server_url") == ""
+        assert wp_option(wp, "barebits_server_url") == ""
     finally:
         if wp is not None:
             stop_wordpress(wp)

@@ -17,9 +17,9 @@
  * License: GPLv2 or later.
  */
 (function () {
-    var config = window.cashupayDiscountConfig || {};
+    var config = window.barebitsDiscountConfig || {};
     var gatewayId = config.gatewayId || 'btcpaygf_default';
-    var namespace = config.namespace || 'cashupay-discount';
+    var namespace = config.namespace || 'barebits-discount';
 
     if (!window.wp || !window.wp.data || !window.wc || !window.wc.blocksCheckout
             || typeof window.wc.blocksCheckout.extensionCartUpdate !== 'function') {

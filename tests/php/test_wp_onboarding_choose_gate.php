@@ -6,16 +6,16 @@
  * disables that option when one fails — but the disabled radio is only
  * markup. Pinned here is the server side of that promise:
  *
- *   - cashupay_handle_choose_mode refuses 'install' while a preflight check
+ *   - barebits_handle_choose_mode refuses 'install' while a preflight check
  *     fails (no mode is stored, an error flash names the failing check),
  *     and only stores the mode when the host passes. The Advanced folder
  *     name is saved BEFORE the preflight runs so the writable-location
  *     check resolves the merchant's choice, not the default.
- *   - cashupay_handle_run_install refuses on the same gate — conditions can
+ *   - barebits_handle_run_install refuses on the same gate — conditions can
  *     regress between the chooser and the download click, and the stub set
  *     below provides no HTTP functions at all, so reaching the download
  *     would fatal rather than silently pass.
- *   - cashupay_handle_start_pairing always redirects to the REAL file at
+ *   - barebits_handle_start_pairing always redirects to the REAL file at
  *     /api-keys/authorize.php — never the pretty /api-keys/authorize
  *     rewrite, which 404s on hosts that ignore .htaccess (a merchant hit
  *     exactly that pairing with an existing server by URL).
@@ -26,7 +26,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 
-$T = sys_get_temp_dir() . '/cashupay_choose_gate_' . bin2hex(random_bytes(6));
+$T = sys_get_temp_dir() . '/barebits_choose_gate_' . bin2hex(random_bytes(6));
 mkdir($T, 0750, true);
 register_shutdown_function(function () use ($T) {
     @unlink($T . '/choose_driver.php');
@@ -46,8 +46,8 @@ define('WP_CONTENT_DIR', sys_get_temp_dir());
 $GLOBALS['wp_options'] = [];
 if (getenv('T_ACTION') === 'pair') {
     $GLOBALS['wp_options'] = [
-        'cashupay_mode' => 'url',
-        'cashupay_server_url' => 'https://pay.example.test',
+        'barebits_mode' => 'url',
+        'barebits_server_url' => 'https://pay.example.test',
     ];
 }
 $GLOBALS['transients'] = [];
@@ -80,12 +80,12 @@ function wp_unslash($value) { return is_string($value) ? stripslashes($value) : 
 function sanitize_text_field($str) { return trim(preg_replace('/[\r\n\t ]+/', ' ', strip_tags((string)$str))); }
 // Defined in btcpay-integration.php, which stays out of this stub set; the
 // env flag is the test's lever for failing exactly one preflight check.
-function cashupay_can_install_plugins(): bool { return getenv('T_PREFLIGHT_FAIL') !== '1'; }
+function barebits_can_install_plugins(): bool { return getenv('T_PREFLIGHT_FAIL') !== '1'; }
 
 register_shutdown_function(function () {
     echo "\nSTATE:" . json_encode([
         'options' => $GLOBALS['wp_options'],
-        'flash' => $GLOBALS['transients']['cashupay_flash'] ?? null,
+        'flash' => $GLOBALS['transients']['barebits_flash'] ?? null,
         'redirects' => $GLOBALS['redirects'],
     ]);
 });
@@ -96,17 +96,17 @@ require %s;
 
 switch (getenv('T_ACTION')) {
     case 'choose_install':
-        $_POST = ['cashupay_mode' => 'install'];
+        $_POST = ['barebits_mode' => 'install'];
         if (getenv('T_DIRNAME') !== false && getenv('T_DIRNAME') !== '') {
-            $_POST['cashupay_install_dirname'] = getenv('T_DIRNAME');
+            $_POST['barebits_install_dirname'] = getenv('T_DIRNAME');
         }
-        cashupay_handle_choose_mode();
+        barebits_handle_choose_mode();
         break;
     case 'run_install':
-        cashupay_handle_run_install();
+        barebits_handle_run_install();
         break;
     case 'pair':
-        cashupay_handle_start_pairing();
+        barebits_handle_start_pairing();
         break;
 }
 PHP,
@@ -141,10 +141,10 @@ function run_scenario(array $env): array {
 
 $res = run_scenario(['T_ACTION' => 'choose_install', 'T_DIRNAME' => 'mybits']);
 assert_not_null($res['state'], 'driver produced state: ' . substr($res['raw'], 0, 400));
-assert_eq('install', $res['state']['options']['cashupay_mode'] ?? null, 'mode stored on a passing host');
-assert_eq('mybits', $res['state']['options']['cashupay_install_dirname'] ?? null, 'folder choice stored');
+assert_eq('install', $res['state']['options']['barebits_mode'] ?? null, 'mode stored on a passing host');
+assert_eq('mybits', $res['state']['options']['barebits_install_dirname'] ?? null, 'folder choice stored');
 assert_eq(null, $res['state']['flash'], 'no flash on the happy path');
-assert_eq(['http://wp.test/wp-admin/admin.php?page=cashupay'], $res['state']['redirects']);
+assert_eq(['http://wp.test/wp-admin/admin.php?page=barebits'], $res['state']['redirects']);
 
 // --- A failing check refuses the install choice server-side ------------------
 // The chooser disables the radio, but that is markup; a hand-crafted POST
@@ -152,8 +152,8 @@ assert_eq(['http://wp.test/wp-admin/admin.php?page=cashupay'], $res['state']['re
 
 $res = run_scenario(['T_ACTION' => 'choose_install', 'T_PREFLIGHT_FAIL' => '1', 'T_DIRNAME' => 'mybits']);
 assert_not_null($res['state'], 'driver produced state: ' . substr($res['raw'], 0, 400));
-assert_false(array_key_exists('cashupay_mode', $res['state']['options']), 'no mode stored on a failing host');
-assert_eq('mybits', $res['state']['options']['cashupay_install_dirname'] ?? null,
+assert_false(array_key_exists('barebits_mode', $res['state']['options']), 'no mode stored on a failing host');
+assert_eq('mybits', $res['state']['options']['barebits_install_dirname'] ?? null,
     'the folder choice is saved before the preflight so the check resolves it');
 assert_eq('error', $res['state']['flash']['kind'] ?? null, 'an error flash is queued');
 $message = (string) ($res['state']['flash']['message'] ?? '');
@@ -169,7 +169,7 @@ assert_not_null($res['state'], 'driver produced state: ' . substr($res['raw'], 0
 assert_eq('error', $res['state']['flash']['kind'] ?? null, 'run_install refuses on a failing check');
 assert_true(str_contains((string) ($res['state']['flash']['message'] ?? ''), 'no longer passes'),
     'and says the host regressed');
-assert_eq(['http://wp.test/wp-admin/admin.php?page=cashupay'], $res['state']['redirects']);
+assert_eq(['http://wp.test/wp-admin/admin.php?page=barebits'], $res['state']['redirects']);
 
 // --- Pairing always targets the real authorize.php file ----------------------
 // The pretty /api-keys/authorize needs rewrites the target host may not do;
@@ -182,7 +182,7 @@ assert_true(str_starts_with($location, 'https://pay.example.test/api-keys/author
     'remote pairing goes to authorize.php: ' . $location);
 assert_true(str_contains($location, 'permissions=btcpay.store.cancreateinvoice'), $location);
 assert_true(str_contains($location, 'redirect=http%3A%2F%2Fwp.test'), $location);
-assert_true(is_array($res['state']['options']['cashupay_pairing_expected'] ?? null),
+assert_true(is_array($res['state']['options']['barebits_pairing_expected'] ?? null),
     'a state token was minted for the callback');
 
 echo "test_wp_onboarding_choose_gate: ok\n";

@@ -30,31 +30,31 @@ require_once dirname(__DIR__, 2) . '/wordpress/btcpay-integration.php';
 
 // --- MySQL hosts: hands off, whatever the HPOS state ------------------------
 
-assert_eq('leave', cashupay_order_storage_pin_decision(false, false, 0),
+assert_eq('leave', barebits_order_storage_pin_decision(false, false, 0),
     'MySQL, HPOS off: nothing to do');
-assert_eq('leave', cashupay_order_storage_pin_decision(false, true, 0),
+assert_eq('leave', barebits_order_storage_pin_decision(false, true, 0),
     'MySQL, HPOS on: HPOS is healthy there — never touched');
-assert_eq('leave', cashupay_order_storage_pin_decision(false, true, 250),
+assert_eq('leave', barebits_order_storage_pin_decision(false, true, 250),
     'MySQL with HPOS orders: never touched');
 
 // --- SQLite hosts: pin before the corruption can reach an order -------------
 
-assert_eq('pin', cashupay_order_storage_pin_decision(true, false, 0),
+assert_eq('pin', barebits_order_storage_pin_decision(true, false, 0),
     'SQLite, HPOS off: pin explicitly and stop the deferred auto-enable job');
-assert_eq('pin', cashupay_order_storage_pin_decision(true, true, 0),
+assert_eq('pin', barebits_order_storage_pin_decision(true, true, 0),
     'SQLite, HPOS freshly enabled but no orders yet: safe to flip back');
 
 // --- SQLite with orders already in the HPOS table: the one protected state --
 
-assert_eq('leave', cashupay_order_storage_pin_decision(true, true, 1),
+assert_eq('leave', barebits_order_storage_pin_decision(true, true, 1),
     'a single HPOS order is enough — flipping storage would orphan it');
-assert_eq('leave', cashupay_order_storage_pin_decision(true, true, 8000),
+assert_eq('leave', barebits_order_storage_pin_decision(true, true, 8000),
     'an established HPOS shop is left alone');
 
 // HPOS off cannot have made rows invisible, so a stale count (rows left in
 // wc_orders from an earlier HPOS stint the merchant already migrated away
 // from) must not block the pin.
-assert_eq('pin', cashupay_order_storage_pin_decision(true, false, 8000),
+assert_eq('pin', barebits_order_storage_pin_decision(true, false, 8000),
     'HPOS off pins regardless of leftover rows in the unused table');
 
 echo "ok\n";

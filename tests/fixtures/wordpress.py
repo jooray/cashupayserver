@@ -1,4 +1,4 @@
-"""WordPress fixture for testing the BareBits (cashupay) plugin.
+"""WordPress fixture for testing the BareBits (barebits) plugin.
 
 Uses wp-cli + the static PHP binary to stand up a fresh SQLite-backed WP
 install per test, with the GPL plugin copied from wordpress/ so any local
@@ -113,7 +113,7 @@ class WordPressHandle:
         """The btcpay_gf_url the WooCommerce wiring writes for the alongside
         install: api.php's query-transport BASE, so every URL the BTCPay
         gateway builds by concatenation lands directly on api.php — one
-        loopback deep on every host (see cashupay_gateway_base_url)."""
+        loopback deep on every host (see barebits_gateway_base_url)."""
         return f"{self.barebits_url}/api.php?cashupay_path="
 
     @property
@@ -157,7 +157,17 @@ class WordPressHandle:
         # still fails loudly instead of eating the whole CI job cap when a WP
         # boot deadlocks — seen when a wiped btcpay_gf_version made the BTCPay
         # plugin's boot migrations self-request this site recursively.
-        result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+        #
+        # Retry on SQLite's "database is locked": the sqlite-database-
+        # integration drop-in has no busy-timeout, so a wp-cli write that
+        # races the live webserver's workers (WooCommerce/Action Scheduler
+        # loopbacks, the cron pinger) dies with SQLSTATE 5. Retrying the whole
+        # command is safe for the idempotent option writes/reads the tests run.
+        for attempt in range(5):
+            result = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=300)
+            if result.returncode == 0 or "database is locked" not in (result.stdout + result.stderr):
+                break
+            time.sleep(0.3 * (attempt + 1))
         if check and result.returncode != 0:
             raise RuntimeError(
                 f"wp-cli failed ({result.returncode}) for {args}\n"
@@ -165,6 +175,20 @@ class WordPressHandle:
                 f"stderr: {result.stderr}"
             )
         return result
+
+    def set_option(self, name: str, value: str) -> None:
+        """Write an option and confirm it landed, retrying through SQLite
+        lock contention. Unlike `wp eval "update_option(...)"` — whose write
+        can be silently lost under a lock while eval still exits 0 — this
+        reads the value back, so a lost write surfaces as a loud failure here
+        instead of a mysterious one in the code under test."""
+        for attempt in range(5):
+            self.wp_cli("option", "update", name, value)
+            got = self.wp_cli("option", "get", name, check=False).stdout.strip()
+            if got == value:
+                return
+            time.sleep(0.3 * (attempt + 1))
+        raise RuntimeError(f"option {name!r} did not persist as {value!r} (got {got!r})")
 
     def wait_ready(self, timeout_s: float = 30.0) -> None:
         deadline = time.monotonic() + timeout_s
@@ -285,7 +309,7 @@ def install_plugin_check(wp: "WordPressHandle") -> None:
 
 def _assemble_plugin(plugin_dir: Path) -> None:
     """Copy the GPL plugin (wordpress/ in the repo) into wp-content/plugins/
-    cashupay. Plain copies rather than symlinks: WordPress's activation-hook
+    barebits. Plain copies rather than symlinks: WordPress's activation-hook
     bookkeeping keys off realpath(__FILE__), so a symlinked plugin dir breaks
     register_activation_hook. The plugin is a handful of small files, so a
     per-test copy is cheap; it mirrors scripts/build-wordpress-plugin.sh
@@ -411,7 +435,7 @@ if ($uri === '/barebits/api-keys/authorize'
 def start_wordpress(
     workdir: Path,
     *,
-    install_cashupay: bool = True,
+    install_barebits: bool = True,
     release_api_base: str | None = None,
     release_channel: str | None = None,
     emulate_rewrites: bool = True,
@@ -421,9 +445,9 @@ def start_wordpress(
 ) -> WordPressHandle:
     """Stand up a fresh SQLite-backed WordPress install.
 
-    install_cashupay=True (default) copies the GPL plugin from wordpress/ and
-    activates it — what every WP test wants. install_cashupay=False brings
-    WordPress up with NO cashupay plugin, so a test can install the real built
+    install_barebits=True (default) copies the GPL plugin from wordpress/ and
+    activates it — what every WP test wants. install_barebits=False brings
+    WordPress up with NO barebits plugin, so a test can install the real built
     zip itself (`wp plugin install <zip>`) and exercise the shipped artifact.
 
     release_api_base points the plugin's "install BareBits alongside" flow at
@@ -478,7 +502,7 @@ def start_wordpress(
     woo_product_id: int | None = None
     if use_template:
         golden_wp, meta = _ensure_golden_install(
-            install_cashupay=install_cashupay, with_woocommerce=with_woocommerce
+            install_barebits=install_barebits, with_woocommerce=with_woocommerce
         )
         # cp -a: preserves the symlinked wp.org plugins and is much faster
         # than shutil.copytree on WP core's thousands of small files. The
@@ -525,10 +549,10 @@ def start_wordpress(
     if not drop_in.exists():
         shutil.copy(sqlite_plugin / "db.copy", drop_in)
 
-    # 3. Cashupay plugin (symlinks for live source). Skipped when the caller
+    # 3. Barebits plugin (symlinks for live source). Skipped when the caller
     #    will install the built zip itself.
-    if install_cashupay:
-        _assemble_plugin(wp_root / "wp-content" / "plugins" / "cashupay")
+    if install_barebits:
+        _assemble_plugin(wp_root / "wp-content" / "plugins" / "barebits")
 
     # 4. wp-config.php with SQLite config + WP_HOME (+ the release-server
     #    constants the plugin's installer reads, when the caller provides them).
@@ -580,15 +604,15 @@ def start_wordpress(
             text=True,
         )
 
-        # 7. Activate cashupay plugin (unless the caller installs the zip
+        # 7. Activate barebits plugin (unless the caller installs the zip
         #    itself).
-        if install_cashupay:
+        if install_barebits:
             subprocess.run(
                 [
                     str(php_exe), str(wp_cli_phar),
                     f"--path={wp_root}",
                     "--allow-root",
-                    "plugin", "activate", "cashupay",
+                    "plugin", "activate", "barebits",
                 ],
                 env=install_env,
                 check=True,
@@ -668,14 +692,14 @@ def start_wordpress(
 _GOLDEN_CACHE: dict[str, tuple[Path, dict]] = {}
 
 
-def _golden_template_key(*, install_cashupay: bool, with_woocommerce: bool) -> str:
+def _golden_template_key(*, install_barebits: bool, with_woocommerce: bool) -> str:
     if with_woocommerce:
         return "woo"
-    return "plugin" if install_cashupay else "bare"
+    return "plugin" if install_barebits else "bare"
 
 
 def _ensure_golden_install(
-    *, install_cashupay: bool, with_woocommerce: bool
+    *, install_barebits: bool, with_woocommerce: bool
 ) -> tuple[Path, dict]:
     """Build (once per session) and return (golden wp_root, meta) for the
     requested shape. The golden is produced by the exact same code path a
@@ -683,7 +707,7 @@ def _ensure_golden_install(
     install run, plugins activated, then stopped — so clones inherit a state
     byte-identical to what each test used to build for itself."""
     key = _golden_template_key(
-        install_cashupay=install_cashupay, with_woocommerce=with_woocommerce
+        install_barebits=install_barebits, with_woocommerce=with_woocommerce
     )
     if key in _GOLDEN_CACHE:
         return _GOLDEN_CACHE[key]
@@ -692,7 +716,7 @@ def _ensure_golden_install(
     print(f"[wp] building golden '{key}' WordPress template (once per session) ...")
     handle = start_wordpress(
         workdir,
-        install_cashupay=install_cashupay or with_woocommerce,
+        install_barebits=install_barebits or with_woocommerce,
         with_woocommerce=with_woocommerce,
         _from_template=False,
     )
@@ -796,7 +820,7 @@ def install_woocommerce(handle: WordPressHandle) -> dict:
 
     Returns {"product_id": int} for the test to add to the cart. The BTCPay
     gateway is installed but left *unconfigured* — wiring it to BareBits is the
-    behaviour under test (cashupay_configure_btcpay_plugin), so the test does
+    behaviour under test (barebits_configure_btcpay_plugin), so the test does
     that itself.
     """
     woo_src = _ensure_cached_plugin(
@@ -848,7 +872,7 @@ def install_woocommerce(handle: WordPressHandle) -> dict:
         # and WC's wc_format_decimal strips the exponent char on hydration —
         # a 1.50000000 total off a 1500-sat order. The plugin's wiring now
         # pins storage the same way on real SQLite shops
-        # (cashupay_pin_order_storage_for_sqlite); the pin here keeps every
+        # (barebits_pin_order_storage_for_sqlite); the pin here keeps every
         # UNWIRED fixture usable, and test_wp_hpos_checkout.py un-pins it to
         # prove the plugin-side steering end to end.
         "woocommerce_custom_orders_table_enabled": "no",
@@ -907,13 +931,13 @@ def _wp_config_php(
         release_defines += (
             "// Point the plugin's release downloader at the test's fixture release\n"
             "// server instead of api.github.com (see wordpress/installer.php).\n"
-            f"define('CASHUPAY_RELEASE_API_BASE', '{release_api_base}');\n"
+            f"define('BAREBITS_RELEASE_API_BASE', '{release_api_base}');\n"
         )
     if release_channel:
         release_defines += (
             "// Release channel override — the same wp-config.php constant a site\n"
             "// operator would use to opt into the testing channel.\n"
-            f"define('CASHUPAY_RELEASE_CHANNEL', '{release_channel}');\n"
+            f"define('BAREBITS_RELEASE_CHANNEL', '{release_channel}');\n"
         )
     return f"""<?php
 {release_defines}

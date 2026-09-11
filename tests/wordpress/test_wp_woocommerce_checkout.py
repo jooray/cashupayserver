@@ -5,8 +5,8 @@ puts the *actual* third-party BTCPay Greenfield WooCommerce plugin in front of
 a standalone, already-configured BareBits payserver and plays the whole
 customer journey:
 
-    wire the plugin to the payserver (the exact call cashupay_handle_finish
-    makes: cashupay_ensure_woocommerce_integration)
+    wire the plugin to the payserver (the exact call barebits_handle_finish
+    makes: barebits_ensure_woocommerce_integration)
       -> the webhook is registered on the PAYSERVER over its Greenfield API
       -> a guest places a real order through the WooCommerce Store API, paying
          with the BTCPay gateway
@@ -65,10 +65,10 @@ def _connect_plugin(wp: WordPressHandle, configured) -> None:
     """Store the connection state URL-mode onboarding would leave behind: the
     plugin knows the payserver's URL, store, and API key."""
     for name, value in {
-        "cashupay_mode": "url",
-        "cashupay_server_url": configured.handle.url,
-        "cashupay_store_id": configured.store_id,
-        "cashupay_api_key": configured.api_token,
+        "barebits_mode": "url",
+        "barebits_server_url": configured.handle.url,
+        "barebits_store_id": configured.store_id,
+        "barebits_api_key": configured.api_token,
     }.items():
         wp.wp_cli("option", "update", name, value, check=False)
 
@@ -76,15 +76,15 @@ def _connect_plugin(wp: WordPressHandle, configured) -> None:
 def _ensure_integration(
     wp: WordPressHandle, store_id: str, api_key: str, percent: str = "0"
 ) -> dict:
-    """Drive the one entry point cashupay_handle_finish calls: save the
+    """Drive the one entry point barebits_handle_finish calls: save the
     discount option, then install-if-needed + configure + webhook + enable +
     branding, all unattended. Returns the function's status plus the
     resulting gateway-enabled flag and the BTCPay URL the plugin ended up
     pointed at. The reported title is the FILTERED read (wp-cli eval is not
     wp-admin), i.e. the customer-facing one with the discount suffix."""
-    wp.wp_cli("option", "update", "cashupay_discount_percent", percent, check=False)
+    wp.wp_cli("option", "update", "barebits_discount_percent", percent, check=False)
     snippet = f"""
-$res = cashupay_ensure_woocommerce_integration({store_id!r}, {api_key!r});
+$res = barebits_ensure_woocommerce_integration({store_id!r}, {api_key!r});
 $gw = get_option('woocommerce_{GATEWAY_ID}_settings', []);
 echo json_encode([
     'res' => $res,
@@ -164,7 +164,7 @@ class _StoreApiSession:
         runs the plugin's update callback and returns the recalculated cart."""
         r = self.post(
             "/cart/extensions",
-            {"namespace": "cashupay-discount", "data": {"payment_method": method}},
+            {"namespace": "barebits-discount", "data": {"payment_method": method}},
         )
         assert r.status_code == 200, f"cart/extensions failed: {r.status_code} {r.text}"
         return r.json()
@@ -219,7 +219,7 @@ def test_woocommerce_stack_installs(woocommerce) -> None:
     active = wp.wp_cli("plugin", "list", "--field=name", "--status=active").stdout.split()
     assert "woocommerce" in active, active
     assert "btcpay-greenfield-for-woocommerce" in active, active
-    assert "cashupay" in active, active
+    assert "barebits" in active, active
 
     product_type = wp.wp_cli(
         "eval", f"echo wc_get_product({info['product_id']})->get_type();"
@@ -228,7 +228,7 @@ def test_woocommerce_stack_installs(woocommerce) -> None:
 
 
 def test_wiring_readies_gateway_and_registers_webhook(woocommerce, configured) -> None:
-    """cashupay_ensure_woocommerce_integration wires WooCommerce with no manual
+    """barebits_ensure_woocommerce_integration wires WooCommerce with no manual
     steps: it points the BTCPay gateway at the payserver, registers the webhook
     on the PAYSERVER over its Greenfield API, and flips the gateway to enabled
     so it shows at checkout. The gateway plugin is already active in this
@@ -355,21 +355,21 @@ def test_wiring_never_clobbers_a_real_btcpay_server(woocommerce) -> None:
     the wiring must refuse to overwrite it rather than silently hijack their
     payments — and a consent recorded for a *different* server must not unlock
     this one either. The refusal happens before any server contact, so a dead
-    cashupay_server_url suffices."""
+    barebits_server_url suffices."""
     wp, _info = woocommerce
-    wp.wp_cli("option", "update", "cashupay_server_url", "http://127.0.0.1:1/nonexistent")
+    # Verified writes (read-back with retry): a lock-lost option write here is
+    # exactly what used to make this test flake — the guard under test would
+    # see an empty btcpay_gf_url, hijack, and fail webhook registration.
+    wp.set_option("barebits_server_url", "http://127.0.0.1:1/nonexistent")
 
     real = "https://btcpay.example.com"
-    wp.wp_cli("eval", f"update_option('btcpay_gf_url', {real!r});")
+    wp.set_option("btcpay_gf_url", real)
 
     data = _ensure_integration(wp, "store_x", "key_x")
     assert data["res"]["status"] == "existing_btcpay", data
     assert data["url"] == real, "the real BTCPay URL must be left untouched"
 
-    wp.wp_cli(
-        "eval",
-        "update_option('cashupay_btcpay_override_consent', 'https://other.example.com');",
-    )
+    wp.set_option("barebits_btcpay_override_consent", "https://other.example.com")
     data = _ensure_integration(wp, "store_x", "key_x")
     assert data["res"]["status"] == "existing_btcpay", data
     assert data["url"] == real, "consent for another server must not authorize this takeover"
@@ -393,9 +393,9 @@ update_option('btcpay_gf_transaction_speed', 'high');
 update_option('btcpay_gf_order_states', ['Expired' => 'wc-on-hold']);
 update_option('woocommerce_{GATEWAY_ID}_settings',
     ['enabled' => 'no', 'title' => 'My custom BTCPay title']);
-// The merchant ticks the consent box; cashupay_handle_finish records it for
+// The merchant ticks the consent box; barebits_handle_finish records it for
 // exactly the URL being replaced.
-cashupay_record_btcpay_override_consent();
+barebits_record_btcpay_override_consent();
 """
     wp.wp_cli("eval", seed)
 
@@ -418,7 +418,7 @@ echo json_encode([
     'expired' => get_option('btcpay_gf_order_states')['Expired'] ?? null,
     'speed' => get_option('btcpay_gf_transaction_speed', 'GONE'),
     'api_key' => get_option('btcpay_gf_api_key', ''),
-    'consent' => get_option('cashupay_btcpay_override_consent', 'GONE'),
+    'consent' => get_option('barebits_btcpay_override_consent', 'GONE'),
     'version' => get_option('btcpay_gf_version', 'GONE'),
 ]);
 """
@@ -536,7 +536,7 @@ def test_failed_invoice_creation_returns_clean_error_not_500(woocommerce) -> Non
     """When invoice creation on the payserver fails, the stock Greenfield
     gateway's process_payment() implicitly returns null and WooCommerce's Store
     API checkout fatals with an HTTP 500 (array_merge(..., null) in
-    StoreApi\\Legacy). The cashupay plugin swaps in a guarded gateway subclass
+    StoreApi\\Legacy). The barebits plugin swaps in a guarded gateway subclass
     (wordpress/gateway-guard.php) that turns the null into a catchable
     exception, so the shopper sees a clean payment error instead.
 
@@ -554,7 +554,7 @@ def test_failed_invoice_creation_returns_clean_error_not_500(woocommerce) -> Non
         "update_option('btcpay_gf_url', 'http://127.0.0.1:1');"
         "update_option('btcpay_gf_api_key', 'broken-key');"
         "update_option('btcpay_gf_store_id', 'store_broken');"
-        "cashupay_enable_btcpay_gateway();",
+        "barebits_enable_btcpay_gateway();",
     )
 
     # The guard subclass must be the gateway WooCommerce actually registered.
@@ -564,7 +564,7 @@ foreach (WC()->payment_gateways()->payment_gateways() as $gw) {
 }
 """
     cls = wp.wp_cli("eval", snippet).stdout.strip().splitlines()[-1].strip()
-    assert cls == "CashuPay_Guarded_BTCPay_Gateway", (
+    assert cls == "Barebits_Guarded_BTCPay_Gateway", (
         f"the guarded subclass must replace the stock gateway, got {cls!r}"
     )
 

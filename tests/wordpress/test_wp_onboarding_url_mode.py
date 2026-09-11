@@ -35,7 +35,7 @@ def _drive_pairing(wp, configured, s: requests.Session) -> None:
     nonces = page_nonces(onboarding_page(s, wp))
     r = s.post(
         f"{wp.url}/wp-admin/admin-post.php",
-        data={"action": "cashupay_start_pairing", "_wpnonce": nonces["cashupay_start_pairing"]},
+        data={"action": "barebits_start_pairing", "_wpnonce": nonces["barebits_start_pairing"]},
         timeout=30,
         allow_redirects=False,
     )
@@ -48,7 +48,7 @@ def _drive_pairing(wp, configured, s: requests.Session) -> None:
     query = parse_qs(urlparse(authorize_url).query)
     callback = query["redirect"][0]
     assert "state=" in callback
-    assert "cashupay_pairing_callback" in callback
+    assert "barebits_pairing_callback" in callback
     # BTCPay-convention repeated bare permissions.
     assert "btcpay.store.webhooks.canmodifywebhooks" in query["permissions"]
 
@@ -103,25 +103,25 @@ def test_url_mode_end_to_end(wordpress, woocommerce, configured) -> None:
 
     # A URL that is reachable but not a BareBits server is refused.
     body = post_onboarding(
-        s, wp, "cashupay_choose_mode",
-        {"cashupay_mode": "url", "cashupay_server_url": wp.url},
+        s, wp, "barebits_choose_mode",
+        {"barebits_mode": "url", "barebits_server_url": wp.url},
     )
     assert "does not look like a BareBits server" in body, body[:2000]
-    assert wp_option(wp, "cashupay_mode") == ""
+    assert wp_option(wp, "barebits_mode") == ""
 
     # The real server validates and moves us to the pairing step.
     body = post_onboarding(
-        s, wp, "cashupay_choose_mode",
-        {"cashupay_mode": "url", "cashupay_server_url": configured.handle.url},
+        s, wp, "barebits_choose_mode",
+        {"barebits_mode": "url", "barebits_server_url": configured.handle.url},
     )
     assert "Pair with your BareBits server" in body, body[:2000]
-    assert wp_option(wp, "cashupay_server_url") == configured.handle.url
+    assert wp_option(wp, "barebits_server_url") == configured.handle.url
 
     _drive_pairing(wp, configured, s)
-    assert wp_option(wp, "cashupay_store_id") == configured.store_id
+    assert wp_option(wp, "barebits_store_id") == configured.store_id
 
     # Finish: wire WooCommerce with a 2% discount.
-    body = post_onboarding(s, wp, "cashupay_finish", {"cashupay_discount_percent": "2"})
+    body = post_onboarding(s, wp, "barebits_finish", {"barebits_discount_percent": "2"})
     assert "WooCommerce now takes Bitcoin" in body, body[:2000]
 
     assert wp_option(wp, "btcpay_gf_url") == configured.handle.url
@@ -155,12 +155,12 @@ def test_url_mode_end_to_end(wordpress, woocommerce, configured) -> None:
 
     # The discount option itself carries the answer; the checkout fee and the
     # title suffix are both derived from it at runtime (payment-discount.php).
-    assert wp_option(wp, "cashupay_discount_percent") == "2"
+    assert wp_option(wp, "barebits_discount_percent") == "2"
 
     # No cron pinger in URL mode: the remote server runs its own cron.
-    assert wp_option(wp, "cashupay_cron_key") == ""
+    assert wp_option(wp, "barebits_cron_key") == ""
     next_run = wp.wp_cli("cron", "event", "list", "--format=json").stdout
-    assert "cashupay_cron_tick" not in next_run
+    assert "barebits_cron_tick" not in next_run
 
     # Status panel reflects the connection.
     body = onboarding_page(s, wp)
@@ -174,13 +174,13 @@ def test_pairing_denied_returns_to_onboarding(wordpress, configured) -> None:
     wp = wordpress
     s = wp_login(wp)
     post_onboarding(
-        s, wp, "cashupay_choose_mode",
-        {"cashupay_mode": "url", "cashupay_server_url": configured.handle.url},
+        s, wp, "barebits_choose_mode",
+        {"barebits_mode": "url", "barebits_server_url": configured.handle.url},
     )
     nonces = page_nonces(onboarding_page(s, wp))
     r = s.post(
         f"{wp.url}/wp-admin/admin-post.php",
-        data={"action": "cashupay_start_pairing", "_wpnonce": nonces["cashupay_start_pairing"]},
+        data={"action": "barebits_start_pairing", "_wpnonce": nonces["barebits_start_pairing"]},
         timeout=30,
         allow_redirects=False,
     )
@@ -190,7 +190,7 @@ def test_pairing_denied_returns_to_onboarding(wordpress, configured) -> None:
     denied = requests.get(callback + "&error=access_denied", timeout=30, allow_redirects=False)
     # GET with a valid state: the handler treats it as denied/incomplete.
     assert denied.status_code in (301, 302), denied.text[:300]
-    assert wp_option(wp, "cashupay_store_id") == ""
+    assert wp_option(wp, "barebits_store_id") == ""
 
     body = onboarding_page(s, wp)
     assert "denied or came back incomplete" in body, body[:2000]

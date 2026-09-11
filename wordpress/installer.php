@@ -17,18 +17,18 @@ if (!defined('ABSPATH')) {
 }
 
 /** Default directory name (under the web root) and URL path for the install. */
-const CASHUPAY_INSTALL_DEFAULT_DIRNAME = 'barebits';
+const BAREBITS_INSTALL_DEFAULT_DIRNAME = 'barebits';
 
 /**
  * GitHub releases API base for the BareBits repository. Overridable for
- * testing/mirrors via the CASHUPAY_RELEASE_API_BASE constant (wp-config.php)
- * or the cashupay_release_api_base filter.
+ * testing/mirrors via the BAREBITS_RELEASE_API_BASE constant (wp-config.php)
+ * or the barebits_release_api_base filter.
  */
-function cashupay_release_api_base(): string {
-    $base = defined('CASHUPAY_RELEASE_API_BASE')
-        ? (string) CASHUPAY_RELEASE_API_BASE
+function barebits_release_api_base(): string {
+    $base = defined('BAREBITS_RELEASE_API_BASE')
+        ? (string) BAREBITS_RELEASE_API_BASE
         : 'https://api.github.com/repos/BareBits/cashupayserver';
-    return rtrim((string) apply_filters('cashupay_release_api_base', $base), '/');
+    return rtrim((string) apply_filters('barebits_release_api_base', $base), '/');
 }
 
 /**
@@ -36,7 +36,7 @@ function cashupay_release_api_base(): string {
  * tree; the testing release workflow stamps 'testing' into the plugin zips
  * it publishes (scripts/build-wordpress-plugin.sh does the stamping).
  */
-const CASHUPAY_PLUGIN_RELEASE_CHANNEL = 'stable';
+const BAREBITS_PLUGIN_RELEASE_CHANNEL = 'stable';
 
 /**
  * Which release channel the install-alongside flow downloads from. A plugin
@@ -46,14 +46,14 @@ const CASHUPAY_PLUGIN_RELEASE_CHANNEL = 'stable';
  * depends on (the provisioning handshake, the pre-seeded admin, the pinned
  * base URL) — the merchant would be walked into a wizard that asks for a
  * password and an onboarding that can never collect credentials. Overridable
- * per site via a CASHUPAY_RELEASE_CHANNEL constant (wp-config.php) or the
- * cashupay_release_channel filter; anything but 'testing' means 'stable'.
+ * per site via a BAREBITS_RELEASE_CHANNEL constant (wp-config.php) or the
+ * barebits_release_channel filter; anything but 'testing' means 'stable'.
  */
-function cashupay_release_channel(): string {
-    $channel = defined('CASHUPAY_RELEASE_CHANNEL')
-        ? (string) CASHUPAY_RELEASE_CHANNEL
-        : CASHUPAY_PLUGIN_RELEASE_CHANNEL;
-    $channel = (string) apply_filters('cashupay_release_channel', $channel);
+function barebits_release_channel(): string {
+    $channel = defined('BAREBITS_RELEASE_CHANNEL')
+        ? (string) BAREBITS_RELEASE_CHANNEL
+        : BAREBITS_PLUGIN_RELEASE_CHANNEL;
+    $channel = (string) apply_filters('barebits_release_channel', $channel);
     return $channel === 'testing' ? 'testing' : 'stable';
 }
 
@@ -67,10 +67,10 @@ function cashupay_release_channel(): string {
  *
  * @return array{dir?:string, url?:string, error?:string}
  */
-function cashupay_resolve_install_target(string $dirname = ''): array {
+function barebits_resolve_install_target(string $dirname = ''): array {
     $dirname = trim($dirname);
     if ($dirname === '') {
-        $dirname = CASHUPAY_INSTALL_DEFAULT_DIRNAME;
+        $dirname = BAREBITS_INSTALL_DEFAULT_DIRNAME;
     }
     if (!preg_match('/^[a-z0-9][a-z0-9_-]{0,63}$/i', $dirname)) {
         return ['error' => 'The folder name may only contain letters, numbers, hyphens and underscores.'];
@@ -105,8 +105,8 @@ function cashupay_resolve_install_target(string $dirname = ''): array {
  * pre-namespacing 'barebits-data' layouts) is reused; an UNRECORDED existing
  * directory is never adopted — whatever lives there is not ours.
  */
-function cashupay_resolve_data_dir(string $installDir): string {
-    $recorded = (string) get_option('cashupay_install_data_dir', '');
+function barebits_resolve_data_dir(string $installDir): string {
+    $recorded = (string) get_option('barebits_install_data_dir', '');
     if ($recorded !== '' && is_dir($recorded) && wp_is_writable($recorded)) {
         return $recorded;
     }
@@ -130,8 +130,8 @@ function cashupay_resolve_data_dir(string $installDir): string {
  * server will run under the same PHP as WordPress, so checking this process
  * checks the server too. Returns [label => ['ok' => bool, 'detail' => string]].
  */
-function cashupay_install_preflight(): array {
-    $target = cashupay_resolve_install_target((string) get_option('cashupay_install_dirname', ''));
+function barebits_install_preflight(): array {
+    $target = barebits_resolve_install_target((string) get_option('barebits_install_dirname', ''));
     $checks = [
         'PHP ' . PHP_VERSION . ' (8.0+ required)' => [
             'ok' => version_compare(PHP_VERSION, '8.0.0', '>='),
@@ -148,7 +148,7 @@ function cashupay_install_preflight(): array {
             'detail' => $target['error'] ?? ('Will install to ' . ($target['dir'] ?? '')),
         ],
         'Direct filesystem access' => [
-            'ok' => cashupay_can_install_plugins(),
+            'ok' => barebits_can_install_plugins(),
             'detail' => 'WordPress must be able to write files without FTP credentials.',
         ],
     ];
@@ -163,8 +163,8 @@ function cashupay_install_preflight(): array {
  * so a hand-crafted POST or a chooser rendered before conditions changed
  * can never start an install the host cannot run.
  */
-function cashupay_install_preflight_failure(): ?string {
-    foreach (cashupay_install_preflight() as $label => $check) {
+function barebits_install_preflight_failure(): ?string {
+    foreach (barebits_install_preflight() as $label => $check) {
         if (empty($check['ok'])) {
             return $label . ($check['detail'] !== '' ? ' — ' . $check['detail'] : '');
         }
@@ -181,10 +181,10 @@ function cashupay_install_preflight_failure(): ?string {
  *
  * @return array{ok:bool, message?:string, tag?:string, zip_url?:string, zip_name?:string, sums_url?:?string}
  */
-function cashupay_fetch_latest_release(): array {
-    $testing = cashupay_release_channel() === 'testing';
+function barebits_fetch_latest_release(): array {
+    $testing = barebits_release_channel() === 'testing';
     $endpoint = $testing ? '/releases?per_page=15' : '/releases/latest';
-    $response = wp_remote_get(cashupay_release_api_base() . $endpoint, [
+    $response = wp_remote_get(barebits_release_api_base() . $endpoint, [
         'timeout' => 15,
         'headers' => ['Accept' => 'application/vnd.github+json'],
     ]);
@@ -244,7 +244,7 @@ function cashupay_fetch_latest_release(): array {
  *
  * @return array{ok:bool, file?:string, message?:string, verified?:bool}
  */
-function cashupay_download_release(array $release): array {
+function barebits_download_release(array $release): array {
     if (!function_exists('download_url')) {
         require_once ABSPATH . 'wp-admin/includes/file.php';
     }
@@ -289,7 +289,7 @@ function cashupay_download_release(array $release): array {
  *
  * @return array{ok:bool, message?:string}
  */
-function cashupay_unpack_release(string $zipPath, string $installDir): array {
+function barebits_unpack_release(string $zipPath, string $installDir): array {
     global $wp_filesystem;
     if (!function_exists('WP_Filesystem')) {
         require_once ABSPATH . 'wp-admin/includes/file.php';
@@ -377,7 +377,7 @@ function cashupay_unpack_release(string $zipPath, string $installDir): array {
  *
  * @return array{ok:bool, token?:string, admin_password?:string, sso_key?:string, message?:string}
  */
-function cashupay_write_install_config(string $installDir, string $dataDir, string $baseUrl): array {
+function barebits_write_install_config(string $installDir, string $dataDir, string $baseUrl): array {
     $token = bin2hex(random_bytes(32));
     $adminPassword = wp_generate_password(24, true, false);
     $ssoKey = bin2hex(random_bytes(32));
@@ -396,7 +396,7 @@ function cashupay_write_install_config(string $installDir, string $dataDir, stri
         . "define('CASHUPAY_MANAGED_INSTALL', true);\n"
         . "// Payer-facing links prefer the shop.\n"
         . "define('CASHUPAY_SHOP_URL', " . var_export(rtrim(home_url('/'), '/'), true) . ");\n"
-        . "define('CASHUPAY_RETRY_URL_TEMPLATE', " . var_export(home_url('/?cashupay-retry={invoiceId}'), true) . ");\n"
+        . "define('CASHUPAY_RETRY_URL_TEMPLATE', " . var_export(home_url('/?barebits-retry={invoiceId}'), true) . ");\n"
         . "// Pre-seeded admin account (wizard skips its password screen); the\n"
         . "// plaintext is held by the WordPress plugin (BareBits page -> reveal).\n"
         . "define('CASHUPAY_ADMIN_PASSWORD_HASH', " . var_export(password_hash($adminPassword, PASSWORD_DEFAULT), true) . ");\n"
@@ -407,7 +407,7 @@ function cashupay_write_install_config(string $installDir, string $dataDir, stri
         . "// Where the wizard's completion screen sends the operator: the\n"
         . "// plugin's return endpoint, which collects the credentials through\n"
         . "// the handshake above and finishes the WooCommerce wiring flow.\n"
-        . "define('CASHUPAY_MANAGED_RETURN_URL', " . var_export(admin_url('admin-post.php') . '?action=cashupay_provision_return', true) . ");\n";
+        . "define('CASHUPAY_MANAGED_RETURN_URL', " . var_export(admin_url('admin-post.php') . '?action=barebits_provision_return', true) . ");\n";
     // phpcs:enable
     if (file_put_contents(rtrim($installDir, '/') . '/user_config.php', $config) === false) {
         return ['ok' => false, 'message' => 'Could not write user_config.php into the install.'];
@@ -426,15 +426,15 @@ function cashupay_write_install_config(string $installDir, string $dataDir, stri
  *
  * @return array{ok:bool, message?:string, url?:string, verified?:bool}
  */
-function cashupay_run_install(string $dirname = ''): array {
-    $target = cashupay_resolve_install_target($dirname);
+function barebits_run_install(string $dirname = ''): array {
+    $target = barebits_resolve_install_target($dirname);
     if (isset($target['error'])) {
         return ['ok' => false, 'message' => $target['error']];
     }
     $installDir = $target['dir'];
 
     if (is_dir($installDir)) {
-        $ours = (string) get_option('cashupay_install_dir', '');
+        $ours = (string) get_option('barebits_install_dir', '');
         if ($ours === $installDir && is_file($installDir . '/user_config.php') && is_file($installDir . '/BUILD_INFO')) {
             // Our own earlier install — but only resumable if that release can
             // actually finish this flow. An install made while the plugin still
@@ -453,9 +453,9 @@ function cashupay_run_install(string $dirname = ''): array {
             // connection options a reset may have cleared — but never the
             // credentials, whose hashes are baked into the install's own
             // user_config.php and must not be regenerated out from under it.
-            update_option('cashupay_mode', 'install');
-            update_option('cashupay_server_url', $target['url']);
-            update_option('cashupay_install_url', $target['url'], false);
+            update_option('barebits_mode', 'install');
+            update_option('barebits_server_url', $target['url']);
+            update_option('barebits_install_url', $target['url'], false);
             return ['ok' => true, 'url' => $target['url'], 'verified' => true];
         }
         if (count(array_diff((array) scandir($installDir), ['.', '..'])) > 0) {
@@ -463,48 +463,48 @@ function cashupay_run_install(string $dirname = ''): array {
         }
         // Empty leftover directory: remove it so the unpack's move can take
         // its place. Just-verified empty, and the WP_Filesystem API is not
-        // initialized this early in the flow (cashupay_unpack_release does
+        // initialized this early in the flow (barebits_unpack_release does
         // that right before the move).
         // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir
         @rmdir($installDir);
     }
 
-    $release = cashupay_fetch_latest_release();
+    $release = barebits_fetch_latest_release();
     if (empty($release['ok'])) {
         return ['ok' => false, 'message' => $release['message']];
     }
 
-    $download = cashupay_download_release($release);
+    $download = barebits_download_release($release);
     if (empty($download['ok'])) {
         return ['ok' => false, 'message' => $download['message']];
     }
 
-    $unpack = cashupay_unpack_release($download['file'], $installDir);
+    $unpack = barebits_unpack_release($download['file'], $installDir);
     wp_delete_file($download['file']);
     if (empty($unpack['ok'])) {
         return ['ok' => false, 'message' => $unpack['message']];
     }
 
-    $dataDir = cashupay_resolve_data_dir($installDir);
-    $config = cashupay_write_install_config($installDir, $dataDir, $target['url']);
+    $dataDir = barebits_resolve_data_dir($installDir);
+    $config = barebits_write_install_config($installDir, $dataDir, $target['url']);
     if (empty($config['ok'])) {
         return ['ok' => false, 'message' => $config['message']];
     }
 
-    update_option('cashupay_mode', 'install');
-    update_option('cashupay_install_dir', $installDir, false);
-    update_option('cashupay_install_data_dir', $dataDir, false);
-    update_option('cashupay_server_url', $target['url']);
+    update_option('barebits_mode', 'install');
+    update_option('barebits_install_dir', $installDir, false);
+    update_option('barebits_install_data_dir', $dataDir, false);
+    update_option('barebits_server_url', $target['url']);
     // The install's own address, kept separate from the connected-server URL
     // so the cron heartbeat can outlive resets and mode changes.
-    update_option('cashupay_install_url', $target['url'], false);
-    update_option('cashupay_provision_token', $config['token'], false);
+    update_option('barebits_install_url', $target['url'], false);
+    update_option('barebits_provision_token', $config['token'], false);
     // The BareBits admin password (its account is pre-seeded from the hash;
     // day-to-day login is automatic via SSO — this is the copy the site
     // admin can reveal when BareBits asks for a password, e.g. revealing a
     // wallet recovery phrase) and the SSO key that mints login tokens.
-    update_option('cashupay_admin_password', $config['admin_password'], false);
-    update_option('cashupay_sso_key', $config['sso_key'], false);
+    update_option('barebits_admin_password', $config['admin_password'], false);
+    update_option('barebits_sso_key', $config['sso_key'], false);
 
     return ['ok' => true, 'url' => $target['url'], 'verified' => !empty($download['verified'])];
 }
@@ -523,9 +523,9 @@ function cashupay_run_install(string $dirname = ''): array {
  *                 matters: an HTML page must never count as the API.
  *
  * Pure (no WordPress calls) so tests/php can pin the matrix without a
- * WordPress install; cashupay_install_loopback_verdict() is the live prober.
+ * WordPress install; barebits_install_loopback_verdict() is the live prober.
  */
-function cashupay_api_probe_verdict(bool $requestFailed, int $code, string $body): string {
+function barebits_api_probe_verdict(bool $requestFailed, int $code, string $body): string {
     if ($requestFailed) {
         return 'unreachable';
     }
@@ -552,15 +552,15 @@ function cashupay_api_probe_verdict(bool $requestFailed, int $code, string $body
  * every host executes directly, so this probe answers wherever loopback
  * works at all.
  */
-function cashupay_install_loopback_verdict(string $url): string {
-    $response = wp_remote_get(cashupay_api_transport_url($url, '/api/v1/server/info', $url), [
+function barebits_install_loopback_verdict(string $url): string {
+    $response = wp_remote_get(barebits_api_transport_url($url, '/api/v1/server/info', $url), [
         'timeout' => 10,
-        'sslverify' => !cashupay_is_same_host_url($url),
+        'sslverify' => !barebits_is_same_host_url($url),
     ]);
     if (is_wp_error($response)) {
         return 'unreachable';
     }
-    return cashupay_api_probe_verdict(
+    return barebits_api_probe_verdict(
         false,
         (int) wp_remote_retrieve_response_code($response),
         (string) wp_remote_retrieve_body($response)
@@ -574,15 +574,15 @@ function cashupay_install_loopback_verdict(string $url): string {
  * @return array{status:'ready'|'pending'|'error', message?:string,
  *               storeId?:string, apiKey?:string, cronKey?:string}
  */
-function cashupay_collect_provision(): array {
-    $server = cashupay_server_url();
-    $token = (string) get_option('cashupay_provision_token', '');
+function barebits_collect_provision(): array {
+    $server = barebits_server_url();
+    $token = (string) get_option('barebits_provision_token', '');
     if ($server === '' || $token === '') {
         return ['status' => 'error', 'message' => 'No provisioning token — run the installer first.'];
     }
     $response = wp_remote_post($server . '/provision.php', [
         'timeout' => 15,
-        'sslverify' => !cashupay_is_same_host_url($server),
+        'sslverify' => !barebits_is_same_host_url($server),
         'headers' => ['X-PROVISION-TOKEN' => $token],
     ]);
     if (is_wp_error($response)) {
@@ -600,7 +600,7 @@ function cashupay_collect_provision(): array {
             && !empty($body['storeId']) && !empty($body['apiKey']) && !empty($body['cronKey'])) {
         // Single use on both sides: the server just invalidated the exchange,
         // so the plaintext token has no further value here either.
-        delete_option('cashupay_provision_token');
+        delete_option('barebits_provision_token');
         return [
             'status' => 'ready',
             'storeId' => (string) $body['storeId'],
