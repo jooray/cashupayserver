@@ -402,12 +402,11 @@ OUTPUT_ESCAPE_APPROVED = (
 # keyed by (file, substring that must appear in the statement — the
 # compensating control). Extending this map is a review-level decision, not
 # a convenience: each entry documents why escaping is the wrong tool there.
-RAW_OUTPUT_ALLOWLIST = {
-    # The bridge's proxy passthrough: the install's API response body is
-    # relayed byte-for-byte under the install's own Content-Type (JSON),
-    # never rendered as this site's HTML — escaping would corrupt the API
-    # payload the WooCommerce gateway and external clients parse.
-    ("api-bridge.php", "wp_remote_retrieve_body("),
+RAW_OUTPUT_ALLOWLIST: set[tuple[str, str]] = {
+    # Deliberately empty: every echo in the plugin now escapes in its output
+    # context — including the API bridge's relay, which validates the
+    # upstream body as JSON and re-emits it through wp_json_encode instead
+    # of echoing the raw bytes (the wp.org reviewer's cited example).
 }
 
 

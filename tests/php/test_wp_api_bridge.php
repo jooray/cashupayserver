@@ -14,7 +14,9 @@
  * The wp.org review gate (2026-09, second round) also lives here: nothing
  * from the request may be replayed raw, so the pure query re-encoder and
  * body validator are pinned pair by pair — including every spelling of a
- * smuggled cashupay_path parameter and the JSON/size refusals. The live
+ * smuggled cashupay_path parameter and the JSON/size refusals — and nothing
+ * from the response is echoed raw either: the response validator and the
+ * wp_json_encode relay re-encode are pinned below (escape late). The live
  * HTTP half of the same gate is tests/wordpress/test_wp_api_bridge_live.py.
  */
 declare(strict_types=1);
@@ -141,6 +143,31 @@ assert_eq(null, cashupay_api_bridge_body_refusal($atCap), 'a body exactly at the
 $refusal = cashupay_api_bridge_body_refusal('"' . str_repeat('a', CASHUPAY_BRIDGE_MAX_BODY_BYTES - 1) . '"');
 assert_eq(413, $refusal[0] ?? null, 'one byte over the cap is refused with 413');
 assert_eq('bridge-body-too-large', $refusal[1] ?? null, 'oversize refusal carries its error code');
+
+// --- Response validation (wp.org review: escape late — no raw relay) ---------
+// The install's api.php answers every bridged endpoint with JSON; the bridge
+// refuses anything else (an HTML fatal-error page, say) with 502 instead of
+// echoing it, and re-emits a valid body through wp_json_encode.
+assert_eq(null, cashupay_api_bridge_response_refusal(''),
+    'an empty response body (HEAD, 204) is fine');
+assert_eq(null, cashupay_api_bridge_response_refusal('{"code":"service-unavailable","message":"x"}'),
+    'a JSON response body is fine');
+assert_eq(null, cashupay_api_bridge_response_refusal('null'),
+    'any valid JSON document is fine, scalars included');
+$refusal = cashupay_api_bridge_response_refusal('<html><body>Fatal error</body></html>');
+assert_eq(502, $refusal[0] ?? null, 'a non-JSON upstream body is refused with 502');
+assert_eq('bridge-invalid-response', $refusal[1] ?? null, 'non-JSON response refusal carries its error code');
+$refusal = cashupay_api_bridge_response_refusal('{"truncated":');
+assert_eq(502, $refusal[0] ?? null, 'truncated upstream JSON is refused too');
+
+// The relay's re-encode — the same expression the bridge echoes
+// (wp_json_encode(json_decode($body), $flags)) — is semantically lossless
+// for API payloads: {} vs [] survives, slashes and Unicode stay literal,
+// a 1.0 stays a float, and key order is preserved.
+$flags = JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION;
+assert_eq('{"b":{},"a":[],"url":"https://x/y?a=1","rate":1.0,"n":null,"s":"café"}',
+    wp_json_encode(json_decode('{"b":{},"a":[],"url":"https:\/\/x\/y?a=1","rate":1.0,"n":null,"s":"café"}'), $flags),
+    'the relay re-encode round-trips an API payload without changing its meaning');
 
 // --- Authorization header recovery -------------------------------------------
 $_SERVER['HTTP_AUTHORIZATION'] = 'token abc';

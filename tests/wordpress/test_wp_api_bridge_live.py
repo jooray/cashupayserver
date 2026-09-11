@@ -39,8 +39,12 @@ MAX_BODY_BYTES = 1048576  # mirrors CASHUPAY_BRIDGE_MAX_BODY_BYTES
 def _assert_replayed(r: requests.Response) -> None:
     """The request provably rode the bridge into the install's api.php: the
     un-set-up install answers 503 in its own JSON error shape. WordPress
-    serving the URL itself would be a themed 404 page."""
+    serving the URL itself would be a themed 404 page. The bridge validates
+    the upstream body as JSON and re-emits it via wp_json_encode as
+    application/json (wp.org escape-late review gate) — so the reply parsing
+    here is also the proof the re-encoded relay stays valid JSON."""
     assert r.status_code == 503, f"bridged request -> {r.status_code}: {r.text[:300]}"
+    assert (r.headers.get("Content-Type") or "").startswith("application/json"), r.headers
     assert r.json().get("code") == "service-unavailable", r.text[:300]
 
 

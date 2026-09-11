@@ -11,7 +11,8 @@
  * lands in WordPress instead of the install, this bridge catches it and
  * replays it against the install's api.php as a direct .php URL, carrying the
  * API path as a query parameter (api.php's cashupay_path transport). The
- * response is streamed back unchanged, so the canonical /api/v1 URLs work for
+ * response — JSON by the API's contract — is validated and re-encoded through
+ * wp_json_encode before it is emitted, so the canonical /api/v1 URLs work for
  * every caller — the WooCommerce gateway, this plugin, external API clients.
  *
  * On hosts where the install's rewrites work, these requests are served by
@@ -154,6 +155,30 @@ function cashupay_api_bridge_body_refusal(string $body): ?array {
 }
 
 /**
+ * Decide whether a bridged response body must be refused instead of relayed:
+ * returns [HTTP status, error code, message], or null when the body is fine
+ * to re-emit. The install's api.php sends Content-Type: application/json
+ * unconditionally and every endpoint the bridge can reach emits JSON, so a
+ * valid response body is empty or JSON — anything else (an HTML fatal-error
+ * page, say) is not an API payload and must not be relayed onto this origin.
+ * A body that passes is re-encoded through wp_json_encode() at the echo
+ * (escape-late, in the JSON context), never emitted as the original bytes.
+ *
+ * Pure (no WordPress calls) so tests/php can pin it;
+ * cashupay_maybe_bridge_api_request() is the live caller.
+ */
+function cashupay_api_bridge_response_refusal(string $body): ?array {
+    if ($body === '') {
+        return null;
+    }
+    json_decode($body);
+    if (json_last_error() !== JSON_ERROR_NONE) {
+        return [502, 'bridge-invalid-response', 'The BareBits install returned a non-JSON response the bridge will not relay.'];
+    }
+    return null;
+}
+
+/**
  * Answer a request the bridge has proven is ours but refuses to replay,
  * in the API's own error shape, and stop.
  */
@@ -179,8 +204,8 @@ function cashupay_api_bridge_refuse(int $status, string $code, string $message):
  * as if the install's own rewrites had served it). It only ever proxies to
  * the plugin's OWN alongside install on this site's own origin — the target
  * is built from the stored install URL, never from request input — and the
- * response is relayed under the install's Content-Type, never rendered as
- * this site's HTML.
+ * response is validated as JSON, re-encoded, and served as application/json,
+ * never rendered as this site's HTML.
  *
  * Nothing from the request is replayed raw: the method must be a standard
  * verb (405 otherwise), the query string is percent re-encoded pair by pair
@@ -263,16 +288,21 @@ function cashupay_maybe_bridge_api_request(): void {
         exit;
     }
 
-    status_header((int) wp_remote_retrieve_response_code($response));
-    $contentType = wp_remote_retrieve_header($response, 'content-type');
-    if (is_array($contentType)) {
-        $contentType = (string) end($contentType);
+    $body = (string) wp_remote_retrieve_body($response);
+    $refusal = cashupay_api_bridge_response_refusal($body);
+    if ($refusal !== null) {
+        cashupay_api_bridge_refuse($refusal[0], $refusal[1], $refusal[2]);
     }
-    header('Content-Type: ' . (is_string($contentType) && $contentType !== '' ? $contentType : 'application/json'));
-    // Raw proxy passthrough: the install's API response body is relayed
-    // byte-for-byte under its own Content-Type (JSON); it is never rendered
-    // as this site's HTML, and escaping would corrupt the API payload.
-    // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
-    echo wp_remote_retrieve_body($response);
+
+    status_header((int) wp_remote_retrieve_response_code($response));
+    header('Content-Type: application/json');
+    if ($body !== '') {
+        // Escape-late, in the JSON context: the body is proven valid JSON
+        // above, decoded, and re-emitted through wp_json_encode — never the
+        // upstream bytes. The flags keep the re-encoding semantically
+        // lossless for API payloads: slashes and Unicode stay literal, and a
+        // float like 1.0 stays a float instead of collapsing to the int 1.
+        echo wp_json_encode(json_decode($body), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRESERVE_ZERO_FRACTION);
+    }
     exit;
 }
