@@ -103,7 +103,7 @@ class Database {
             // on existing installs that haven't yet picked it up. All migrations
             // are idempotent, so a fire is safe.
             $hasLatestMigration = $hasConfig
-                && self::columnExists(self::$instance, 'invoices', 'strike_receive_request_id');
+                && self::columnExists(self::$instance, 'invoices', 'onchain_last_polled_at');
             // The auto-withdraw → auto-cashout rename is a data-only migration
             // (config key + notification event labels) with no schema artifact
             // to mark it done, so probe for the legacy config key directly. The
@@ -1710,13 +1710,29 @@ HTACCESS;
         // chain watcher — the receive-request id is recorded only so the
         // merchant can match the payment in Strike's dashboard and so the
         // poller knows the address is invoice-unique (never static-mode
-        // amount-matched). invoices.strike_receive_request_id is the "latest"
-        // migration marker (see getInstance), so this block stays last.
+        // amount-matched).
         if (!self::columnExists($pdo, 'stores', 'onchain_strike_enabled')) {
             $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_strike_enabled INTEGER NOT NULL DEFAULT 0");
         }
         if (!self::columnExists($pdo, 'invoices', 'strike_receive_request_id')) {
             $pdo->exec("ALTER TABLE invoices ADD COLUMN strike_receive_request_id TEXT DEFAULT NULL");
+        }
+
+        // Dedicated throttle for the on-chain cron batch poll. Every rail
+        // poller used to share invoices.last_polled_at; the Lightning pollers
+        // (min interval 15-30s) re-stamp it on every cron pass, so the
+        // on-chain poller (min interval 60s, runs last in cron.php) never saw
+        // a 60s-old stamp on an invoice that carries BOTH a Lightning rail
+        // and an on-chain address — cron-side on-chain detection was starved
+        // and only the payment page's 2s poll ever saw the payment. A
+        // customer who paid on-chain and closed the tab ended with an
+        // Expired invoice on received funds. The on-chain poller now
+        // filters/stamps this column exclusively; last_polled_at stays the
+        // Lightning pollers' throttle. invoices.onchain_last_polled_at is
+        // the "latest" migration marker (see getInstance), so this stays
+        // last.
+        if (!self::columnExists($pdo, 'invoices', 'onchain_last_polled_at')) {
+            $pdo->exec("ALTER TABLE invoices ADD COLUMN onchain_last_polled_at INTEGER DEFAULT NULL");
         }
     }
 

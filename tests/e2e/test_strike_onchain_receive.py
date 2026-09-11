@@ -18,8 +18,9 @@ paying transaction, and cron's on-chain poll settles the invoice.
 A key without the receive-request scope (mocked as a 403) is refused at
 enable time and the flag stays off.
 
-PHP-side counterparts: tests/php/test_invoice_strike_onchain.php and
-tests/php/test_strike_onchain_gate.php.
+PHP-side counterparts: tests/php/test_invoice_strike_onchain.php,
+tests/php/test_strike_onchain_gate.php and
+tests/php/test_onchain_dual_rail_cron_poll.php (the cron-throttle fix).
 """
 from __future__ import annotations
 
@@ -206,29 +207,27 @@ def test_strike_onchain_enable_checkout_and_chain_settle(
     assert page.status_code == 200
     assert row["onchain_address"] in page.text, "on-chain payment option not offered"
 
-    # 4. "The customer pays on-chain": the mock Esplora reports a confirmed
-    # UTXO on the Strike address. The payment page's JSON poll (the primary
-    # on-chain detection path for invoices that also carry a Lightning rail —
-    # the cron batch poll is throttled by the rails' shared last_polled_at
-    # stamp) runs OnchainPayments::pollInvoice and settles the invoice.
+    # 4. "The customer pays on-chain AND closes the tab": the mock Esplora
+    # reports a confirmed UTXO on the Strike address, and CRON alone (no
+    # payment-page polls) must settle the invoice. This is the path the
+    # dedicated onchain_last_polled_at throttle restored — the Strike LN
+    # poller stamps the shared last_polled_at every cron pass, and the old
+    # shared-column throttle (broken further by the PDO text-affinity
+    # comparison) never chain-polled a dual-rail invoice again.
     mock_esplora.pay(
         row["onchain_address"], INVOICE_AMOUNT_SAT,
         txid="e2e" + "f" * 61, height=TIP_HEIGHT,
     )
     deadline = time.monotonic() + 45
-    last: dict = {}
     while time.monotonic() < deadline:
-        r = requests.get(
-            f"{payserver.url}/payment.php",
-            params={"id": invoice_id, "json": "1"}, timeout=30,
-        )
-        assert r.status_code == 200, r.text
-        last = r.json()
-        if last.get("status") == "Settled":
+        cron = payserver.trigger_cron()
+        assert cron.status_code == 200, cron.text
+        if _invoice_row(configured, invoice_id)["status"] == "Settled":
             break
-        time.sleep(1)
-    assert last.get("status") == "Settled", f"not settled within 45s; last={last}"
+        time.sleep(2)
     final = _invoice_row(configured, invoice_id)
+    assert final["status"] == "Settled", f"cron did not settle the invoice: {final['status']}"
+    assert final["onchain_last_polled_at"], "the on-chain poller stamped its own throttle column"
     assert final["status"] == "Settled", final
     assert final["settled_rail"] == "onchain", final
     with payserver.db() as db:
