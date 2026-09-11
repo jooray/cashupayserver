@@ -47,8 +47,6 @@ from . import backend, binaries
 from .boltz_regtest import BoltzRegtestHandle
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-FULCRUM = REPO_ROOT / "tests" / "bin" / "fulcrum-2.1.1" / "Fulcrum"
-ELECTRUM = REPO_ROOT / "tests" / "bin" / "electrum-4.7.2" / "electrum.AppImage"
 
 
 def _php_bin() -> Path:
@@ -58,6 +56,17 @@ def _php_bin() -> Path:
     so a hardcoded path could be missing on a fresh CI checkout — which surfaced
     as FileNotFoundError deep in payserver setup."""
     return binaries.ensure(binaries.PHP)["php"]
+
+
+def fulcrum_bin() -> Path:
+    """Resolve Fulcrum via the binary manager for the same reason as _php_bin:
+    a hardcoded tests/bin path is missing on a fresh CI checkout."""
+    return binaries.ensure(binaries.FULCRUM)["Fulcrum"]
+
+
+def electrum_bin() -> Path:
+    """Resolve the Electrum AppImage via the binary manager (see _php_bin)."""
+    return binaries.ensure_file(binaries.ELECTRUM)
 
 
 def free_port() -> int:
@@ -95,7 +104,7 @@ def start_fulcrum(workdir: Path, boltz: BoltzRegtestHandle) -> FulcrumProc:
         "",
     ]))
     log = (datadir / "fulcrum.log").open("ab")
-    proc = subprocess.Popen([str(FULCRUM), str(conf)], stdout=log, stderr=subprocess.STDOUT)
+    proc = subprocess.Popen([str(fulcrum_bin()), str(conf)], stdout=log, stderr=subprocess.STDOUT)
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         try:
@@ -135,7 +144,7 @@ def electrum_cli(datadir: Path, *args: str, timeout: float = 30.0) -> str:
     env = os.environ.copy()
     env.setdefault("APPIMAGE_EXTRACT_AND_RUN", "1")
     res = subprocess.run(
-        [str(ELECTRUM), "--regtest", "--dir", str(datadir), *args],
+        [str(electrum_bin()), "--regtest", "--dir", str(datadir), *args],
         capture_output=True, text=True, env=env, timeout=timeout,
     )
     if res.returncode != 0:
@@ -189,7 +198,7 @@ def start_electrum(workdir: Path, fulcrum_port: int) -> ElectrumProc:
     env.setdefault("APPIMAGE_EXTRACT_AND_RUN", "1")
     log = (datadir / "daemon.log").open("ab")
     proc = subprocess.Popen(
-        [str(ELECTRUM), "--regtest", "--dir", str(datadir), "daemon", "-v"],
+        [str(electrum_bin()), "--regtest", "--dir", str(datadir), "daemon", "-v"],
         env=env, stdout=log, stderr=subprocess.STDOUT,
     )
     deadline = time.monotonic() + 30
