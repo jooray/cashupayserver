@@ -322,9 +322,17 @@
 // back until it reports PAID. The key only needs the create/quote/read
 // invoice scopes — it can never spend funds.
 //
+// With the optional "also accept on-chain payments via Strike" setting the
+// invoice's on-chain address is minted in the Strike account too (one
+// receive request per invoice; needs the additional
+// partner.receive-request.create scope, mainnet only). Settlement of those
+// stays with the normal on-chain chain watcher; the store's xpub/static
+// address is the fallback when the Strike call fails. See docs/onchain.md.
+//
 // STRIKE_TIMEOUT_SEC: checkout-path wall-clock budget (seconds) for the
-// create+quote round trips while the customer waits. Defaults to the same
-// 5s the other direct-receive rails use; settlement polls and the save-time
-// probe use a 10s budget.
+// create+quote round trips while the customer waits (the on-chain receive
+// request shares the same budget). Defaults to the same 5s the other
+// direct-receive rails use; settlement polls and the save-time probes use
+// a 10s budget.
 //
 // define('STRIKE_TIMEOUT_SEC', 5);

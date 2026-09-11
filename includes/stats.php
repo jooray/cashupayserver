@@ -494,7 +494,7 @@ class Stats {
             'onchain_address', 'onchain_address_index', 'onchain_amount_sat',
             'onchain_first_seen_at', 'onchain_created_tip_height',
             'onchain_amount_tweak_sats', 'onchain_needs_manual_confirmation',
-            'onchain_manual_candidates',
+            'onchain_manual_candidates', 'onchain_last_polled_at',
             'fee_redirect_note', 'fee_redirect_destination', 'fee_redirect_rails',
             'ln_destination', 'lnurl_verify_url', 'lnurl_preimage',
             'lnurl_override_reason',
@@ -503,6 +503,7 @@ class Stats {
             'nwc_payment_hash', 'nwc_preimage',
             'cashu_offline_allow_any_mint', 'cashu_offline_fail_reason',
             'cart_purchase_counted', 'strike_invoice_id',
+            'strike_receive_request_id',
         ];
     }
 

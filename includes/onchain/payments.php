@@ -184,7 +184,9 @@ class OnchainPayments {
         return null;
     }
 
-    private static function currentTipBestEffort(array $store): ?int {
+    /** Public: Invoice::create also stamps a Strike-minted address with the
+     *  allocation-time tip, using the same best-effort semantics. */
+    public static function currentTipBestEffort(array $store): ?int {
         // Capture the chain tip at allocation time. The poller compares
         // each observation's block_height against this to discard payments
         // that existed on a re-used address BEFORE the invoice was created.
@@ -352,7 +354,13 @@ class OnchainPayments {
 
         $minConfs = (int)($store['onchain_min_confs'] ?? 1);
         $now = time();
-        $isStaticMode = ($store['onchain_address_mode'] ?? 'xpub') === 'static';
+        // A Strike-minted address (strike_receive_request_id set) is fresh
+        // per invoice, so it always uses the unambiguous unique-address
+        // attribution below — even when the STORE is in static mode (the
+        // static config is then only the fallback source for invoices where
+        // the Strike call failed).
+        $isStaticMode = ($store['onchain_address_mode'] ?? 'xpub') === 'static'
+            && empty($invoice['strike_receive_request_id']);
 
         // Filter out historical UTXOs on a re-used address — any tx confirmed
         // strictly before the invoice was created. onchain_created_tip_height
@@ -521,25 +529,42 @@ class OnchainPayments {
      * Run pollInvoice() for every New/Processing invoice that has an
      * on-chain address. Used by the cron task.
      *
+     * Throttled via invoices.onchain_last_polled_at — its OWN column, not
+     * the last_polled_at the Lightning rail pollers share. The on-chain rail
+     * is the only one that rides ALONGSIDE another rail on the same invoice
+     * (bolt11 + address); with a shared stamp, the invoice's Lightning
+     * poller (15-30s interval, runs earlier in cron.php) re-stamped it on
+     * every cron pass and this poller's 60s check never came due, so the
+     * cron-side backup for "customer paid on-chain and closed the tab"
+     * silently never ran on dual-rail invoices.
+     *
      * @param int $minIntervalSec Minimum seconds between consecutive polls of the same invoice
      * @param int $batchLimit Maximum invoices to poll per call
      */
     public static function pollPending(int $minIntervalSec = 60, int $batchLimit = 20): array {
         $now = time();
+        // Throttle as `column <= cutoff`, NOT `(? - column) >= ?`: PDO binds
+        // execute() params as TEXT, and while the column's INTEGER affinity
+        // coerces a param it is compared against directly, an arithmetic
+        // expression has no affinity — `(? - column) >= ?` compared integer
+        // against text, which is ALWAYS false in SQLite (integers sort below
+        // text). The old shape meant a stamped invoice was never re-polled.
+        // Same quirk SwapPoller::pollPending documents and works around.
+        $cutoff = $now - $minIntervalSec;
         $rows = Database::fetchAll(
             "SELECT id FROM invoices
               WHERE onchain_address IS NOT NULL
                 AND status IN ('New', 'Processing')
-                AND (last_polled_at IS NULL OR (? - last_polled_at) >= ?)
-              ORDER BY last_polled_at ASC NULLS FIRST
+                AND (onchain_last_polled_at IS NULL OR onchain_last_polled_at <= ?)
+              ORDER BY onchain_last_polled_at ASC NULLS FIRST
               LIMIT ?",
-            [$now, $minIntervalSec, $batchLimit]
+            [$cutoff, $batchLimit]
         );
         $results = [];
         foreach ($rows as $r) {
             try {
                 Database::query(
-                    "UPDATE invoices SET last_polled_at = ? WHERE id = ?",
+                    "UPDATE invoices SET onchain_last_polled_at = ? WHERE id = ?",
                     [$now, $r['id']]
                 );
                 $results[$r['id']] = self::pollInvoice($r['id']);
