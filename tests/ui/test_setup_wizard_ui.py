@@ -85,14 +85,15 @@ def test_setup_wizard_completes_in_browser(
     )
     page.click("#onchain-save-btn")
 
-    # zeroconf: only present because an on-chain destination was saved.
-    page.wait_for_selector("button:has-text('Enable zero-conf')")
-    page.click("button:has-text('Enable zero-conf')")
-
     # lightning: an LNURL address, no noffer.
     page.wait_for_selector("#lightning_address")
     page.fill("#lightning_address", LIGHTNING_ADDRESS)
     page.click("button:has-text('Continue')")
+
+    # zeroconf: after lightning (where Strike on-chain — the other possible
+    # receive source — is answered), present because an xpub was saved.
+    page.wait_for_selector("button:has-text('Enable zero-conf')")
+    page.click("button:has-text('Enable zero-conf')")
 
     # swaps: enabled (permitted because the store has an xpub).
     page.wait_for_selector("button:has-text('Enable submarine swaps')")

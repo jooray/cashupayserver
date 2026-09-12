@@ -237,6 +237,52 @@ def test_strike_onchain_enable_checkout_and_chain_settle(
     assert [p[0] for p in paid] == [INVOICE_AMOUNT_SAT], paid
 
 
+def test_strike_only_store_saves_zeroconf_from_the_onchain_card(
+    shared_configured_with_strike: ConfiguredPayserver,
+    strike_api_shared: StrikeApiServer,
+) -> None:
+    """A Strike-only store (Strike on-chain enabled, no xpub/static address)
+    must be able to opt into zero-conf from the admin on-chain card: saving
+    with an empty address persists min_confs, and the response flags the
+    still-active Strike rail so the UI doesn't announce "on-chain disabled"."""
+    configured = shared_configured_with_strike
+    store_id = configured.store_id
+    admin = configured.admin
+
+    r = _save_strike(admin, store_id, TEST_STRIKE_KEY, "1")
+    assert r.status_code == 200, r.text
+
+    r = admin.s.post(
+        admin._admin_url,
+        data={
+            "action": "save_onchain",
+            "store_id": store_id,
+            "mode": "xpub",
+            "xpub": "",
+            "network": "mainnet",
+            "address_type": "P2WPKH",
+            "min_confs": "0",
+            "confirm_timeout_sec": "86400",
+            "provider_url": "",
+        },
+        headers={"X-CSRF-Token": admin.csrf_token}, timeout=30,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["disabled"] is True, "no address source was configured"
+    assert body["strikeOnchain"] is True, "the response must flag the active Strike rail"
+
+    with configured.handle.db() as db:
+        row = db.execute(
+            "SELECT onchain_min_confs, onchain_strike_enabled, onchain_xpub "
+            "FROM stores WHERE id = ?", (store_id,)
+        ).fetchone()
+    assert row[0] == 0, "zero-conf persisted for the Strike-only store"
+    assert row[1] == 1, "the address save must not touch the Strike flag"
+    assert row[2] is None
+
+
 def test_strike_onchain_enable_refused_without_scope(
     shared_configured_with_strike: ConfiguredPayserver,
     strike_api_shared: StrikeApiServer,

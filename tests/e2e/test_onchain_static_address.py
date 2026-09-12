@@ -163,6 +163,62 @@ def test_save_onchain_static_persists_address_and_clears_xpub(
     assert row["onchain_xpub"] is None
 
 
+def test_save_onchain_with_empty_address_still_persists_confirmation_policy(
+    shared_configured: ConfiguredPayserver, onchain: OnchainContext
+) -> None:
+    """Saving with no xpub/static address clears the address source but must
+    still persist the shared confirmation-policy settings (min confs,
+    confirmation window, provider URL). A Strike-only store — addresses
+    minted in the merchant's Strike account, settled by the same chain
+    watcher — has no other way to opt into zero-conf from the admin card."""
+    # Seed a non-default state so persistence is observable.
+    seed = _admin_post(
+        shared_configured, "save_onchain",
+        store_id=shared_configured.store_id,
+        mode="xpub",
+        xpub=onchain.tpub,
+        network="regtest",
+        address_type="P2WPKH",
+        min_confs="3",
+        confirm_timeout_sec="86400",
+        provider_url=onchain.watch_wallet_url,
+    )
+    assert seed.ok, seed.text
+
+    r = _admin_post(
+        shared_configured, "save_onchain",
+        store_id=shared_configured.store_id,
+        mode="xpub",
+        xpub="",
+        network="regtest",
+        address_type="P2WPKH",
+        min_confs="0",
+        confirm_timeout_sec="3600",
+        provider_url=onchain.watch_wallet_url,
+    )
+    assert r.ok, r.text
+    body = r.json()
+    assert body["success"] is True
+    assert body["disabled"] is True
+    assert body["strikeOnchain"] is False, "this store has no Strike on-chain option enabled"
+
+    conn = sqlite3.connect(shared_configured.handle.db_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        row = dict(conn.execute(
+            "SELECT onchain_xpub, onchain_static_address, onchain_min_confs, "
+            "onchain_confirm_timeout_sec, onchain_provider_url FROM stores WHERE id = ?",
+            (shared_configured.store_id,)
+        ).fetchone())
+    finally:
+        conn.close()
+    assert row["onchain_xpub"] is None, "the address source is gone"
+    assert row["onchain_static_address"] is None
+    assert row["onchain_min_confs"] == 0, "zero-conf answer persisted without an address"
+    assert row["onchain_confirm_timeout_sec"] == 3600
+    assert row["onchain_provider_url"] == onchain.watch_wallet_url
+
+
 def test_save_onchain_static_rejects_invalid_address(
     shared_configured: ConfiguredPayserver, onchain: OnchainContext
 ) -> None:

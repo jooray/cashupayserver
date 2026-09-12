@@ -2127,13 +2127,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $tweakRange = max(100, min(100000, (int)($_POST['static_tweak_range'] ?? 1000)));
 
                     if ($staticAddress === '') {
-                        // Empty address -> disable on-chain for this store.
+                        // Empty address -> no address-based on-chain source.
+                        // The shared confirmation-policy settings still
+                        // persist: a Strike-only store (addresses minted in
+                        // the merchant's Strike account) settles against
+                        // onchain_min_confs / the confirmation window via the
+                        // same chain watcher, and this save is its only way
+                        // to change them.
+                        require_once __DIR__ . '/includes/onchain/config.php';
                         Database::update('stores', [
                             'onchain_address_mode' => 'static',
                             'onchain_static_address' => null,
                             'onchain_xpub' => null,
+                            'onchain_min_confs' => $minConfs,
+                            'onchain_confirm_timeout_sec' => $confirmTimeoutSec,
+                            'onchain_provider' => 'esplora',
+                            'onchain_provider_url' => $providerUrl ?: null,
                         ], 'id = ?', [$storeId]);
-                        echo json_encode(['success' => true, 'disabled' => true]);
+                        echo json_encode([
+                            'success' => true,
+                            'disabled' => true,
+                            'strikeOnchain' => OnchainConfig::strikeEnabledForStore($storeId),
+                        ]);
                         break;
                     }
 
@@ -2170,15 +2185,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $xpub = trim($_POST['xpub'] ?? '');
 
                 if ($xpub === '') {
-                    // Empty xpub -> disable on-chain for this store. Also
+                    // Empty xpub -> no address-based on-chain source. Also
                     // clear any leftover static address so the row is in a
-                    // clean disabled state.
+                    // clean disabled state. The shared confirmation-policy
+                    // settings still persist — same Strike-only reasoning as
+                    // the static branch above.
+                    require_once __DIR__ . '/includes/onchain/config.php';
                     Database::update('stores', [
                         'onchain_address_mode' => 'xpub',
                         'onchain_xpub' => null,
                         'onchain_static_address' => null,
+                        'onchain_min_confs' => $minConfs,
+                        'onchain_confirm_timeout_sec' => $confirmTimeoutSec,
+                        'onchain_provider' => 'esplora',
+                        'onchain_provider_url' => $providerUrl ?: null,
                     ], 'id = ?', [$storeId]);
-                    echo json_encode(['success' => true, 'disabled' => true]);
+                    echo json_encode([
+                        'success' => true,
+                        'disabled' => true,
+                        'strikeOnchain' => OnchainConfig::strikeEnabledForStore($storeId),
+                    ]);
                     break;
                 }
 
@@ -11068,14 +11094,19 @@ header('Cache-Control: no-cache, must-revalidate');
             if (res.ok) {
                 let suffix = '';
                 if (data.disabled) {
-                    suffix = ' (on-chain disabled)';
+                    // No address saved. With Strike on-chain active the rail
+                    // itself stays up (Strike mints the addresses), so
+                    // "disabled" would misread — only the fallback is gone.
+                    suffix = data.strikeOnchain
+                        ? ' (no fallback address — Strike on-chain stays active)'
+                        : ' (on-chain disabled)';
                 } else if (data.xpubChanged) {
                     suffix = data.resumedIndex > 0
                         ? ' — resumed at index ' + data.resumedIndex
                         : ' — new xpub starts at index 0';
                 }
                 showInline('<strong>&#10003; Saved' + suffix + '.</strong>', true);
-                showToast('On-chain settings saved' + (data.disabled ? ' (disabled)' : ''), 'success');
+                showToast('On-chain settings saved' + (data.disabled && !data.strikeOnchain ? ' (disabled)' : ''), 'success');
                 loadDashboard();
             } else {
                 const err = data.error || `Failed to save (HTTP ${res.status})`;

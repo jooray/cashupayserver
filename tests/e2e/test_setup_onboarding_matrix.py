@@ -134,11 +134,6 @@ def walk(
         )
     assert wizard_error(body) is None, wizard_error(body)
 
-    # zeroconf only exists once there is an on-chain rail to time.
-    if choices.onchain != "skip":
-        body = w.post(step="zeroconf", zero_conf="1" if choices.zero_conf else "0")
-        assert wizard_error(body) is None, wizard_error(body)
-
     if choices.lightning == "skip":
         body = w.post(step="lightning", lightning_action="skip")
     else:
@@ -149,6 +144,13 @@ def walk(
             fields["noffers[]"] = REFERENCE_NOFFER
         body = w.post(step="lightning", lightning_action="save", **fields)
     assert wizard_error(body) is None, wizard_error(body)
+
+    # zeroconf only exists once there is an on-chain receive source to time;
+    # it sits after lightning because Strike on-chain (the other possible
+    # source) is answered there.
+    if choices.onchain != "skip":
+        body = w.post(step="zeroconf", zero_conf="1" if choices.zero_conf else "0")
+        assert wizard_error(body) is None, wizard_error(body)
 
     body = w.post(step="swaps", swaps_enabled="1" if choices.swaps else "0")
     assert wizard_error(body) is None, wizard_error(body)
@@ -572,8 +574,8 @@ def test_add_store_applies_the_same_rail_resolution(
     w2.post(step="store", store_name="Added Store")
     w2.post(step="onchain", onchain_action="save",
             onchain_address_mode="xpub", onchain_xpub=MAINNET_XPUB)
-    w2.post(step="zeroconf", zero_conf="1")
     w2.post(step="lightning", lightning_action="skip")
+    w2.post(step="zeroconf", zero_conf="1")
     w2.post(step="swaps", swaps_enabled="1")
     body = w2.post(step="mints", mints_enabled="1",
                    mint_url=mint.url, backup_mint_url=backup_mint.url, mint_unit="sat")

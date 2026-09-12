@@ -77,11 +77,11 @@ def test_declining_mints_pins_strict_mode(
     page.wait_for_selector("#onchain-validation:has-text('Looks good')")
     page.click("#onchain-save-btn")
 
-    page.wait_for_selector("button:has-text('Wait for 1 confirmation')")
-    page.click("button:has-text('Wait for 1 confirmation')")
-
     page.wait_for_selector("#lightning_address")
     page.click("button:has-text('Skip for now')")
+
+    page.wait_for_selector("button:has-text('Wait for 1 confirmation')")
+    page.click("button:has-text('Wait for 1 confirmation')")
 
     page.wait_for_selector("button:has-text('Enable submarine swaps')")
     page.click("button:has-text('Enable submarine swaps')")
@@ -255,8 +255,8 @@ def test_back_to_store_screen_renames_instead_of_duplicating(
     page.wait_for_selector("#onchain-validation:has-text('Looks good')")
     page.click("#onchain-save-btn")
 
-    # Zero-conf screen → Back lands on the on-chain screen → Back again on store.
-    page.wait_for_selector("button:has-text('Enable zero-conf')")
+    # Lightning screen → Back lands on the on-chain screen → Back again on store.
+    page.wait_for_selector("#lightning_address")
     page.click("a:has-text('Back')")
     page.wait_for_selector("#onchain-form")
     page.click("a:has-text('Back')")

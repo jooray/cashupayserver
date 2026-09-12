@@ -165,6 +165,22 @@ try {
         'receive_errors never contains the key');
     unlink($dir . '/fail_receive_request');
 
+    // ---------- 4b. zero-conf on a Strike-only store ----------
+    // onchain_min_confs = 0 (the wizard's / admin's "accept zero-conf"
+    // answer) must settle a Strike-minted address on a bare mempool
+    // sighting — 0 confirmations, no block yet — through the same chain
+    // watcher every other on-chain invoice uses.
+    Database::update('stores', ['onchain_min_confs' => 0], 'id = ?', [$store2]);
+    $inv4b = Invoice::create($store2, ['amount' => 700, 'currency' => 'sat']);
+    $fake->obs = [
+        new OnchainTxObservation('0conf', 0, 700, 0, null),
+    ];
+    $r4b = OnchainPayments::pollInvoice((string)$inv4b['id']);
+    assert_eq('Settled', $r4b['status'],
+        'a mempool-only payment settles a zero-conf Strike-only store');
+    $fake->obs = [];
+    Database::update('stores', ['onchain_min_confs' => 1], 'id = ?', [$store2]);
+
     // ---------- 5a. non-mainnet network skips Strike ----------
     $before = count(strike_mock_receive_requests($dir));
     Database::update('stores', ['onchain_network' => 'testnet'], 'id = ?', [$store]);
