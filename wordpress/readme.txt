@@ -4,7 +4,7 @@ Tags: bitcoin, lightning, payments, woocommerce, btcpay
 Requires at least: 6.0
 Tested up to: 7.1
 Requires PHP: 8.0
-Stable tag: 1.4.2
+Stable tag: 1.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -35,6 +35,10 @@ To wallets you control: your own Lightning address, your own on-chain wallet (xp
 Only the WordPress-side wiring is removed. A BareBits server installed alongside WordPress keeps running, and its data directory (which holds wallet keys) is never deleted by this plugin. The record of where that server lives — including its saved admin password, which is your only way into its dashboard — also survives, so reinstalling the plugin later offers to reconnect it.
 
 == Changelog ==
+
+= 1.5 =
+* All admin styling and scripts now load as enqueued asset files, every admin action carries explicit capability and nonce checks, request input is sanitized on read and output escaped on print, and plugin-owned names use the barebits prefix throughout — per wordpress.org plugin review feedback.
+* Server-side (for installs updating the companion BareBits server): on-chain receive through a Strike account, a confirmation-policy step for every on-chain source, and a fix for background payment polling that could miss payments made after the customer closed the payment page.
 
 = 1.4.2 =
 * The plugin's text domain now matches the wordpress.org plugin slug (barebits-lightning-payments-via-bitcoin), so community language packs from translate.wordpress.org will load.
