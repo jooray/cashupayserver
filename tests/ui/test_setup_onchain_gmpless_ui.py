@@ -83,11 +83,12 @@ def test_onchain_screen_on_gmpless_host(
     assert "Could not reach the server" not in box_text
     assert page.locator("#onchain-save-btn").is_disabled()
 
-    # Back to static mode: the reported address saves and the wizard advances.
+    # Back to static mode: the reported address saves and the wizard advances
+    # (to lightning; zeroconf follows that screen since the sequence reorder).
     page.click("#onchain-mode-toggle")
     page.fill("#onchain_static_address", REPORTED_ADDRESS)
     page.click("#onchain-save-btn")
-    page.wait_for_selector("h2:has-text('Zero-conf payments')")
+    page.wait_for_selector("h2:has-text('Lightning payments')")
 
     conn = sqlite3.connect(gmpless_payserver.data_dir / "cashupay.sqlite")
     conn.row_factory = sqlite3.Row
