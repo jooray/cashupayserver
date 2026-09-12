@@ -118,6 +118,10 @@ def test_static_address_saves_without_gmp(gmpless_payserver: PayserverHandle) ->
         onchain_static_address=REPORTED_ADDRESS,
     )
     assert wizard_error(body) is None, wizard_error(body)
+    assert wizard_heading(body) == "Lightning payments"
+    # The saved static address is an on-chain receive source, so zeroconf
+    # follows the lightning screen even on a GMP-less host.
+    body = w.post(step="lightning", lightning_action="skip")
     assert wizard_heading(body) == "Zero-conf payments"
 
     import sqlite3

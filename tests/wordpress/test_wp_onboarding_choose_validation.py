@@ -28,6 +28,13 @@ def _login_and_open_onboarding(page, wp: WordPressHandle) -> None:
     page.fill("#user_pass", WP_ADMIN_PASSWORD)
     page.click("#wp-submit")
     page.wait_for_selector("#barebits-mode-install")
+    # The chooser's behaviors (URL-field sync, maintenance guard, password
+    # reveal) live in enqueued script FILES since the wp.org review rework.
+    # wait_for_selector resolves as soon as the element parses — possibly
+    # before those footer scripts have been fetched and run on a loaded CI
+    # host — so wait for the load event, which classic scripts gate, before
+    # interacting.
+    page.wait_for_load_state()
 
 
 def test_stale_url_text_does_not_block_install_mode(wordpress, page) -> None:
