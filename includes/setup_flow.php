@@ -12,15 +12,24 @@
 require_once __DIR__ . '/database.php';
 
 final class SetupFlow {
-    /** Every screen the wizard knows, in canonical order. */
+    /**
+     * Every screen the wizard knows, in canonical order.
+     *
+     * zeroconf deliberately sits AFTER lightning: the confirmation policy
+     * applies to every on-chain receive source, and the last of those — the
+     * "accept on-chain payments via Strike" option — is only answered on the
+     * lightning screen. Asking earlier would skip the question entirely for a
+     * Strike-only store (no xpub/static address, so the screen dropped out
+     * before the operator could create the rail it times).
+     */
     public const STEPS = [
-        'terms', 'security', 'password', 'store', 'onchain', 'zeroconf',
-        'lightning', 'swaps', 'mints', 'cron', 'done',
+        'terms', 'security', 'password', 'store', 'onchain', 'lightning',
+        'zeroconf', 'swaps', 'mints', 'cron', 'done',
     ];
 
     /** The screens add_store mode walks before returning to admin. */
     public const ADD_STORE_STEPS = [
-        'store', 'onchain', 'zeroconf', 'lightning', 'swaps', 'mints',
+        'store', 'onchain', 'lightning', 'zeroconf', 'swaps', 'mints',
     ];
 
     /**
@@ -59,10 +68,12 @@ final class SetupFlow {
     /**
      * The screens in display order for a given context.
      *
-     * $includeZeroConf is false when the store has no on-chain destination —
-     * the zero-conf question has nothing to apply to, so it is dropped from
-     * the sequence entirely, which also keeps the "Step X of Y" counter honest
-     * rather than advertising a screen that will never render.
+     * $includeZeroConf is false when the store has no on-chain receive source
+     * at all (neither an xpub/static destination nor Strike on-chain minting
+     * — see zeroConfApplicable()): the zero-conf question has nothing to
+     * apply to, so it is dropped from the sequence entirely, which also keeps
+     * the "Step X of Y" counter honest rather than advertising a screen that
+     * will never render.
      *
      * $includeSecurity is false when the data directory is outside the web
      * root (and the PHP requirements all pass): the screen exists to prove
@@ -303,10 +314,30 @@ final class SetupFlow {
     }
 
     /**
+     * Does the zero-conf question apply to this store — is there ANY source
+     * of on-chain receive addresses whose settlement onchain_min_confs would
+     * time? True for an xpub/static destination and equally for Strike
+     * on-chain minting (Strike-minted addresses are settled by the same
+     * chain watcher against the same onchain_min_confs). Drives whether the
+     * zeroconf screen appears in the wizard sequence.
+     */
+    public static function zeroConfApplicable(?string $storeId): bool {
+        if ($storeId === null || $storeId === '') {
+            return false;
+        }
+        if (self::onchainState($storeId)['configured']) {
+            return true;
+        }
+        require_once __DIR__ . '/onchain/config.php';
+        return OnchainConfig::strikeEnabledForStore($storeId);
+    }
+
+    /**
      * Does this store have somewhere on-chain to send money? Drives whether
-     * the zero-conf screen is shown and whether submarine swaps can be
-     * enabled (swaps derive a fresh address per swap, so they need an xpub —
-     * a single reused address will not do).
+     * submarine swaps can be enabled (swaps derive a fresh address per swap,
+     * so they need an xpub — a single reused address will not do). The
+     * zeroconf screen gates on zeroConfApplicable() instead, which also
+     * counts Strike on-chain minting as a receive source.
      *
      * @return array{configured: bool, hasXpub: bool}
      */

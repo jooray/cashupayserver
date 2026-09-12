@@ -398,6 +398,20 @@ def payserver_with_lnurlp(request, lnurlp_server: LnurlpServer) -> Iterator[Pays
     _maybe_remove_workdir(workdir, _test_went_green(request))
 
 
+@pytest.fixture
+def payserver_with_strike(request, strike_api: StrikeApiServer) -> Iterator[PayserverHandle]:
+    """Fresh (not-yet-set-up) payserver pointed at the Strike API mock, for
+    wizard flows that save a Strike key / enable Strike on-chain."""
+    workdir = SESSION_TMP / f"payserver-{uuid.uuid4().hex[:8]}"
+    handle = start_payserver(
+        workdir,
+        extra_env={"CASHUPAY_STRIKE_API_BASE": strike_api.api_base},
+    )
+    yield handle
+    stop_payserver(handle)
+    _maybe_remove_workdir(workdir, _test_went_green(request))
+
+
 # ---- composite fixtures: payserver with setup-wizard already walked ----
 
 

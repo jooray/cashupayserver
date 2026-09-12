@@ -27,7 +27,7 @@ assert_eq(
 
 $withOnchain = SetupFlow::stepSequence('', true);
 assert_eq(
-    ['terms', 'security', 'password', 'store', 'onchain', 'zeroconf', 'lightning', 'swaps', 'mints', 'cron', 'done'],
+    ['terms', 'security', 'password', 'store', 'onchain', 'lightning', 'zeroconf', 'swaps', 'mints', 'cron', 'done'],
     $withOnchain,
     'standalone with an on-chain rail includes zeroconf'
 );
@@ -78,7 +78,7 @@ assert_eq([], SetupFlow::missingRequirements(), 'the bundled test PHP passes all
 
 $externalCron = SetupFlow::stepSequence('', true, true, false, true);
 assert_eq(
-    ['terms', 'security', 'password', 'store', 'onchain', 'zeroconf', 'lightning', 'swaps', 'mints', 'done'],
+    ['terms', 'security', 'password', 'store', 'onchain', 'lightning', 'zeroconf', 'swaps', 'mints', 'done'],
     $externalCron,
     'external cron drops the cron screen and nothing else'
 );
@@ -120,7 +120,7 @@ assert_false(SetupFlow::externalCronConfigured(), 'cleanup: unset reads as off a
 
 $preseeded = SetupFlow::stepSequence('', true, true, false, false, true);
 assert_eq(
-    ['terms', 'security', 'store', 'onchain', 'zeroconf', 'lightning', 'swaps', 'mints', 'cron', 'done'],
+    ['terms', 'security', 'store', 'onchain', 'lightning', 'zeroconf', 'swaps', 'mints', 'cron', 'done'],
     $preseeded,
     'a pre-seeded password drops the password screen and nothing else'
 );
@@ -149,7 +149,7 @@ assert_eq(
 // seeded the admin — both screens go, independently.
 $managed = SetupFlow::stepSequence('', true, true, false, true, true);
 assert_eq(
-    ['terms', 'security', 'store', 'onchain', 'zeroconf', 'lightning', 'swaps', 'mints', 'done'],
+    ['terms', 'security', 'store', 'onchain', 'lightning', 'zeroconf', 'swaps', 'mints', 'done'],
     $managed,
     'external cron + pre-seeded password drop both cron and password'
 );
@@ -163,7 +163,7 @@ assert_eq(
 
 $addStore = SetupFlow::stepSequence('add_store', true);
 assert_eq(
-    ['store', 'onchain', 'zeroconf', 'lightning', 'swaps', 'mints'],
+    ['store', 'onchain', 'lightning', 'zeroconf', 'swaps', 'mints'],
     $addStore,
     'add_store skips security/password up front and cron/done at the end'
 );
@@ -180,8 +180,12 @@ assert_false(in_array('terms', $addStore, true), 'add_store never re-shows the t
 // --- next / prev ----------------------------------------------------------
 
 assert_eq('security', SetupFlow::nextStep('terms', $withOnchain), 'the safety check follows the terms gate');
-assert_eq('zeroconf', SetupFlow::nextStep('onchain', $withOnchain), 'zeroconf follows onchain');
-assert_eq('lightning', SetupFlow::nextStep('onchain', $noOnchain), 'without zeroconf, lightning follows onchain');
+// zeroconf sits after lightning: the Strike on-chain option — the last
+// possible on-chain receive source — is only answered on the lightning
+// screen, so the confirmation-policy question has to come after it.
+assert_eq('lightning', SetupFlow::nextStep('onchain', $withOnchain), 'lightning follows onchain');
+assert_eq('zeroconf', SetupFlow::nextStep('lightning', $withOnchain), 'zeroconf follows lightning');
+assert_eq('swaps', SetupFlow::nextStep('lightning', $noOnchain), 'without zeroconf, swaps follow lightning');
 assert_eq('cron', SetupFlow::nextStep('mints', $withOnchain), 'standalone goes mints straight to cron');
 assert_null(SetupFlow::nextStep('done', $withOnchain), 'done is terminal');
 assert_null(SetupFlow::nextStep('mints', $addStore), 'mints is terminal in add_store mode');
@@ -202,8 +206,8 @@ assert_null(SetupFlow::backStep('terms', $withOnchain), 'the terms gate is first
 assert_null(SetupFlow::backStep('security', $withOnchain), 'the safety check has no Back (it must not return to terms)');
 assert_null(SetupFlow::backStep('password', $withOnchain), 'the password screen has no Back');
 assert_eq('store', SetupFlow::backStep('onchain', $withOnchain), 'Back from onchain returns to store');
-assert_eq('onchain', SetupFlow::backStep('zeroconf', $withOnchain), 'Back from zeroconf returns to onchain');
-assert_eq('onchain', SetupFlow::backStep('lightning', $noOnchain), 'Back skips the absent zeroconf screen');
+assert_eq('lightning', SetupFlow::backStep('zeroconf', $withOnchain), 'Back from zeroconf returns to lightning');
+assert_eq('lightning', SetupFlow::backStep('swaps', $noOnchain), 'Back skips the absent zeroconf screen');
 // The post-completion screens are past the point of no return: setup_complete
 // is already set and the store is live.
 assert_eq(['cron', 'done'], SetupFlow::POST_COMPLETION, 'cron and done are the only post-completion screens');
@@ -314,6 +318,33 @@ assert_eq(
     ['configured' => false, 'hasXpub' => false],
     SetupFlow::onchainState('store_static_empty'),
     'static mode with no address saved is not configured'
+);
+
+// --- zeroConfApplicable: any on-chain receive source pulls zeroconf in ------
+//
+// Strike-minted addresses settle through the same chain watcher against the
+// same onchain_min_confs, so a Strike-only store (no xpub, no static address)
+// must still be asked the zero-conf question.
+
+assert_false(SetupFlow::zeroConfApplicable(null), 'no store id means no zeroconf screen');
+assert_false(SetupFlow::zeroConfApplicable('store_missing'), 'an unknown store id means no zeroconf screen');
+assert_false(SetupFlow::zeroConfApplicable('store_bare'), 'a fresh store has nothing for zero-conf to time');
+assert_true(SetupFlow::zeroConfApplicable('store_xpub'), 'an xpub destination makes zero-conf applicable');
+assert_true(SetupFlow::zeroConfApplicable('store_static'), 'a static destination makes zero-conf applicable');
+
+make_store('store_strike_only');
+Database::query(
+    "UPDATE stores SET onchain_strike_enabled = 1 WHERE id = ?",
+    ['store_strike_only']
+);
+assert_eq(
+    ['configured' => false, 'hasXpub' => false],
+    SetupFlow::onchainState('store_strike_only'),
+    'Strike on-chain is not an address destination (swaps still need an xpub)'
+);
+assert_true(
+    SetupFlow::zeroConfApplicable('store_strike_only'),
+    'Strike on-chain minting alone makes zero-conf applicable'
 );
 
 echo "ok\n";

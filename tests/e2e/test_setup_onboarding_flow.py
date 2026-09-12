@@ -58,9 +58,14 @@ def test_full_flow_persists_every_answer(
         onchain_address_mode="xpub",
         onchain_xpub=MAINNET_XPUB,
     )
-    # Saving an on-chain destination pulls zero-conf into the sequence.
-    assert _heading(body) == "Zero-conf payments"
+    # Saving an on-chain destination pulls zero-conf into the sequence — it
+    # sits after the lightning screen (where the last possible on-chain
+    # receive source, Strike on-chain minting, is answered).
+    assert _heading(body) == "Lightning payments"
     assert "of 11" in body
+
+    body = w.post(step="lightning", lightning_action="save", lightning_address="merchant@strike.me")
+    assert _heading(body) == "Zero-conf payments"
     # The zero-conf risk mention links out to the help article explaining it.
     assert (
         '<a href="https://getbarebits.com/help/Understanding%20Bitcoin/'
@@ -69,9 +74,6 @@ def test_full_flow_persists_every_answer(
     assert "could try to game it</a>" in body
 
     body = w.post(step="zeroconf", zero_conf="1")
-    assert _heading(body) == "Lightning payments"
-
-    body = w.post(step="lightning", lightning_action="save", lightning_address="merchant@strike.me")
     assert _heading(body) == "Submarine swaps"
 
     body = w.post(step="swaps", swaps_enabled="1")
@@ -106,11 +108,63 @@ def test_skipping_onchain_removes_the_zeroconf_screen(payserver: PayserverHandle
     assert "of 10" in body, "without an on-chain rail the wizard is 10 screens, not 11"
 
     body = w.post(step="onchain", onchain_action="skip")
-    assert _heading(body) == "Lightning payments", "zero-conf must be skipped with nothing to time"
+    assert _heading(body) == "Lightning payments"
+
+    # No Strike on-chain answer on the lightning screen either, so there is
+    # still nothing for zero-conf to time and the screen stays out.
+    body = w.post(step="lightning", lightning_action="skip")
+    assert _heading(body) == "Submarine swaps", "zero-conf must be skipped with nothing to time"
 
     # Reaching it directly still renders (it is a known slug) but nothing
     # downstream depends on that; the sequence simply never routes there.
     assert _stores(payserver)[0]["onchain_min_confs"] == 1, "the default is left untouched"
+
+
+def test_strike_only_store_is_asked_the_zeroconf_question(
+    payserver_with_strike: PayserverHandle,
+) -> None:
+    """A store with ONLY a Strike API key (no xpub/static address) still gets
+    on-chain receive addresses — minted in the merchant's Strike account and
+    settled by the chain watcher against onchain_min_confs — so enabling
+    Strike on-chain on the lightning screen must pull the zero-conf screen
+    into the sequence. Before the reorder this store could never opt into
+    zero-conf: the screen sat before lightning and dropped out for lack of an
+    address destination."""
+    from fixtures.strike_api import TEST_STRIKE_KEY
+
+    payserver = payserver_with_strike
+    w = Wizard(payserver)
+    body = w.through_store("Strike Only")
+    assert "of 10" in body, "no on-chain receive source yet, so no zeroconf screen"
+
+    body = w.post(step="onchain", onchain_action="skip")
+    assert _heading(body) == "Lightning payments"
+
+    # A Strike key alone (checkbox unticked) is a Lightning-only rail:
+    # nothing mints on-chain addresses, so zero-conf still has no subject.
+    body = w.post(
+        step="lightning", lightning_action="save",
+        strike_api_key=TEST_STRIKE_KEY,
+    )
+    assert _heading(body) == "Submarine swaps", "a Strike key without on-chain must not add zeroconf"
+
+    # Back to lightning; this time tick "also accept on-chain via Strike".
+    # The gate probes the key's receive-request scope against the mock.
+    body = w.post(
+        step="lightning", lightning_action="save",
+        strike_api_key=TEST_STRIKE_KEY,
+        strike_onchain="1",
+    )
+    assert _heading(body) == "Zero-conf payments", "Strike on-chain must pull zeroconf in"
+    assert "of 11" in body, "the step counter must count the screen it just gained"
+
+    body = w.post(step="zeroconf", zero_conf="1")
+    assert _heading(body) == "Submarine swaps"
+
+    row = _stores(payserver)[0]
+    assert row["onchain_min_confs"] == 0, "the zero-conf answer must persist"
+    assert row["onchain_strike_enabled"] == 1
+    assert not row["onchain_xpub"] and not row["onchain_static_address"]
 
 
 def test_swaps_require_an_xpub_not_a_static_address(payserver: PayserverHandle) -> None:
@@ -122,13 +176,14 @@ def test_swaps_require_an_xpub_not_a_static_address(payserver: PayserverHandle) 
         onchain_address_mode="static",
         onchain_static_address=MAINNET_ADDRESS,
     )
-    assert _heading(body) == "Zero-conf payments", "a static address is still an on-chain rail"
+    assert _heading(body) == "Lightning payments"
     row = _stores(payserver)[0]
     assert row["onchain_address_mode"] == "static"
     assert row["onchain_network"] == "mainnet", "the network is inferred from the address encoding"
 
+    body = w.post(step="lightning", lightning_action="skip")
+    assert _heading(body) == "Zero-conf payments", "a static address is still an on-chain rail"
     w.post(step="zeroconf", zero_conf="0")
-    w.post(step="lightning", lightning_action="skip")
 
     body = w.post(step="swaps", swaps_enabled="1")
     assert "need an xpub" in (_error(body) or ""), _error(body)

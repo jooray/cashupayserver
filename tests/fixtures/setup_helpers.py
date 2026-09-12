@@ -3,12 +3,14 @@
 The wizard at /setup uses PHP sessions (cookies) and a slug-valued 'step'
 POST field. The standalone first-run sequence is:
 
-    terms -> security -> password -> store -> onchain -> [zeroconf] -> lightning
-          -> swaps -> mints -> cron -> done
+    terms -> security -> password -> store -> onchain -> lightning
+          -> [zeroconf] -> swaps -> mints -> cron -> done
 
-`zeroconf` only appears once an on-chain destination has been saved, so a run
-that skips `onchain` skips it too. `setup_complete` flips at the end of the
-`mints` screen — `cron` and `done` are advisory and need not be walked.
+`zeroconf` only appears once the store has an on-chain receive source — an
+xpub/static destination saved on `onchain`, or Strike on-chain minting
+enabled on `lightning` (which is why it sits after that screen). A run that
+skips both skips it too. `setup_complete` flips at the end of the `mints`
+screen — `cron` and `done` are advisory and need not be walked.
 
 `run_setup_wizard()` performs the standalone happy path: security ack, admin
 password, store create, skip on-chain, skip lightning, swaps off, and a

@@ -126,6 +126,14 @@ The standard `invoice_expiration` (default 1 hour, global) still applies as
 the "time to broadcast" window: if no mempool sighting happens before it
 elapses, the invoice expires.
 
+Both settings apply to every on-chain receive source, Strike-minted
+addresses included. The onboarding wizard asks the zero-conf question
+whenever the store ends up with any on-chain source — an xpub / static
+address, or "accept on-chain payments via Strike" (which is why the screen
+comes after the Lightning screen, where that option lives). In the admin
+on-chain card the settings save even with no xpub / static address entered,
+so a Strike-only store can change its confirmation policy there too.
+
 ## Multi-transaction totaling
 
 If a customer sends multiple transactions paying the same invoice address,
