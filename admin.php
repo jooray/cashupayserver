@@ -15,6 +15,7 @@ require_once __DIR__ . '/includes/transfer.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
+require_once __DIR__ . '/includes/update_check.php';
 
 use Cashu\ProofState;
 
@@ -389,6 +390,7 @@ if (isset($_GET['api'])) {
                     'stores' => $stores,
                     'noStoreSelected' => true,
                     'version' => CASHUPAY_VERSION,
+                    'update' => UpdateCheck::status(),
                     'diagnostics' => cashupay_diagnostics(null),
                 ]);
                 break;
@@ -980,6 +982,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
             }
+            break;
+
+        case 'save_update_check':
+            // The operator's call, and it takes effect on the next run rather than
+            // reaching out now: a settings toggle should not make a network request.
+            Config::set('update_check_enabled', !empty($_POST['enabled']) && $_POST['enabled'] !== 'false');
+            echo json_encode([
+                'success' => true,
+                'enabled' => UpdateCheck::enabled(),
+                'update' => UpdateCheck::status(),
+            ]);
             break;
 
         case 'save_url_mode':
@@ -3645,11 +3658,53 @@ $isWp = Urls::isWordPress();
                     </div>
                 </div>
 
+                <?php $cpsUpdate = UpdateCheck::status(); ?>
                 <div style="text-align: center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.8rem;">
+                    <?php if ($cpsUpdate['outdated']): ?>
+                        <?php
+                        // A security release and a feature release must not look the
+                        // same, or the loud one stops being loud.
+                        $sev = $cpsUpdate['unsupported'] || $cpsUpdate['severity'] === 'security'
+                            ? ['#b3261e', 'Security update available']
+                            : ($cpsUpdate['severity'] === 'important'
+                                ? ['#a36a00', 'Important update available']
+                                : ['var(--text-secondary)', 'Update available']);
+                        ?>
+                        <div style="color: <?= $sev[0] ?>; font-weight: 600; margin-bottom: 0.35rem;">
+                            <?= $sev[1] ?>: v<?= htmlspecialchars($cpsUpdate['latest'], ENT_QUOTES) ?>
+                            <?php if ($cpsUpdate['unsupported']): ?>
+                                &middot; this version is no longer supported
+                            <?php endif; ?>
+                        </div>
+                        <?php if (!empty($cpsUpdate['notes'])): ?>
+                            <div style="margin-bottom: 0.35rem;"><?= htmlspecialchars($cpsUpdate['notes'], ENT_QUOTES) ?></div>
+                        <?php endif; ?>
+                    <?php endif; ?>
                     CashuPayServer v<?= CASHUPAY_VERSION ?> &middot;
-                    <a href="https://github.com/jooray/cashupayserver/releases" target="_blank" rel="noopener"
-                       style="color: var(--text-secondary); text-decoration: none;">Check for updates</a>
+                    <a href="<?= htmlspecialchars($cpsUpdate['url'] ?: 'https://github.com/jooray/cashupayserver/releases', ENT_QUOTES) ?>"
+                       target="_blank" rel="noopener"
+                       style="color: var(--text-secondary); text-decoration: none;"><?= $cpsUpdate['outdated'] ? 'How to upgrade' : 'Releases' ?></a>
+                    <div style="margin-top: 0.6rem; display: flex; gap: 0.4rem; align-items: flex-start; justify-content: center; text-align: left; max-width: 34rem; margin-left: auto; margin-right: auto;">
+                        <input type="checkbox" id="update-check-enabled" <?= UpdateCheck::enabled() ? 'checked' : '' ?>
+                               onchange="saveUpdateCheck(this.checked)" style="width: 16px; height: 16px; margin-top: 0.15rem; flex: 0 0 auto;">
+                        <label for="update-check-enabled" style="cursor: pointer;">
+                            Tell me when a new version is released. Fetches
+                            <?= htmlspecialchars(UpdateCheck::endpoint(), ENT_QUOTES) ?> once a day and sends
+                            nothing about this server, not even which version it runs. Nothing is ever
+                            installed for you.
+                        </label>
+                    </div>
                 </div>
+                <script>
+                // postWithCsrf is defined further down the page; the handler only runs
+                // on a click, by which time it exists.
+                async function saveUpdateCheck(enabled) {
+                    try {
+                        await postWithCsrf(window.location.pathname,
+                            new URLSearchParams({ action: 'save_update_check', enabled: enabled ? '1' : '' }));
+                    } catch (e) { /* saved on the next click; never block the page over a toggle */ }
+                }
+                </script>
             </div>
         </main>
 

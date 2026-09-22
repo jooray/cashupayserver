@@ -1,0 +1,8 @@
+{
+  "version": "0.5.4-alpha",
+  "released": "2026-09-22",
+  "url": "https://github.com/jooray/cashupayserver/releases/tag/v0.5.4-alpha",
+  "severity": "normal",
+  "min_supported": "0.5.0",
+  "notes": "What changed, in one sentence an operator can act on."
+}
