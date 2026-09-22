@@ -2628,10 +2628,10 @@ $isWp = Urls::isWordPress();
             flex: 1;
             min-width: 0;
             padding: 0.5rem 2rem 0.5rem 0.75rem;
-            background: var(--card-bg);
+            background-color: var(--bg-card);
             border: 1px solid var(--border);
             border-radius: 8px;
-            color: var(--text);
+            color: var(--text-primary);
             font-size: 0.875rem;
             font-weight: 500;
             cursor: pointer;
@@ -2642,9 +2642,18 @@ $isWp = Urls::isWordPress();
             text-overflow: ellipsis;
         }
 
+        /* Style the open dropdown list to match the dark theme. <option>
+           elements inherit OS/browser defaults regardless of the <select>'s
+           own styling, so without this the open list shows light-on-light
+           and is unreadable. */
+        .header-store-selector select option {
+            background-color: var(--bg-secondary);
+            color: var(--text-primary);
+        }
+
         .header-store-selector select:focus {
             outline: none;
-            border-color: var(--primary);
+            border-color: var(--accent);
         }
 
         .header-actions {
@@ -3377,6 +3386,7 @@ $isWp = Urls::isWordPress();
                 <div class="card">
                     <div class="card-header">
                         <div class="card-title">All Invoices</div>
+                        <button class="btn" id="btn-new-invoice">+ New Invoice</button>
                     </div>
                     <div id="all-invoices">
                         <div class="loading"><div class="spinner"></div></div>
@@ -4201,6 +4211,7 @@ $isWp = Urls::isWordPress();
             document.getElementById('btn-withdraw').addEventListener('click', () => openModal('modal-withdraw'));
             document.getElementById('btn-export').addEventListener('click', () => openModal('modal-export'));
             document.getElementById('btn-request').addEventListener('click', () => openModal('modal-request'));
+            document.getElementById('btn-new-invoice').addEventListener('click', () => openModal('modal-request'));
 
             // Withdraw modal
             document.getElementById('btn-confirm-withdraw').addEventListener('click', handleWithdraw);
