@@ -22,6 +22,7 @@ require_once __DIR__ . '/background.php';
 require_once __DIR__ . '/invoice.php';
 require_once __DIR__ . '/lightning_address.php';
 require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/update_check.php';
 require_once __DIR__ . '/transfer.php';
 require_once __DIR__ . '/payment_request.php';
 require_once __DIR__ . '/webhook_sender.php';
@@ -55,6 +56,7 @@ class BackgroundRunner {
         return [
             'recover_wallet_operations' => fn() => Invoice::recoverPendingWalletOperations(),
             'reconcile_transfers' => fn() => self::reconcileTransfers(),
+            'update_check' => fn() => UpdateCheck::run(),
             'poll_quotes' => function () {
                 Invoice::pollPendingQuotes();
                 return 'success';
@@ -325,7 +327,7 @@ class BackgroundRunner {
             // a small donation cost more to redeem than it is worth, and then no amount of
             // retrying will ever deliver it. Say so once and stop, instead of retrying for
             // as long as the server runs.
-            if (self::isBelowMintFee($row['store_id'], (int)$row['amount'])) {
+            if (self::isBelowMintFee((string)$row['token'])) {
                 Transfer::note(
                     $row['id'],
                     'This donation is too small for this mint to be worth cashing in — the '
@@ -356,19 +358,56 @@ class BackgroundRunner {
      * NUT-02 mints charge one fee per input proof, and an amount decomposes into a fixed
      * number of proofs (powers of two), so this is knowable without asking anyone.
      */
-    private static function isBelowMintFee(string $storeId, int $amount): bool
+    /**
+     * Can this token ever be worth redeeming?
+     *
+     * The fee is charged per *input proof* and rounded up once for the whole swap
+     * (NUT-02: ceil(sum(input_fee_ppk) / 1000)), so it is a property of the token's
+     * own proofs at the mint that issued them, and of nothing else. Asking the store
+     * instead was the bug: a store whose configured mint charges nothing was told
+     * every donation was worth sending, while the token itself sat at a mint charging
+     * 100 ppk, where a single proof rounds up to a whole satoshi. One 1-sat donation
+     * was re-posted every minute for eight months on the strength of that answer.
+     *
+     * Read from the token: its mint, its unit, its actual proofs. The wallet built
+     * here is given no database, so it reads keysets without creating storage,
+     * binding a seed or touching a proof.
+     *
+     * The answer is cached against the token, because replacing a pointless POST
+     * every minute with a pointless keyset fetch every minute is not a fix. A token
+     * is immutable and mint fees change only on a keyset rotation, which a week's
+     * staleness survives; after that it is asked again in case the fee dropped.
+     */
+    private static function isBelowMintFee(string $tokenString): bool
     {
-        if ($amount <= 0) {
-            return true;
+        if ($tokenString === '') {
+            return false;
         }
+
+        $key = 'dust_token:' . substr(hash('sha256', $tokenString), 0, 24);
+        $cached = Config::get($key);
+        if (is_array($cached) && (int)($cached['at'] ?? 0) > time() - 604800) {
+            return (bool)$cached['below'];
+        }
+
         try {
-            $wallet = Invoice::getWalletInstance($storeId);
-            $ppk = $wallet->getInputFeePpk();
+            $token = \Cashu\TokenSerializer::deserialize($tokenString);
+            $amount = $token->getAmount();
+            if ($amount <= 0) {
+                return true;
+            }
+            $wallet = new \Cashu\Wallet($token->mint, $token->unit);   // no dbPath: read-only
+            $wallet->loadMint();
+            $wallet->resolveShortKeysetIds($token->proofs);
+            $below = $wallet->calculateFee($token->proofs) >= $amount;
         } catch (Throwable $e) {
-            return false; // Can't tell — keep trying rather than give up on real money.
+            // Can't tell — keep trying rather than give up on real money, and do not
+            // cache an answer we did not get.
+            return false;
         }
-        $fee = (int)ceil(count(\Cashu\Wallet::splitAmount($amount)) * $ppk / 1000);
-        return $fee >= $amount;
+
+        Config::set($key, ['below' => $below, 'at' => time()]);
+        return $below;
     }
 
     /** checkAutoMelt() returns one entry per store, not a single result. */
