@@ -23,6 +23,12 @@ define('BTCPAY_COMPAT_VERSION', '1.0.0');
 // Donation settings for supporting CashuPayServer development
 define('CASHUPAY_DONATION_PERCENT', 1); // 1% donation
 define('CASHUPAY_DONATION_SINK_URL', 'https://cypherpunk.today/donation-sink/donation-sink.php');
+// Which project the sink credits these donations to. The sink accepts any
+// alphanumeric name without being configured for it, and ignores the field
+// entirely if it is running a version that does not know about projects, so
+// this is safe to send either way. A fork pointing at its own sink should
+// change it; setting it to '' sends nothing.
+define('CASHUPAY_DONATION_SINK_PROJECT', 'cashupayserver');
 
 class Config {
     private static array $cache = [];

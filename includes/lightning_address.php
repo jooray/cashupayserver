@@ -574,10 +574,16 @@ class Donation {
         }
 
         try {
+            $payload = ['token' => $token];
+            if (defined('CASHUPAY_DONATION_SINK_PROJECT')
+                && trim((string)CASHUPAY_DONATION_SINK_PROJECT) !== '') {
+                $payload['project'] = (string)CASHUPAY_DONATION_SINK_PROJECT;
+            }
+
             $ch = curl_init(CASHUPAY_DONATION_SINK_URL);
             curl_setopt_array($ch, [
                 CURLOPT_POST => true,
-                CURLOPT_POSTFIELDS => json_encode(['token' => $token]),
+                CURLOPT_POSTFIELDS => json_encode($payload),
                 CURLOPT_HTTPHEADER => ['Content-Type: application/json'],
                 CURLOPT_RETURNTRANSFER => true,
                 CURLOPT_TIMEOUT => 5,
