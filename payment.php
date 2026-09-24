@@ -16,7 +16,7 @@ require_once __DIR__ . '/includes/security.php';
 ignore_user_abort(true);
 @set_time_limit(60);
 
-// Security headers (customer page: strict CSP, only self + jsdelivr for the QR lib).
+// Security headers (customer page: strict CSP, scripts from this server only).
 Security::setSecurityHeaders();
 
 // Check setup
@@ -493,7 +493,8 @@ $baseUrl = Config::getBaseUrl();
 
     <div class="copy-toast" id="copy-toast">Copied to clipboard!</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/vendor/qrcode-generator.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/qr-canvas.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
     <script>
         const invoice = <?php echo json_encode($invoice['bolt11']); ?>;
         const invoiceId = <?php echo json_encode($invoiceId); ?>;

@@ -3970,14 +3970,10 @@ $isWp = Urls::isWordPress();
     </div>
 
     <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>mint-discovery.bundle.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
-    <script type="module">
-        // Import bc-ur library as ES module
-        import { UR, UREncoder } from 'https://cdn.skypack.dev/@gandlaf21/bc-ur@1.1.12';
-
-        // Expose to global scope for AnimatedQR class
-        window.bcur = { UR, UREncoder };
-    </script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/vendor/qrcode-generator.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/qr-canvas.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
+    <!-- Sets window.bcur = { UR, UREncoder } for the animated QR codes. -->
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/vendor/bc-ur.bundle.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
     <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>animated-qr.js?v=4"></script>
     <script>
         // WordPress mode - skip lock screen

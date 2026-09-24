@@ -8,8 +8,8 @@
  * (Uses generic ur:bytes type, not ur:cashu, as per Cashu wallet implementations)
  *
  * Requires:
- * - QRious library (for QR rendering)
- * - @gandlaf21/bc-ur library (for UR encoding)
+ * - assets/js/qr-canvas.js (QR rendering; QRious-compatible, on vendored qrcode-generator)
+ * - assets/js/vendor/bc-ur.bundle.js (UR encoding; sets window.bcur)
  */
 class AnimatedQR {
     constructor(container, options = {}) {

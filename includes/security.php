@@ -367,9 +367,10 @@ class Security {
         header('Referrer-Policy: strict-origin-when-cross-origin');
 
         if ($csp === null) {
-            // Strict default: self-hosted + jsdelivr (QR lib); no external data egress.
+            // Strict default: scripts only from this server (the QR and bc-ur libraries are
+            // vendored in assets/js/vendor/); no external data egress.
             $csp = "default-src 'self'; "
-                 . "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+                 . "script-src 'self' 'unsafe-inline'; "
                  . "style-src 'self' 'unsafe-inline'; "
                  . "img-src 'self' data: https:; "
                  . "connect-src 'self'; "
@@ -381,13 +382,14 @@ class Security {
     }
 
     /**
-     * CSP tuned for the admin SPA, which must reach Nostr relays (wss) and two CDNs for
-     * mint discovery. connect-src is necessarily broad; the primary XSS defences are output
+     * CSP tuned for the admin SPA, which must reach Nostr relays (wss) and mints (https)
+     * for mint discovery. Scripts come only from this server. connect-src is necessarily
+     * broad; the primary XSS defences are output
      * escaping and not shipping secrets to the browser (see FABLE-SECURITY-AUDIT HIGH-1/2/3).
      */
     public static function adminCsp(): string {
         return "default-src 'self'; "
-             . "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://cdn.skypack.dev; "
+             . "script-src 'self' 'unsafe-inline'; "
              . "style-src 'self' 'unsafe-inline'; "
              . "img-src 'self' data: https:; "
              . "connect-src 'self' https: wss:; "

@@ -86,7 +86,10 @@ class Urls {
             $pluginFile = self::$pluginFile ?? (defined('CASHUPAY_PLUGIN_DIR') ? CASHUPAY_PLUGIN_DIR . '/cashupay.php' : __FILE__);
             return plugins_url('assets/' . $subpath, $pluginFile);
         }
-        return 'assets/' . $subpath;
+        // Anchored at the app root, not relative: the payment page is also reached as
+        // /i/{id}, /payment/{id} and router.php/payment/{id}, where a relative
+        // 'assets/' resolved into a directory that does not exist.
+        return self::appRoot() . '/assets/' . $subpath;
     }
 
     /**

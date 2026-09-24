@@ -518,7 +518,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Payment Request - <?php echo htmlspecialchars($formattedAmount); ?></title>
-    <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/vendor/qrcode-generator.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/qr-canvas.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
