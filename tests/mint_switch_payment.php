@@ -97,9 +97,19 @@ Config::updateStore('s2', ['mint_url' => $mintB], true);
 $w = Invoice::initializeWalletForStore('s2', true);
 check($w->requiresRecovery(), 'reproduces the broken state: account bound but not ready');
 
+// What the demo instance hit: a customer pays while the account is still unready.
+$stuck = Invoice::create('s2', ['amount' => 20, 'currency' => 'sat']);
+$row = payAndPoll($mintB, $stuck);
+check($row['status'] !== 'Settled', 'reproduces the stuck payment (' . $row['status'] . ')');
+
 $result = Invoice::ensurePrimaryWalletsReady();
-check(str_contains($result, 'readied 1'), "the runner task readies it ($result)");
+check(str_contains($result, 'readied 1'), "the runner task readies it without a slow scan ($result)");
 check(Invoice::ensurePrimaryWalletsReady() === 'none', 'a second run finds nothing to do');
+
+Database::update('invoices', ['last_polled_at' => null, 'processing_since' => 0], 'id = ?', [$stuck['id']]);
+Invoice::pollSingleQuote($stuck['id'], true);
+$row = Database::fetchOne('SELECT status FROM invoices WHERE id = ?', [$stuck['id']]);
+check($row['status'] === 'Settled', 'the payment that was stuck is credited (got ' . $row['status'] . ')');
 
 $row = payAndPoll($mintB, Invoice::create('s2', ['amount' => 34, 'currency' => 'sat']));
 check($row['status'] === 'Settled', 'a payment after the repair settles (got ' . $row['status'] . ')');

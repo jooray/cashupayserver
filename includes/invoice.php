@@ -603,8 +603,43 @@ class Invoice {
         if (!$wallet->requiresRecovery()) {
             return true;
         }
+
+        // An account this store has never spent from or received into at this mint
+        // needs no scan: the account is keyed on (mint, unit, store), so nothing this
+        // install made can collide with counter 0, and each store's seed is its own.
+        // The scan is not free either — without GMP it runs for minutes, longer than
+        // any request may, so on such hosts it never finished and payments stayed
+        // stuck. Restore still runs whenever the account holds anything.
+        $store = Config::getStore($storeId);
+        $walletId = WalletStorage::deriveWalletId(
+            $store['mint_url'], $store['mint_unit'] ?? 'sat', $store['wallet_account_id']
+        );
+        if (!self::accountHasHistory($walletId)) {
+            $wallet->getStorage()->markSeedReady();
+            unset(self::$walletCache[$storeId . '|' . $store['mint_url'] . '|' . ($store['mint_unit'] ?? 'sat')]);
+            return !self::initializeWalletForStore($storeId, true)->requiresRecovery();
+        }
+
         $result = $wallet->restore();
         return empty($result['incomplete']) && !$wallet->requiresRecovery();
+    }
+
+    /**
+     * The account has proofs, an unfinished operation, or has issued blinded outputs.
+     *
+     * The NUT-20 quote-key counter does not count: creating an invoice advances it
+     * without touching ecash, and invoices are created on an account before it is
+     * ready (that is how a stuck payment first shows up).
+     */
+    private static function accountHasHistory(string $walletId): bool {
+        return Database::fetchOne(
+            "SELECT 1 AS x FROM cashu_proofs WHERE wallet_id = ?
+             UNION ALL SELECT 1 FROM cashu_pending_operations WHERE wallet_id = ?
+             UNION ALL SELECT 1 FROM cashu_counters
+                 WHERE wallet_id = ? AND keyset_id <> '_nut20_quote_keys' AND counter > 0
+             LIMIT 1",
+            [$walletId, $walletId, $walletId]
+        ) !== null;
     }
 
     /**
