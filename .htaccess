@@ -7,6 +7,10 @@
     # API Key Authorization - /api-keys/authorize -> api-keys/authorize.php
     RewriteRule ^api-keys/authorize$ api-keys/authorize.php [L,QSA]
 
+    # BTCPay short checkout link - /i/{invoiceId} -> payment.php (WooCommerce uses it
+    # when a customer retries payment on an order)
+    RewriteRule ^i/([^/]+)/?$ payment.php?id=$1 [L,QSA]
+
     # API routing - route /api/v1/* to api.php (preserve full path)
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d

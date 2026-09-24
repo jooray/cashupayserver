@@ -8,7 +8,7 @@
  * installs or changes anything. For software custodying ecash, an autoupdate
  * channel would be a worse vulnerability than the one it closes.
  *
- * What travels: one HTTP GET for a static file, once a day, from the background
+ * What travels: one HTTP GET for a static file, every six hours, from the background
  * runner. No instance identifier, no version, no store count, no POST body, no
  * cookies, and a User-Agent that names the software but not which release it is.
  * The comparison happens here, on the operator's own machine; the server learns
@@ -22,13 +22,20 @@
  * exactly as fast as always and says nothing about it.
  */
 
+require_once __DIR__ . '/http.php';
+require_once __DIR__ . '/safe_mode.php';
+
 class UpdateCheck
 {
     /** Where the release manifest lives. Overridable so a fork points at its own. */
     public const DEFAULT_URL = 'https://cashupayserver.org/version.json';
 
-    /** One check a day is enough to hear about a release, and quiet enough to ignore. */
-    private const INTERVAL = 86400;
+    /**
+     * Every six hours. A release could wait a day, but the same request carries the
+     * signed safety notice (SafeMode), and an install with a known hole should hear
+     * about it the same morning, not tomorrow.
+     */
+    private const INTERVAL = 21600;
 
     /** Retry sooner than a full day after a failure, but not so soon it is a retry loop. */
     private const RETRY_INTERVAL = 3600;
@@ -140,18 +147,20 @@ class UpdateCheck
             // public; which version is running here is not.
             CURLOPT_USERAGENT      => 'CashuPayServer',
             CURLOPT_HTTPHEADER     => ['Accept: application/json'],
-        ]);
+        ] + cashupay_curl_protocol_options());
         $body = curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         // No curl_close(): deprecated since PHP 8.5 and a no-op since 8.0.
 
-        if (!is_string($body) || $code !== 200 || strlen($body) > 8192) {
+        if (!is_string($body) || $code !== 200 || strlen($body) > 16384) {
             return null;
         }
         $data = json_decode($body, true);
         if (!is_array($data)) {
             return null;
         }
+        // Verified against pinned keys, not trusted because of where it came from.
+        SafeMode::ingest($data);
 
         $latest = isset($data['version']) ? trim((string)$data['version']) : '';
         // A version string is compared, printed, and nothing else; keep it to the
@@ -196,6 +205,12 @@ class UpdateCheck
         }
         $host = strtolower($parts['host']);
         $own = strtolower((string)(parse_url($manifestUrl)['host'] ?? ''));
-        return $host === 'github.com' || ($own !== '' && $host === $own);
+        if ($own !== '' && $host === $own) {
+            return true;
+        }
+        // github.com only for this project's own repository: any repository there would
+        // let a tampered manifest send operators to a look-alike fork to "upgrade".
+        return $host === 'github.com'
+            && str_starts_with((string)($parts['path'] ?? ''), '/jooray/cashupayserver/');
     }
 }

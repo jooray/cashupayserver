@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 9;
+    private const SCHEMA_VERSION = 10;
 
     /** Set when ensureCurrentSchema() failed, so callers can tell "broken" from "new". */
     private static ?string $migrationError = null;
@@ -569,6 +569,27 @@ HTACCESS;
                 self::addColumnIfMissing($pdo, 'invoices', 'last_poll_state', 'TEXT');
                 self::addColumnIfMissing($pdo, 'invoices', 'last_poll_error', 'TEXT');
                 $pdo->exec('PRAGMA user_version = 9');
+            }
+            if ($version < 10) {
+                // The WooCommerce gateway accepts a key only if it holds exactly its
+                // required permission set, which includes canviewstoresettings. Keys
+                // made by setup's one-click WooCommerce configuration lacked it, so
+                // saving the WooCommerce settings showed an error and skipped webhook
+                // creation. Read-only store settings; nothing else changes.
+                $keys = self::tableExists($pdo, 'api_keys') ? $pdo->query(
+                    "SELECT id, permissions FROM api_keys WHERE application_identifier = 'woocommerce'"
+                )->fetchAll(\PDO::FETCH_ASSOC) : [];
+                foreach ($keys as $key) {
+                    $perms = json_decode((string)$key['permissions'], true);
+                    if (!is_array($perms) || in_array('*', $perms, true)
+                        || in_array('btcpay.store.canviewstoresettings', $perms, true)) {
+                        continue;
+                    }
+                    $perms[] = 'btcpay.store.canviewstoresettings';
+                    $pdo->prepare('UPDATE api_keys SET permissions = ? WHERE id = ?')
+                        ->execute([json_encode(array_values($perms)), $key['id']]);
+                }
+                $pdo->exec('PRAGMA user_version = 10');
             }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()

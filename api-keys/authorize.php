@@ -211,7 +211,7 @@ function renderPostRedirect(string $url, array $data, string $appName): void {
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>Redirecting to <?= htmlspecialchars($appName) ?>...</title>
+        <title>Redirecting to <?php echo htmlspecialchars($appName); ?>...</title>
         <style>
             body {
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -244,14 +244,14 @@ function renderPostRedirect(string $url, array $data, string $appName): void {
     <body>
         <div class="container">
             <div class="spinner"></div>
-            <p>Redirecting to <?= htmlspecialchars($appName) ?>...</p>
+            <p>Redirecting to <?php echo htmlspecialchars($appName); ?>...</p>
         </div>
-        <form id="redirect-form" method="POST" action="<?= htmlspecialchars($url) ?>">
-            <input type="hidden" name="apiKey" value="<?= htmlspecialchars($data['apiKey']) ?>">
-            <input type="hidden" name="userId" value="<?= htmlspecialchars($data['userId']) ?>">
-            <input type="hidden" name="storeId" value="<?= htmlspecialchars($data['storeId']) ?>">
+        <form id="redirect-form" method="POST" action="<?php echo htmlspecialchars($url); ?>">
+            <input type="hidden" name="apiKey" value="<?php echo htmlspecialchars($data['apiKey']); ?>">
+            <input type="hidden" name="userId" value="<?php echo htmlspecialchars($data['userId']); ?>">
+            <input type="hidden" name="storeId" value="<?php echo htmlspecialchars($data['storeId']); ?>">
             <?php foreach ($data['permissions'] as $perm): ?>
-            <input type="hidden" name="permissions[]" value="<?= htmlspecialchars($perm) ?>">
+            <input type="hidden" name="permissions[]" value="<?php echo htmlspecialchars($perm); ?>">
             <?php endforeach; ?>
         </form>
         <script>
@@ -269,7 +269,7 @@ $baseUrl = Config::getBaseUrl();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Authorize <?= htmlspecialchars($applicationName) ?> - CashuPayServer</title>
+    <title>Authorize <?php echo htmlspecialchars($applicationName); ?> - CashuPayServer</title>
     <style>
         * {
             margin: 0;
@@ -477,12 +477,12 @@ $baseUrl = Config::getBaseUrl();
             <!-- Login Form -->
             <h1>Sign In</h1>
             <p class="subtitle">
-                <span class="app-name"><?= htmlspecialchars($applicationName) ?></span>
+                <span class="app-name"><?php echo htmlspecialchars($applicationName); ?></span>
                 wants to connect to your CashuPayServer
             </p>
 
             <?php if ($error): ?>
-                <div class="error"><?= htmlspecialchars($error) ?></div>
+                <div class="error"><?php echo htmlspecialchars($error); ?></div>
             <?php endif; ?>
 
             <form method="POST">
@@ -506,15 +506,15 @@ $baseUrl = Config::getBaseUrl();
         <?php elseif ($success && isset($generatedKey)): ?>
             <!-- Success - Show API Key -->
             <h1>Authorization Successful</h1>
-            <p class="subtitle">API key created for <span class="app-name"><?= htmlspecialchars($applicationName) ?></span></p>
+            <p class="subtitle">API key created for <span class="app-name"><?php echo htmlspecialchars($applicationName); ?></span></p>
 
             <div class="warning">
                 Copy this API key now - it won't be shown again!
             </div>
 
-            <div class="api-key-display"><?= htmlspecialchars($generatedKey) ?></div>
+            <div class="api-key-display"><?php echo htmlspecialchars($generatedKey); ?></div>
 
-            <a href="<?= Urls::admin() ?>" class="btn btn-primary" style="text-decoration: none; text-align: center;">
+            <a href="<?php echo Urls::admin(); ?>" class="btn btn-primary" style="text-decoration: none; text-align: center;">
                 Go to Dashboard
             </a>
 
@@ -522,33 +522,33 @@ $baseUrl = Config::getBaseUrl();
             <!-- Approval Form -->
             <h1>Authorize Application</h1>
             <p class="subtitle">
-                <span class="app-name"><?= htmlspecialchars($applicationName) ?></span>
+                <span class="app-name"><?php echo htmlspecialchars($applicationName); ?></span>
                 is requesting access to your CashuPayServer
             </p>
 
             <?php if ($error): ?>
-                <div class="error"><?= htmlspecialchars($error) ?></div>
+                <div class="error"><?php echo htmlspecialchars($error); ?></div>
             <?php endif; ?>
 
             <?php if (empty($stores)): ?>
                 <div class="warning">
                     No stores found. Please create a store first in the admin dashboard.
                 </div>
-                <a href="<?= Urls::admin() ?>" class="btn btn-primary" style="text-decoration: none; text-align: center;">
+                <a href="<?php echo Urls::admin(); ?>" class="btn btn-primary" style="text-decoration: none; text-align: center;">
                     Go to Dashboard
                 </a>
             <?php else: ?>
                 <form method="POST">
                     <input type="hidden" name="action" value="approve">
-                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars(Auth::generateCsrfToken()) ?>">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(Auth::generateCsrfToken()); ?>">
 
                     <div class="form-group">
                         <label for="store_id">Select Store</label>
                         <select id="store_id" name="store_id" required>
                             <option value="">-- Select a store --</option>
                             <?php foreach ($stores as $store): ?>
-                                <option value="<?= htmlspecialchars($store['id']) ?>">
-                                    <?= htmlspecialchars($store['name']) ?>
+                                <option value="<?php echo htmlspecialchars($store['id']); ?>">
+                                    <?php echo htmlspecialchars($store['name']); ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -561,13 +561,13 @@ $baseUrl = Config::getBaseUrl();
                                 <div class="permission-item">
                                     <?php if (!$strict): ?>
                                         <input type="checkbox" name="approved_permissions[]"
-                                               value="<?= htmlspecialchars($perm) ?>" checked>
+                                               value="<?php echo htmlspecialchars($perm); ?>" checked>
                                     <?php else: ?>
                                         <input type="hidden" name="approved_permissions[]"
-                                               value="<?= htmlspecialchars($perm) ?>">
+                                               value="<?php echo htmlspecialchars($perm); ?>">
                                         <span style="color: #48bb78;">&#10003;</span>
                                     <?php endif; ?>
-                                    <span><?= htmlspecialchars($permissionDescriptions[$perm] ?? $perm) ?></span>
+                                    <span><?php echo htmlspecialchars($permissionDescriptions[$perm] ?? $perm); ?></span>
                                 </div>
                             <?php endforeach; ?>
                         </div>
@@ -591,7 +591,7 @@ $baseUrl = Config::getBaseUrl();
                 <?php if ($redirect): ?>
                     <div class="redirect-info">
                         After authorization, you'll be redirected to:<br>
-                        <?= htmlspecialchars(parse_url($redirect, PHP_URL_HOST)) ?>
+                        <?php echo htmlspecialchars(parse_url($redirect, PHP_URL_HOST)); ?>
                     </div>
                 <?php endif; ?>
             <?php endif; ?>

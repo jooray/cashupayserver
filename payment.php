@@ -109,7 +109,7 @@ $baseUrl = Config::getBaseUrl();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pay Invoice - <?= htmlspecialchars($storeName) ?></title>
+    <title>Pay Invoice - <?php echo htmlspecialchars($storeName); ?></title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
     <style>
         * {
@@ -401,10 +401,10 @@ $baseUrl = Config::getBaseUrl();
     <div class="container">
         <div class="payment-card">
             <div class="logo">&#9889;</div>
-            <div class="merchant-name"><?= htmlspecialchars($storeName) ?></div>
+            <div class="merchant-name"><?php echo htmlspecialchars($storeName); ?></div>
 
-            <div id="payment-pending" class="<?= $invoice['status'] !== 'New' ? 'hidden' : '' ?>">
-                <div class="amount"><?= htmlspecialchars($displayAmount) ?></div>
+            <div id="payment-pending" class="<?php echo $invoice['status'] !== 'New' ? 'hidden' : ''; ?>">
+                <div class="amount"><?php echo htmlspecialchars($displayAmount); ?></div>
 
                 <div class="status-badge new">
                     <div class="spinner"></div>
@@ -414,10 +414,10 @@ $baseUrl = Config::getBaseUrl();
                 <div class="qr-container" id="qr-code"></div>
 
                 <div class="invoice-input" id="invoice-text" onclick="copyInvoice()">
-                    <?= htmlspecialchars(substr($invoice['bolt11'], 0, 40) . '...' . substr($invoice['bolt11'], -10)) ?>
+                    <?php echo htmlspecialchars(substr($invoice['bolt11'], 0, 40) . '...' . substr($invoice['bolt11'], -10)); ?>
                 </div>
 
-                <a href="lightning:<?= htmlspecialchars($invoice['bolt11']) ?>" class="btn">
+                <a href="lightning:<?php echo htmlspecialchars($invoice['bolt11']); ?>" class="btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                     </svg>
@@ -435,7 +435,7 @@ $baseUrl = Config::getBaseUrl();
                 <div class="timer" id="timer"></div>
             </div>
 
-            <div id="payment-processing" class="<?= $invoice['status'] !== 'Processing' ? 'hidden' : '' ?>">
+            <div id="payment-processing" class="<?php echo $invoice['status'] !== 'Processing' ? 'hidden' : ''; ?>">
                 <div class="status-badge processing">
                     <div class="spinner"></div>
                     Processing payment...
@@ -445,18 +445,18 @@ $baseUrl = Config::getBaseUrl();
                 </p>
             </div>
 
-            <div id="payment-success" class="success-animation <?= $invoice['status'] === 'Settled' ? 'show' : '' ?>">
+            <div id="payment-success" class="success-animation <?php echo $invoice['status'] === 'Settled' ? 'show' : ''; ?>">
                 <div class="success-icon">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                         <polyline points="20 6 9 17 4 12"></polyline>
                     </svg>
                 </div>
-                <div class="amount"><?= htmlspecialchars($displayAmount) ?></div>
+                <div class="amount"><?php echo htmlspecialchars($displayAmount); ?></div>
                 <div class="status-badge settled">
                     Payment Complete
                 </div>
                 <?php if ($redirectUrl): ?>
-                    <a href="<?= htmlspecialchars($redirectUrl) ?>" class="btn" id="redirect-btn">
+                    <a href="<?php echo htmlspecialchars($redirectUrl); ?>" class="btn" id="redirect-btn">
                         Continue to Store
                     </a>
                 <?php endif; ?>
@@ -469,17 +469,17 @@ $baseUrl = Config::getBaseUrl();
             $isClosed = in_array($invoice['status'], ['Expired', 'Invalid'], true);
             $isInvalid = $invoice['status'] === 'Invalid';
             ?>
-            <div id="payment-expired" class="<?= $isClosed ? '' : 'hidden' ?>">
+            <div id="payment-expired" class="<?php echo $isClosed ? '' : 'hidden'; ?>">
                 <div class="status-badge expired" id="closed-badge">
-                    <?= $isInvalid ? 'Payment Cancelled' : 'Invoice Expired' ?>
+                    <?php echo $isInvalid ? 'Payment Cancelled' : 'Invoice Expired'; ?>
                 </div>
                 <p style="color: var(--text-secondary); margin-top: 1rem;" id="closed-message">
-                    <?= $isInvalid
+                    <?php echo $isInvalid
                         ? 'This payment was cancelled and can no longer be paid. Please start a new order.'
-                        : 'This invoice has expired. Please request a new one.' ?>
+                        : 'This invoice has expired. Please request a new one.'; ?>
                 </p>
                 <?php if ($redirectUrl): ?>
-                    <a href="<?= htmlspecialchars($redirectUrl) ?>" class="btn" style="margin-top: 1.5rem;">
+                    <a href="<?php echo htmlspecialchars($redirectUrl); ?>" class="btn" style="margin-top: 1.5rem;">
                         Return to Shop
                     </a>
                 <?php endif; ?>
@@ -495,12 +495,12 @@ $baseUrl = Config::getBaseUrl();
 
     <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
     <script>
-        const invoice = <?= json_encode($invoice['bolt11']) ?>;
-        const invoiceId = <?= json_encode($invoiceId) ?>;
-        const expirationTime = <?= (int)$invoice['expiration_time'] ?>;
-        const redirectUrl = <?= json_encode($redirectUrl) ?>;
-        const redirectAuto = <?= json_encode($redirectAuto) ?>;
-        let currentStatus = <?= json_encode($invoice['status']) ?>;
+        const invoice = <?php echo json_encode($invoice['bolt11']); ?>;
+        const invoiceId = <?php echo json_encode($invoiceId); ?>;
+        const expirationTime = <?php echo (int)$invoice['expiration_time']; ?>;
+        const redirectUrl = <?php echo json_encode($redirectUrl); ?>;
+        const redirectAuto = <?php echo json_encode($redirectAuto); ?>;
+        let currentStatus = <?php echo json_encode($invoice['status']); ?>;
 
         // Generate QR code with lightning: prefix
         if (invoice && currentStatus === 'New') {

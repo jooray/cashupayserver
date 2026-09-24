@@ -59,7 +59,10 @@ CashuPayServer sits between custodial payment gateways and full self-hosting:
 
 ## Requirements
 
-- PHP 8.1 or higher
+- PHP 8.1 or higher. PHP 8.1 and 8.2, and PHP 8.3+ built against an older libcurl (as on
+  Ubuntu 22.04, Debian 11 or RHEL 8/9), are handled: the code restricts outgoing requests to
+  HTTPS/HTTP with whichever cURL option the host's PHP has. v0.5.0-alpha to v0.5.4-alpha could
+  not reach the mint on such hosts; upgrade if you are on one of them.
 - Extensions: `curl`, `json`, `pdo_sqlite`, `bcmath`, `mbstring`
 - Recommended: `gmp` (without it the elliptic-curve maths falls back to BCMath and is much slower)
 - Apache with mod_rewrite, nginx, or any PHP-capable web server
@@ -112,8 +115,16 @@ Add to your server block:
 ```nginx
 location /cashupayserver/ {
     # API routing
-    location ~ ^/cashupayserver/api/v1/ {
+    location ~ ^/cashupayserver/(api/)?v1/ {
         try_files $uri /cashupayserver/api.php$is_args$args;
+    }
+
+    # Pairing with the shop plugin, and the short checkout link it sends customers to
+    location = /cashupayserver/api-keys/authorize {
+        try_files $uri /cashupayserver/api-keys/authorize.php$is_args$args;
+    }
+    location ~ ^/cashupayserver/i/([^/]+)/?$ {
+        try_files $uri /cashupayserver/payment.php?id=$1;
     }
 
     # Block sensitive directories
@@ -170,6 +181,12 @@ The plugin keeps its database in a `cashupay-data` folder *outside* the plugin's
 ### After Upgrading
 
 Open the admin dashboard — it should load normally and show your existing balance and transaction history, with no setup wizard reappearing. If anything looks wrong, restore your backed-up data folder and open an issue; your seed phrase always lets you recover funds regardless of what happens to the files.
+
+### Update Notices and Emergency Shutdown
+
+A few times a day the server fetches `https://cashupayserver.org/version.json` (one plain GET; nothing about your server is sent, though like any web request the site sees your server's address). The dashboard then tells you when a new version exists, and loudly when it is a security release. Nothing is ever downloaded or installed for you.
+
+The same file can carry a **signed emergency notice**, a last resort for a security hole that lets strangers take your money. It must be signed by a key built into CashuPayServer (anything else is ignored) and names the affected versions. An install on one of them shuts itself down completely: every page shows that payments are temporarily unavailable and tells you, the operator, what happened and which version to upload. **Your funds stay where they are**, and payments customers made meanwhile are credited after the upgrade. Uploading the fixed version is all it takes to start again. Turning off the update check in Settings also turns this off. Details: [docs/EMERGENCY-SHUTDOWN.md](docs/EMERGENCY-SHUTDOWN.md).
 
 ## Security
 

@@ -49,8 +49,7 @@ class Background {
             // Do NOT follow redirects: this request carries the internal key, and a
             // redirect could leak it to another host. See FABLE-SECURITY-AUDIT (HIGH-5).
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_PROTOCOLS_STR => 'https,http',
-        ]);
+        ] + cashupay_curl_protocol_options());
         @curl_exec($ch);
         // Note: curl_close() is a no-op since PHP 8.0, handle is auto-closed
     }

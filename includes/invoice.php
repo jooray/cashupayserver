@@ -586,6 +586,87 @@ class Invoice {
     }
 
     /**
+     * Bind the store's seed to its primary mint and finish recovery there, so the
+     * account can mint and spend.
+     *
+     * A mint change opens a new wallet namespace. Binding it in restore mode is right
+     * (the seed may already have ecash at that mint), but restore mode refuses to mint
+     * until restore() has run — and v0.5.4 never ran it, so every payment after a mint
+     * switch stayed Processing. On a mint this seed has never used, restore is a few
+     * empty batches.
+     *
+     * @return bool True when the account is ready; false when recovery did not finish
+     *              (mint unreachable or incomplete scan) and must be retried.
+     */
+    public static function readyStoreWallet(string $storeId): bool {
+        $wallet = self::initializeWalletForStore($storeId, true);
+        if (!$wallet->requiresRecovery()) {
+            return true;
+        }
+        $result = $wallet->restore();
+        return empty($result['incomplete']) && !$wallet->requiresRecovery();
+    }
+
+    /**
+     * Repair stores whose primary account is bound but not ready (see readyStoreWallet).
+     *
+     * Runs before quote polling: a paid invoice on such an account cannot be minted,
+     * so the order would never be marked paid. Cheap when nothing needs doing — one
+     * metadata lookup per store — and retried at most every RETRY seconds per store so
+     * an unreachable mint is not hammered.
+     */
+    public static function ensurePrimaryWalletsReady(): string {
+        $retry = 600;
+        $stores = Database::fetchAll(
+            "SELECT id, mint_url, mint_unit, wallet_account_id FROM stores
+             WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL AND wallet_account_id IS NOT NULL"
+        );
+        $readied = 0;
+        $pending = 0;
+        foreach ($stores as $store) {
+            $walletId = WalletStorage::deriveWalletId(
+                $store['mint_url'],
+                $store['mint_unit'] ?? 'sat',
+                $store['wallet_account_id']
+            );
+            try {
+                $ready = Database::fetchOne(
+                    'SELECT ready FROM cashu_wallet_metadata WHERE wallet_id = ?',
+                    [$walletId]
+                );
+            } catch (Throwable $e) {
+                // Table not created yet: no wallet has ever been opened, nothing to repair.
+                return 'none';
+            }
+            if ($ready && (int)$ready['ready'] === 1) {
+                continue;
+            }
+
+            $attemptKey = 'wallet_ready_attempt_' . $store['id'];
+            if (time() - (int)Config::get($attemptKey, 0) < $retry) {
+                $pending++;
+                continue;
+            }
+            Config::set($attemptKey, time());
+            try {
+                if (self::readyStoreWallet($store['id'])) {
+                    $readied++;
+                    error_log("CashuPayServer: store {$store['id']} account at {$store['mint_url']} is now ready");
+                } else {
+                    $pending++;
+                }
+            } catch (Throwable $e) {
+                $pending++;
+                error_log("CashuPayServer: could not ready store {$store['id']} at {$store['mint_url']}: " . $e->getMessage());
+            }
+        }
+        if ($readied === 0 && $pending === 0) {
+            return 'none';
+        }
+        return "readied {$readied}, still pending {$pending}";
+    }
+
+    /**
      * Get wallet instance for a store (public accessor)
      */
     public static function getWalletInstance(string $storeId): Wallet {

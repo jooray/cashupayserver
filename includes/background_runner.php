@@ -39,11 +39,12 @@ class BackgroundRunner {
      *
      * Round-robin stops a slow task starving the others, but applying it to the payment
      * path means a customer's settlement waits for whichever housekeeping happens to be
-     * next in line. These three are what turn a paid invoice into a completed order, so
-     * they never wait their turn: recovery of unresolved outgoing operations, the quote
-     * poll that marks an invoice Settled, and the outbox that tells the shop about it.
+     * next in line. These are what turn a paid invoice into a completed order, so they
+     * never wait their turn: recovery of unresolved outgoing operations, readying an
+     * account that cannot mint yet (after a mint change), the quote poll that marks an
+     * invoice Settled, and the outbox that tells the shop about it.
      */
-    private const ALWAYS_RUN = ['recover_wallet_operations', 'poll_quotes', 'webhook_outbox'];
+    private const ALWAYS_RUN = ['recover_wallet_operations', 'ready_store_wallets', 'poll_quotes', 'webhook_outbox'];
 
     /**
      * Tasks in a fixed order. Recovery of ambiguous outgoing operations always runs
@@ -57,6 +58,9 @@ class BackgroundRunner {
             'recover_wallet_operations' => fn() => Invoice::recoverPendingWalletOperations(),
             'reconcile_transfers' => fn() => self::reconcileTransfers(),
             'update_check' => fn() => UpdateCheck::run(),
+            // Before poll_quotes: a paid invoice on an account that is not ready to
+            // spend cannot be minted, so the order would never be marked paid.
+            'ready_store_wallets' => fn() => Invoice::ensurePrimaryWalletsReady(),
             'poll_quotes' => function () {
                 Invoice::pollPendingQuotes();
                 return 'success';
@@ -111,6 +115,10 @@ class BackgroundRunner {
      * @return array Result document (also recorded as the heartbeat)
      */
     public static function run(int $budgetSeconds = self::DEFAULT_BUDGET): array {
+        // Shut down by a signed emergency notice: no task runs (includes/safe_mode.php).
+        if (SafeMode::shutdown() !== null) {
+            return ['timestamp' => time(), 'skipped' => 'emergency shutdown', 'tasks' => []];
+        }
         $lease = self::acquireLease();
         if ($lease === null) {
             return ['timestamp' => time(), 'skipped' => 'another run holds the lease', 'tasks' => []];
@@ -134,6 +142,12 @@ class BackgroundRunner {
         $ran = 0;
 
         $runTask = function (string $name) use ($tasks, &$results, &$health): void {
+            // The update check may have just received an emergency notice; nothing
+            // after it may move money in the same run.
+            if (SafeMode::shutdown() !== null) {
+                $results['tasks'][$name] = 'skipped (emergency shutdown)';
+                return;
+            }
             try {
                 $results['tasks'][$name] = $tasks[$name]();
                 $health[$name] = ['last_ok' => time()];

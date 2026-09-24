@@ -8,6 +8,8 @@
 require_once __DIR__ . '/database.php';
 
 // Version
+require_once __DIR__ . '/http.php';
+
 define('CASHUPAY_VERSION', '0.5.4-alpha');
 
 /**
@@ -178,7 +180,10 @@ class Config {
      * Get base URL for the application
      */
     public static function getBaseUrl(): string {
-        $baseUrl = self::get('base_url');
+        // Before setup there is no config table yet. The very first visit to the site
+        // root builds the setup link from here, and used to die with "no such table"
+        // and a blank page instead of sending the operator to setup.
+        $baseUrl = Database::isInitialized() ? self::get('base_url') : null;
         if ($baseUrl) {
             return rtrim($baseUrl, '/');
         }

@@ -194,15 +194,13 @@ class WebhookSender {
             CURLOPT_CONNECTTIMEOUT => 10,
             // Restrict protocols and forbid redirects so a target cannot bounce us to
             // file:// / gopher:// / an internal host. See FABLE-SECURITY-AUDIT (CRIT-4).
-            CURLOPT_PROTOCOLS_STR => 'https,http',
-            CURLOPT_REDIR_PROTOCOLS_STR => 'https,http',
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_HTTPHEADER => [
                 'Content-Type: application/json',
                 'BTCPay-Sig: ' . $signature,
                 'User-Agent: CashuPayServer/1.0',
             ],
-        ];
+        ] + cashupay_curl_protocol_options();
 
         // Connect to the address the safety check approved. Validating DNS and then
         // letting cURL resolve again leaves a rebinding window.

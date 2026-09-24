@@ -47,7 +47,7 @@ fi
 
 # Fail the build rather than shipping an artifact that cannot load.
 for required in cashupay.php uninstall.php bootstrap.php activation.php rewrite-rules.php \
-                admin-menu.php btcpay-integration.php includes/database.php; do
+                admin-menu.php btcpay-integration.php btcpay-dependency.php includes/database.php; do
     if [ ! -f "$BUILD_DIR/$required" ]; then
         echo "Build error: missing $required in plugin root" >&2
         exit 1

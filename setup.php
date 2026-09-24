@@ -733,11 +733,11 @@ function getDataDirHttpPath(): ?string {
                 $displayStep = $step - 3;
                 $totalDisplaySteps = 3;
                 ?>
-                <p class="subtitle">Step <?= $displayStep ?> of <?= $totalDisplaySteps ?></p>
+                <p class="subtitle">Step <?php echo $displayStep; ?> of <?php echo $totalDisplaySteps; ?></p>
 
                 <div class="steps">
                     <?php for ($i = 1; $i <= $totalDisplaySteps; $i++): ?>
-                        <div class="step-dot <?= $i < $displayStep ? 'completed' : ($i === $displayStep ? 'active' : '') ?>"></div>
+                        <div class="step-dot <?php echo $i < $displayStep ? 'completed' : ($i === $displayStep ? 'active' : ''); ?>"></div>
                     <?php endfor; ?>
                 </div>
             <?php else: ?>
@@ -756,17 +756,17 @@ function getDataDirHttpPath(): ?string {
                     : [1 => 1, 2 => 2, 4 => 3, 5 => 4, 6 => 5, 7 => 6];
                 $displayStep = $stepMapping[$step] ?? $step;
                 ?>
-                <p class="subtitle">Step <?= $displayStep ?> of <?= $totalSteps ?></p>
+                <p class="subtitle">Step <?php echo $displayStep; ?> of <?php echo $totalSteps; ?></p>
 
                 <div class="steps">
                     <?php for ($i = 1; $i <= $totalSteps; $i++): ?>
-                        <div class="step-dot <?= $i < $displayStep ? 'completed' : ($i === $displayStep ? 'active' : '') ?>"></div>
+                        <div class="step-dot <?php echo $i < $displayStep ? 'completed' : ($i === $displayStep ? 'active' : ''); ?>"></div>
                     <?php endfor; ?>
                 </div>
             <?php endif; ?>
 
             <?php if ($error): ?>
-                <div class="error"><?= htmlspecialchars($error) ?></div>
+                <div class="error"><?php echo htmlspecialchars($error); ?></div>
             <?php endif; ?>
 
             <?php if ($step === 1): ?>
@@ -810,7 +810,7 @@ function getDataDirHttpPath(): ?string {
                         <strong style="color: #f7931a;">Recommended</strong>
                         <ul style="margin: 0.5rem 0 0 1.25rem; color: #a0aec0; font-size: 0.9rem;">
                             <?php foreach ($recommendations as $name): ?>
-                                <li><?= htmlspecialchars($name) ?></li>
+                                <li><?php echo htmlspecialchars($name); ?></li>
                             <?php endforeach; ?>
                         </ul>
                     </div>
@@ -822,7 +822,7 @@ function getDataDirHttpPath(): ?string {
                         <p style="margin-top: 0.5rem;">Please install the following before continuing:</p>
                         <ul style="margin: 0.5rem 0 0 1.25rem;">
                             <?php foreach ($failedChecks as $name): ?>
-                                <li><?= htmlspecialchars($name) ?></li>
+                                <li><?php echo htmlspecialchars($name); ?></li>
                             <?php endforeach; ?>
                         </ul>
                     </div>
@@ -878,7 +878,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     </div>
 
                     <p style="color: #a0aec0; font-size: 0.85rem; margin-bottom: 1rem;">
-                        Current data location: <code><?= htmlspecialchars(Database::getDataDir()) ?></code>
+                        Current data location: <code><?php echo htmlspecialchars(Database::getDataDir()); ?></code>
                         <?php if ($isOutsideWebroot): ?>
                             <span style="color: #48bb78;">(outside web root)</span>
                         <?php endif; ?>
@@ -930,7 +930,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <p style="margin-bottom: 0.75rem;"><strong>How to verify manually:</strong></p>
                             <ol style="margin: 0 0 1rem 1.25rem; padding: 0; color: #a0aec0; font-size: 0.9rem;">
                                 <li>Open this URL in your browser:<br>
-                                    <a href="<?= htmlspecialchars($testUrl) ?>" target="_blank" rel="noopener" style="color: #63b3ed; word-break: break-all;"><?= htmlspecialchars($testUrl) ?></a>
+                                    <a href="<?php echo htmlspecialchars($testUrl); ?>" target="_blank" rel="noopener" style="color: #63b3ed; word-break: break-all;"><?php echo htmlspecialchars($testUrl); ?></a>
                                 </li>
                                 <li>You should see an error page (403 Forbidden or 404 Not Found)</li>
                                 <li>If the file downloads, your data is exposed!</li>
@@ -943,7 +943,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                             <p style="margin-bottom: 0.5rem;"><strong>Nginx:</strong></p>
                             <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 0.5rem;">Add to your server config:</p>
-                            <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">location <?= htmlspecialchars($dataPath) ?>/ {
+                            <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">location <?php echo htmlspecialchars($dataPath); ?>/ {
     deny all;
     return 404;
 }</pre>
@@ -993,7 +993,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         It is in a small text file on your server. Open your hosting file manager
                         (or the FTP program you used to upload CashuPayServer) and open this file:
                     </p>
-                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; margin-bottom: 0.75rem;"><?= htmlspecialchars(Setup::tokenPathForDisplay()) ?></code>
+                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; margin-bottom: 0.75rem;"><?php echo htmlspecialchars(Setup::tokenPathForDisplay()); ?></code>
                     <p style="color: #718096; font-size: 0.8rem; margin-bottom: 1rem;">
                         It contains one short line, like <code>A1B2C3D4E5</code>. Copy it in below.
                         The code stops working as soon as setup is finished.
@@ -1002,7 +1002,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                     <form method="post">
                         <input type="hidden" name="step" value="1">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                         <input type="hidden" name="detected_base_url" id="detected_base_url" value="">
 
                         <?php if ($setupTokenRequired): ?>
@@ -1038,9 +1038,9 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                     <script>
                     (function() {
-                        const baseOrigin = <?= json_encode($baseOrigin) ?>;
-                        const testPaths = <?= json_encode(array_values($testPaths)) ?>;
-                        const isOutsideWebroot = <?= json_encode($isOutsideWebroot) ?>;
+                        const baseOrigin = <?php echo json_encode($baseOrigin); ?>;
+                        const testPaths = <?php echo json_encode(array_values($testPaths)); ?>;
+                        const isOutsideWebroot = <?php echo json_encode($isOutsideWebroot); ?>;
 
                         async function runSecurityTest() {
                             const loadingEl = document.getElementById('security-test-loading');
@@ -1136,8 +1136,8 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             const messageEl = document.getElementById('url-mode-message');
                             const detailsEl = document.getElementById('url-mode-details');
 
-                            const baseUrl = <?= json_encode(Urls::siteBase()) ?>;
-                            const setupUrl = <?= json_encode(Urls::setup()) ?>;
+                            const baseUrl = <?php echo json_encode(Urls::siteBase()); ?>;
+                            const setupUrl = <?php echo json_encode(Urls::setup()); ?>;
 
                             // Test both URL patterns
                             const tests = {
@@ -1208,7 +1208,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                 <form method="post">
                     <input type="hidden" name="step" value="2">
-                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
 
                     <div class="form-group">
                         <label for="password">Password</label>
@@ -1227,11 +1227,11 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
             <?php elseif ($step === 4): ?>
                 <!-- Step 4: Create Store (name only) -->
                 <h2 style="margin-bottom: 1rem;">Create Store</h2>
-                <p style="margin-bottom: 1.5rem;"><?= $mode === 'add_store' ? 'Create a new store. You\'ll configure its mint and wallet next.' : 'Create your first store. You\'ll configure its mint and wallet next.' ?></p>
+                <p style="margin-bottom: 1.5rem;"><?php echo $mode === 'add_store' ? 'Create a new store. You\'ll configure its mint and wallet next.' : 'Create your first store. You\'ll configure its mint and wallet next.'; ?></p>
 
                 <form method="post">
                     <input type="hidden" name="step" value="4">
-                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                     <?php if ($mode === 'add_store'): ?>
                         <input type="hidden" name="mode" value="add_store">
                     <?php endif; ?>
@@ -1246,7 +1246,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <button type="submit" class="btn" style="width: 100%;">Create Store & Continue</button>
                 </form>
                 <?php if ($mode === 'add_store'): ?>
-                    <a href="<?= htmlspecialchars(Urls::admin()) ?>" class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem; text-align: center;">Cancel</a>
+                    <a href="<?php echo htmlspecialchars(Urls::admin()); ?>" class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem; text-align: center;">Cancel</a>
                 <?php endif; ?>
 
             <?php elseif ($step === 5): ?>
@@ -1262,18 +1262,18 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                 <form method="post">
                     <input type="hidden" name="step" value="5">
-                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                     <?php if ($mode === 'add_store'): ?>
                         <input type="hidden" name="mode" value="add_store">
                     <?php endif; ?>
 
                     <?php if (!empty($mintUnits)): ?>
                         <!-- Phase 2: Unit selection (shown after URL submitted) -->
-                        <input type="hidden" name="mint_url" value="<?= htmlspecialchars($mintUrlTemp) ?>">
+                        <input type="hidden" name="mint_url" value="<?php echo htmlspecialchars($mintUrlTemp); ?>">
 
                         <div style="background: rgba(72, 187, 120, 0.1); border: 1px solid rgba(72, 187, 120, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
                             <p style="font-size: 0.9rem; color: #68d391;">Connected to mint:</p>
-                            <code style="word-break: break-all;"><?= htmlspecialchars($mintUrlTemp) ?></code>
+                            <code style="word-break: break-all;"><?php echo htmlspecialchars($mintUrlTemp); ?></code>
                         </div>
 
                         <div class="form-group">
@@ -1297,7 +1297,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                     $displayName = ($unit === 'sat') ? 'Bitcoin (sats)' : strtoupper($unit);
                                     $selected = ($unit === 'sat') ? ' selected' : '';
                                     ?>
-                                    <option value="<?= htmlspecialchars($unit) ?>"<?= $selected ?>><?= htmlspecialchars($displayName) ?></option>
+                                    <option value="<?php echo htmlspecialchars($unit); ?>"<?php echo $selected; ?>><?php echo htmlspecialchars($displayName); ?></option>
                                 <?php endforeach; ?>
                             </select>
                             <p class="help-text">Available units from this mint. Choose the one that matches how you want to receive payments.</p>
@@ -1315,7 +1315,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         </div>
 
                         <div class="btn-group">
-                            <a href="?step=5<?= $mode === 'add_store' ? '&mode=add_store' : '' ?>" class="btn btn-secondary" style="text-align: center;">Change Mint</a>
+                            <a href="?step=5<?php echo $mode === 'add_store' ? '&mode=add_store' : ''; ?>" class="btn btn-secondary" style="text-align: center;">Change Mint</a>
                             <button type="submit" class="btn" id="continue-btn">Continue</button>
                         </div>
                     <?php else: ?>
@@ -1325,7 +1325,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <div style="display: flex; gap: 0.5rem;">
                                 <input type="url" id="mint_url" name="mint_url"
                                        placeholder="https://..."
-                                       value="<?= htmlspecialchars($_POST['mint_url'] ?? '') ?>"
+                                       value="<?php echo htmlspecialchars($_POST['mint_url'] ?? ''); ?>"
                                        required style="flex: 1;">
                                 <button type="button" class="btn btn-secondary" onclick="openMintDiscovery()" style="white-space: nowrap;">Discover</button>
                             </div>
@@ -1349,11 +1349,11 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         </ul>
                     </div>
 
-                    <div class="seed-display"><?= htmlspecialchars($tempSeed) ?></div>
+                    <div class="seed-display"><?php echo htmlspecialchars($tempSeed); ?></div>
 
                     <form method="post">
                         <input type="hidden" name="step" value="6">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                         <input type="hidden" name="action" value="confirm">
                         <?php if ($mode === 'add_store'): ?>
                             <input type="hidden" name="mode" value="add_store">
@@ -1364,7 +1364,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <label for="seed_confirmed">I have written down my seed phrase and stored it safely</label>
                         </div>
 
-                        <button type="submit" class="btn" style="width: 100%;"><?= $mode === 'add_store' ? 'Create Store' : 'Complete Setup' ?></button>
+                        <button type="submit" class="btn" style="width: 100%;"><?php echo $mode === 'add_store' ? 'Create Store' : 'Complete Setup'; ?></button>
                     </form>
                 <?php else: ?>
                     <p style="margin-bottom: 1.5rem;">
@@ -1373,7 +1373,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                     <form method="post" style="margin-bottom: 1rem;">
                         <input type="hidden" name="step" value="6">
-                        <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                         <input type="hidden" name="action" value="generate">
                         <?php if ($mode === 'add_store'): ?>
                             <input type="hidden" name="mode" value="add_store">
@@ -1385,7 +1385,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         <summary style="cursor: pointer; color: #a0aec0;">Restore from existing seed phrase</summary>
                         <form method="post" style="margin-top: 1rem;">
                             <input type="hidden" name="step" value="6">
-                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                             <input type="hidden" name="action" value="confirm">
                             <?php if ($mode === 'add_store'): ?>
                                 <input type="hidden" name="mode" value="add_store">
@@ -1401,7 +1401,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                 <label for="seed_confirmed2">I understand this will restore an existing wallet and that this seed phrase must not be used anywhere else (another store, instance, or wallet) as this will cause loss of funds</label>
                             </div>
 
-                            <button type="submit" class="btn btn-secondary" style="width: 100%;"><?= $mode === 'add_store' ? 'Create Store with Existing Seed' : 'Use Existing Seed' ?></button>
+                            <button type="submit" class="btn btn-secondary" style="width: 100%;"><?php echo $mode === 'add_store' ? 'Create Store with Existing Seed' : 'Use Existing Seed'; ?></button>
                         </form>
                     </details>
                 <?php endif; ?>
@@ -1428,7 +1428,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         even with no traffic. In your hosting control panel (cPanel &rarr; Cron Jobs),
                         add a job that runs every minute:
                     </p>
-                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem;">* * * * * curl -s -H "X-Cron-Key: <?= htmlspecialchars($cronKeyValue) ?>" "<?= htmlspecialchars($cronEndpoint) ?>" &gt;/dev/null 2&gt;&amp;1</code>
+                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem;">* * * * * curl -s -H "X-Cron-Key: <?php echo htmlspecialchars($cronKeyValue); ?>" "<?php echo htmlspecialchars($cronEndpoint); ?>" &gt;/dev/null 2&gt;&amp;1</code>
                     <p style="color: #718096; font-size: 0.8rem; margin-top: 0.5rem;">
                         The key travels in a header, not the URL, so it does not end up in web-server
                         or CDN access logs. If your host cannot send headers, the query form
@@ -1451,14 +1451,14 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <p style="margin-bottom: 0.25rem; font-weight: 500; color: #68d391;">Wallet Restored</p>
                     <p style="color: #a0aec0; font-size: 0.9rem;">
                         <?php if ($proofsFound > 0): ?>
-                            Found <?= $proofsFound ?> token(s) from previous use.
+                            Found <?php echo $proofsFound; ?> token(s) from previous use.
                             <?php if ($proofsUnspent > 0 || $proofsSpent > 0): ?>
                                 <br><span style="font-size: 0.85rem;">
-                                    <?= $proofsUnspent ?> unspent (available)<?php if ($proofsSpent > 0): ?>, <?= $proofsSpent ?> already spent<?php endif; ?>
+                                    <?php echo $proofsUnspent; ?> unspent (available)<?php if ($proofsSpent > 0): ?>, <?php echo $proofsSpent; ?> already spent<?php endif; ?>
                                 </span>
                             <?php endif; ?>
                         <?php else: ?>
-                            Counter position restored for <?= $countersRestored ?> keyset(s).
+                            Counter position restored for <?php echo $countersRestored; ?> keyset(s).
                         <?php endif; ?>
                     </p>
                 </div>
@@ -1467,7 +1467,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 <div class="warning" style="margin-bottom: 1.5rem;">
                     <p style="margin-bottom: 0.25rem; font-weight: 500;">Wallet Restore Warning</p>
                     <p style="font-size: 0.9rem;">
-                        Could not restore wallet history: <?= htmlspecialchars($restoreResult['error']) ?>
+                        Could not restore wallet history: <?php echo htmlspecialchars($restoreResult['error']); ?>
                     </p>
                     <p style="font-size: 0.85rem; color: #a0aec0; margin-top: 0.5rem;">
                         If this seed was used before, you may encounter "token already spent" errors.
@@ -1485,11 +1485,9 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 <?php if (Urls::isWordPress()): ?>
                 <!-- WooCommerce BTCPay Integration (WordPress mode) - shown first in WP mode -->
                 <?php
-                if (!function_exists('is_plugin_active')) {
-                    require_once ABSPATH . 'wp-admin/includes/plugin.php';
-                }
                 require_once __DIR__ . '/btcpay-integration.php';
-                $btcpayPluginActive = is_plugin_active('btcpay-greenfield-for-woocommerce/btcpay-greenfield-for-woocommerce.php');
+                require_once __DIR__ . '/btcpay-dependency.php';
+                $btcpayPluginActive = cashupay_plugin_state(CASHUPAY_BTCPAY_SLUG)['state'] === 'active';
                 $storeId = $_SESSION['setup_store_id'] ?? null;
                 $wooConfigured = false;
 
@@ -1513,6 +1511,8 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                 'btcpay.store.cancreateinvoice',
                                 'btcpay.store.canviewinvoices',
                                 'btcpay.store.canmodifyinvoices',
+                                // Required by the gateway's own key check on settings save.
+                                'btcpay.store.canviewstoresettings',
                                 'btcpay.store.webhooks.canmodifywebhooks',
                             ],
                             'woocommerce'
@@ -1526,20 +1526,20 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 <div style="background: rgba(0,0,0,0.2); padding: 1.5rem; border-radius: 8px; margin-bottom: 1.5rem;">
                     <h3 style="margin-bottom: 0.75rem;">WooCommerce Integration</h3>
 
-                    <?php if (!$btcpayPluginActive): ?>
+                    <?php if (!$btcpayPluginActive): $btcpayStep = cashupay_btcpay_next_step(); ?>
                         <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 0.75rem;">
-                            To accept payments in WooCommerce, install the
-                            <strong>"BTCPay Server for WooCommerce"</strong> plugin:
+                            To take payments in your WooCommerce shop, CashuPay needs the free
+                            <strong>"BTCPay for WooCommerce"</strong> plugin.
+                            <?php echo htmlspecialchars($btcpayStep['why'] ?? ''); ?>
                         </p>
-                        <ol style="color: #a0aec0; font-size: 0.9rem; margin: 0 0 1rem 1.25rem; padding: 0;">
-                            <li>Go to Plugins &rarr; Add New in WordPress</li>
-                            <li>Search for "BTCPay Server for WooCommerce"</li>
-                            <li>Install and activate the plugin</li>
-                            <li>Return here to auto-configure it</li>
-                        </ol>
-                        <a href="<?= admin_url('plugin-install.php?s=btcpay+greenfield+woocommerce&tab=search&type=term') ?>" class="btn btn-secondary" style="display: inline-block;">
-                            Install BTCPay Plugin
+                        <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 1rem;">
+                            You can finish setup first. Your WordPress dashboard will show the next step until your shop is connected.
+                        </p>
+                        <?php if ($btcpayStep && $btcpayStep['url'] !== null): ?>
+                        <a href="<?php echo htmlspecialchars($btcpayStep['url']); ?>" class="btn btn-secondary" style="display: inline-block;"<?php echo $btcpayStep['external'] ? ' target="_blank" rel="noopener noreferrer"' : ''; ?>>
+                            <?php echo htmlspecialchars($btcpayStep['label']); ?>
                         </a>
+                        <?php endif; ?>
                     <?php elseif ($wooConfigured): ?>
                         <div class="success">
                             WooCommerce has been configured to use CashuPay for payments.
@@ -1547,26 +1547,26 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <?php elseif (isset($configResult) && !$configResult['success']): ?>
                         <div class="warning">
                             <strong>Cannot auto-configure:</strong>
-                            <?= htmlspecialchars($configResult['message']) ?>
+                            <?php echo htmlspecialchars($configResult['message']); ?>
                         </div>
                         <p style="color: #a0aec0; font-size: 0.9rem; margin-top: 0.75rem;">
                             Disconnect your existing BTCPay Server via WooCommerce &rarr; Settings &rarr; Payments &rarr; BTCPay, then return here.
                         </p>
-                        <a href="<?= admin_url('admin.php?page=wc-settings&tab=checkout&section=btcpay_greenfield') ?>" class="btn btn-secondary" style="display: inline-block; margin-top: 0.5rem;">
+                        <a href="<?php echo admin_url('admin.php?page=wc-settings&tab=checkout&section=btcpay_greenfield'); ?>" class="btn btn-secondary" style="display: inline-block; margin-top: 0.5rem;">
                             Go to BTCPay Settings
                         </a>
                     <?php else: ?>
                         <?php if (cashupay_is_real_btcpay_configured()): ?>
                             <div class="warning">
                                 <strong>Existing BTCPay Server detected:</strong>
-                                <code style="display: block; margin-top: 0.5rem; word-break: break-all;"><?= htmlspecialchars(get_option('btcpay_gf_url', '')) ?></code>
+                                <code style="display: block; margin-top: 0.5rem; word-break: break-all;"><?php echo htmlspecialchars(get_option('btcpay_gf_url', '')); ?></code>
                             </div>
                             <p style="color: #a0aec0; font-size: 0.9rem; margin: 0.75rem 0;">
                                 A real BTCPay Server is configured. To use CashuPay instead, disconnect it first via WooCommerce settings.
                             </p>
                             <div class="btn-group">
-                                <a href="<?= admin_url('admin.php?page=wc-settings&tab=checkout&section=btcpay_greenfield') ?>" class="btn btn-secondary" style="text-align: center;">Go to BTCPay Settings</a>
-                                <a href="<?= admin_url('admin.php?page=cashupay') ?>" class="btn" style="text-align: center;">Skip</a>
+                                <a href="<?php echo admin_url('admin.php?page=wc-settings&tab=checkout&section=btcpay_greenfield'); ?>" class="btn btn-secondary" style="text-align: center;">Go to BTCPay Settings</a>
+                                <a href="<?php echo admin_url('admin.php?page=cashupay'); ?>" class="btn" style="text-align: center;">Skip</a>
                             </div>
                         <?php else: ?>
                             <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 1rem;">
@@ -1574,7 +1574,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             </p>
                             <form method="post">
                                 <input type="hidden" name="step" value="7">
-                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrfToken) ?>">
+                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                                 <input type="hidden" name="configure_woocommerce" value="1">
                                 <button type="submit" class="btn" style="width: 100%;">Configure WooCommerce</button>
                             </form>
@@ -1592,12 +1592,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 <div style="background: rgba(72, 187, 120, 0.1); border: 1px solid rgba(72, 187, 120, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
                     <p style="margin-bottom: 0.5rem; font-weight: 500;">Your Server URL</p>
                     <code id="detected-server-url" style="display: block; background: rgba(0,0,0,0.3); padding: 0.75rem; border-radius: 4px; font-size: 0.95rem; word-break: break-all; user-select: all;">
-                        <?= htmlspecialchars($serverUrl) ?>
+                        <?php echo htmlspecialchars($serverUrl); ?>
                     </code>
                     <p style="color: #a0aec0; font-size: 0.8rem; margin-top: 0.5rem;">
                         Enter this URL in your e-commerce plugin's BTCPay Server settings
                     </p>
-                    <p style="color: #68d391; font-size: 0.8rem; margin-top: 0.25rem;"><?= htmlspecialchars($urlModeLabel) ?></p>
+                    <p style="color: #68d391; font-size: 0.8rem; margin-top: 0.25rem;"><?php echo htmlspecialchars($urlModeLabel); ?></p>
                 </div>
 
                 <h3 style="margin-bottom: 0.75rem;">Connect Your E-commerce</h3>
@@ -1621,7 +1621,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     ]) . '&permissions[]=btcpay.store.cancreateinvoice&permissions[]=btcpay.store.webhooks.canmodifywebhooks';
                     $pairingUrl = $serverUrl . '/api-keys/authorize?' . $pairingParams;
                     ?>
-                    <a id="test-pairing-link" href="<?= htmlspecialchars($pairingUrl) ?>" class="btn btn-secondary" style="display: inline-block; font-size: 0.9rem; padding: 0.5rem 1rem;">
+                    <a id="test-pairing-link" href="<?php echo htmlspecialchars($pairingUrl); ?>" class="btn btn-secondary" style="display: inline-block; font-size: 0.9rem; padding: 0.5rem 1rem;">
                         Test Pairing Flow
                     </a>
                 </div>
@@ -1646,17 +1646,17 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <?php if (Urls::isWordPress()): ?>
                                 wordpress: OK
                             <?php else: ?>
-                                <?= $urlMode ?>: OK (detected in Step 1)
+                                <?php echo $urlMode; ?>: OK (detected in Step 1)
                             <?php endif; ?>
                         </div>
                     </div>
                 </details>
 
-                <a href="<?= Urls::isWordPress() ? admin_url('admin.php?page=cashupay') : Urls::admin() ?>" class="btn" style="width: 100%; text-align: center; display: block;">
+                <a href="<?php echo Urls::isWordPress() ? admin_url('admin.php?page=cashupay') : Urls::admin(); ?>" class="btn" style="width: 100%; text-align: center; display: block;">
                     Go to CashuPay Admin
                 </a>
                 <?php if (Urls::isWordPress()): ?>
-                <a href="<?= admin_url() ?>" class="btn btn-secondary" style="width: 100%; text-align: center; display: block; margin-top: 0.5rem;">
+                <a href="<?php echo admin_url(); ?>" class="btn btn-secondary" style="width: 100%; text-align: center; display: block; margin-top: 0.5rem;">
                     Back to WordPress Dashboard
                 </a>
                 <?php endif; ?>
@@ -1724,7 +1724,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
         </div>
     </div>
 
-    <script src="<?= htmlspecialchars(Urls::assets('js/')) ?>mint-discovery.bundle.js"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>mint-discovery.bundle.js"></script>
     <script>
     // Mint Discovery state
     var mintDiscoveryInstance = null;
@@ -2009,7 +2009,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
         var mintUrlEl = document.getElementById('mint_url');
 
         // For setup.php, the mint URL is in a hidden input when unit selection is shown
-        var mintUrl = '<?= htmlspecialchars($mintUrlTemp ?? '') ?>';
+        var mintUrl = '<?php echo htmlspecialchars($mintUrlTemp ?? ''); ?>';
 
         if (!unit || !mintUrl) return;
 
@@ -2031,12 +2031,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
              formData.append('action', 'test_mint_expiry');
              formData.append('mint_url', mintUrl);
              formData.append('unit', unit);
-             formData.append('csrf_token', <?= json_encode($csrfToken) ?>);
+             formData.append('csrf_token', <?php echo json_encode($csrfToken); ?>);
             <?php if ($mode === 'add_store'): ?>
             formData.append('mode', 'add_store');
             <?php endif; ?>
 
-            fetch(<?= json_encode(Urls::setup()) ?>, {
+            fetch(<?php echo json_encode(Urls::setup()); ?>, {
                 method: 'POST',
                 body: formData
             })

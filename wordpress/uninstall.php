@@ -28,6 +28,7 @@ if ($timestamp) {
 }
 
 // Flush rewrite rules
+delete_option('cashupay_rewrite_rules_version');
 flush_rewrite_rules();
 
 // Note: Data directory is NOT removed on uninstall.

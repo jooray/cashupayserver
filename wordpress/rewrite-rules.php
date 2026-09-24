@@ -29,11 +29,22 @@ function cashupay_disable_trailing_slash_redirect($redirect_url, $requested_url)
 function cashupay_add_rewrite_rules(): void {
     add_rewrite_rule('^cashupay/api/v1/(.*)$', 'index.php?cashupay_api=1&cashupay_path=$matches[1]', 'top');
     add_rewrite_rule('^cashupay/payment/(.*)$', 'index.php?cashupay_payment=$matches[1]', 'top');
+    // BTCPay's short checkout link. The WooCommerce gateway sends a customer who retries
+    // payment on an order to {server}/i/{invoiceId}; without this they got a 404.
+    add_rewrite_rule('^cashupay/i/([^/]+)/?$', 'index.php?cashupay_payment=$matches[1]', 'top');
     add_rewrite_rule('^cashupay-admin/?$', 'index.php?cashupay_admin=1', 'top');
     add_rewrite_rule('^cashupay-setup/?$', 'index.php?cashupay_setup=1', 'top');
     add_rewrite_rule('^cashupay/cron/?$', 'index.php?cashupay_cron=1', 'top');
     add_rewrite_rule('^cashupay/receive/?$', 'index.php?cashupay_receive=1', 'top');
     add_rewrite_rule('^cashupay/api-keys/authorize/?$', 'index.php?cashupay_authorize=1', 'top');
+
+    // WordPress only rebuilds its rule table on activation, and an upgrade by replacing
+    // the plugin folder does not activate anything. Bump this when the rules change.
+    $rulesVersion = '2';
+    if (get_option('cashupay_rewrite_rules_version') !== $rulesVersion) {
+        flush_rewrite_rules(false);
+        update_option('cashupay_rewrite_rules_version', $rulesVersion);
+    }
 }
 
 function cashupay_query_vars(array $vars): array {

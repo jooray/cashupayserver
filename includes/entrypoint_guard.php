@@ -24,24 +24,27 @@ if (!function_exists('cashupay_guard_direct_entry')) {
             return;
         }
 
-        // Is this file inside a WordPress plugin tree? If wp-load.php sits at one of the
-        // usual ancestors, we were installed as a plugin and this is a direct hit.
-        $dir = __DIR__;
-        for ($i = 0; $i < 6; $i++) {
-            $dir = dirname($dir);
-            if ($dir === '/' || $dir === '.') {
-                break;
-            }
-            if (is_file($dir . '/wp-load.php')) {
-                http_response_code(403);
-                header('Content-Type: text/plain; charset=utf-8');
-                exit(
-                    "This file must be reached through WordPress.\n"
-                    . "Use the CashuPay menu in wp-admin, or the /cashupay/... routes.\n"
-                );
-            }
+        // Is this the plugin build? Only the WordPress plugin ships its loader files at
+        // the application root. Looking for wp-load.php in parent directories instead
+        // locked out every standalone install that happens to live below a WordPress
+        // site (public_html/cashupayserver/ next to WordPress in public_html/), which is
+        // the most common shared-hosting layout there is.
+        $appRoot = dirname(__DIR__);
+        if (is_file($appRoot . '/cashupay.php') && is_file($appRoot . '/bootstrap.php')) {
+            http_response_code(403);
+            header('Content-Type: text/plain; charset=utf-8');
+            exit(
+                "This file must be reached through WordPress.\n"
+                . "Use the CashuPay menu in wp-admin, or the /cashupay/... routes.\n"
+            );
         }
     }
 }
 
 cashupay_guard_direct_entry();
+
+// A signed emergency notice shut this install down: nothing past this point runs,
+// including the admin (see includes/safe_mode.php). One small file read when not.
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/safe_mode.php';
+SafeMode::haltIfShutDown();

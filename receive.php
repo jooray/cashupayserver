@@ -309,8 +309,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 <select name="store_id" id="store-select" required onchange="updateAmountLabel()">
                     <option value="">Select a store...</option>
                     <?php foreach ($stores as $store): ?>
-                        <option value="<?= htmlspecialchars($store['id']) ?>" data-unit="<?= htmlspecialchars($store['mint_unit'] ?? 'sat') ?>">
-                            <?= htmlspecialchars($store['name']) ?>
+                        <option value="<?php echo htmlspecialchars($store['id']); ?>" data-unit="<?php echo htmlspecialchars($store['mint_unit'] ?? 'sat'); ?>">
+                            <?php echo htmlspecialchars($store['name']); ?>
                         </option>
                     <?php endforeach; ?>
                 </select>
@@ -448,13 +448,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     <div class="card">
         <h1>Request Payment</h1>
         <form method="GET">
-            <input type="hidden" name="store_id" value="<?= htmlspecialchars($storeId) ?>">
+            <input type="hidden" name="store_id" value="<?php echo htmlspecialchars($storeId); ?>">
             <div class="form-group">
-                <label>Amount (<?= htmlspecialchars(strtoupper($unit)) ?>)</label>
+                <label>Amount (<?php echo htmlspecialchars(strtoupper($unit)); ?>)</label>
                 <input type="number" name="amount"
-                       placeholder="<?= $unit === 'sat' || $unit === 'msat' ? '100' : '1.00' ?>"
-                       min="<?= $unit === 'sat' || $unit === 'msat' ? '1' : '0.01' ?>"
-                       step="<?= $unit === 'sat' || $unit === 'msat' ? '1' : '0.01' ?>"
+                       placeholder="<?php echo $unit === 'sat' || $unit === 'msat' ? '100' : '1.00'; ?>"
+                       min="<?php echo $unit === 'sat' || $unit === 'msat' ? '1' : '0.01'; ?>"
+                       step="<?php echo $unit === 'sat' || $unit === 'msat' ? '1' : '0.01'; ?>"
                        required>
             </div>
             <div class="form-group">
@@ -517,7 +517,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment Request - <?= htmlspecialchars($formattedAmount) ?></title>
+    <title>Payment Request - <?php echo htmlspecialchars($formattedAmount); ?></title>
     <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -577,14 +577,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 <body>
     <div class="card">
         <h1>Payment Request</h1>
-        <div class="amount"><?= htmlspecialchars($formattedAmount) ?></div>
+        <div class="amount"><?php echo htmlspecialchars($formattedAmount); ?></div>
         <?php if ($memo): ?>
-        <div class="memo"><?= htmlspecialchars($memo) ?></div>
+        <div class="memo"><?php echo htmlspecialchars($memo); ?></div>
         <?php endif; ?>
 
         <div class="qr-container" id="qr-container"></div>
 
-        <div class="request-string"><?= htmlspecialchars($prString) ?></div>
+        <div class="request-string"><?php echo htmlspecialchars($prString); ?></div>
 
         <button class="btn" onclick="copyRequest()">Copy Request</button>
 
@@ -592,7 +592,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     </div>
 
     <script>
-        const prString = <?= json_encode($prString) ?>;
+        const prString = <?php echo json_encode($prString); ?>;
 
         // Generate QR code
         if (typeof QRious !== 'undefined') {

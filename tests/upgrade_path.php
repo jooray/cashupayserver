@@ -82,7 +82,7 @@ require_once dirname(__DIR__) . '/includes/invoice.php';
 
 $db = Database::getInstance();
 
-check((int)$db->query('PRAGMA user_version')->fetchColumn() === 9, 'schema migrates to the current version automatically');
+check((int)$db->query('PRAGMA user_version')->fetchColumn() === 10, 'schema migrates to the current version automatically');
 
 // The operator must not be dropped back into the setup wizard.
 check(Config::isSetupComplete(), 'the installation is still set up');

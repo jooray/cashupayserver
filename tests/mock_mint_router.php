@@ -128,6 +128,14 @@ function respond(array $data, int $code = 200): never
     exit(json_encode($data));
 }
 
+/** Keep issued signatures by B_ so /v1/restore can hand them back (NUT-09). */
+function remember_signed(array &$state, array $outputs, array $signatures): void
+{
+    foreach ($outputs as $i => $output) {
+        $state['signed'][$output['B_']] = ['output' => $output, 'signature' => $signatures[$i]];
+    }
+}
+
 /** Sign a blinded message with the keyset the output names, with NUT-12 DLEQ. */
 function sign_output(array $output, array $state): array
 {
@@ -314,6 +322,7 @@ if ($uri === '/v1/mint/bolt11' && $method === 'POST') {
     }
 
     $signatures = array_map(fn($o) => sign_output($o, $state), $body['outputs'] ?? []);
+    remember_signed($state, $body['outputs'] ?? [], $signatures);
     $state['quotes'][$quoteId]['amount_issued'] = $quote['amount_paid'];
     $response = ['signatures' => $signatures];
     $state['cache'][$cacheKey] = $response;
@@ -431,10 +440,25 @@ if ($uri === '/v1/swap' && $method === 'POST') {
         $state['spent'][$Y] = true;
     }
     $signatures = array_map(fn($o) => sign_output($o, $state), $body['outputs'] ?? []);
+    remember_signed($state, $body['outputs'] ?? [], $signatures);
     $response = ['signatures' => $signatures];
     $state['cache'][$cacheKey] = $response;
     save_state($state);
     respond($response);
+}
+
+// NUT-09: return the signatures this mint previously issued for any of these outputs.
+if ($uri === '/v1/restore' && $method === 'POST') {
+    $outputs = [];
+    $signatures = [];
+    foreach ($body['outputs'] ?? [] as $output) {
+        $known = $state['signed'][$output['B_']] ?? null;
+        if ($known !== null) {
+            $outputs[] = $known['output'];
+            $signatures[] = $known['signature'];
+        }
+    }
+    respond(['outputs' => $outputs, 'signatures' => $signatures]);
 }
 
 if ($uri === '/v1/checkstate' && $method === 'POST') {

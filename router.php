@@ -93,6 +93,16 @@ if (preg_match('#^/payment(?:/(.+))?$#', $uri, $matches)) {
 }
 
 // -----------------------------------------------------------------------------
+// BTCPay short checkout link: /i/{id}
+// The WooCommerce gateway sends a customer retrying payment on an order here.
+// -----------------------------------------------------------------------------
+if (preg_match('#^/i/([^/]+)$#', $uri, $matches)) {
+    $_GET['id'] = rawurldecode($matches[1]);
+    require __DIR__ . '/payment.php';
+    exit;
+}
+
+// -----------------------------------------------------------------------------
 // Admin: /admin
 // -----------------------------------------------------------------------------
 if (preg_match('#^/admin$#', $uri)) {

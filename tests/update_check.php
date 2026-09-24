@@ -6,7 +6,7 @@
  *
  * What this covers: that an out-of-date instance is told so, that a current one is
  * left alone, that the opt-out really stops both the fetch and the notice, that a
- * day's cache means one request a day rather than one a minute, and that nothing a
+ * six-hour cache means a few requests a day rather than one a minute, and that nothing a
  * hostile or broken manifest can say turns into a bad link or a bad version string.
  *
  * Run: php tests/update_check.php
@@ -34,6 +34,7 @@ class Config {
     public static array $kv = [];
     public static function get(string $k, mixed $d = null): mixed { return self::$kv[$k] ?? $d; }
     public static function set(string $k, mixed $v): void { self::$kv[$k] = $v; }
+    public static function delete(string $k): void { unset(self::$kv[$k]); }
 }
 
 // Point the endpoint at the test's own server before the class is loaded, so run()
@@ -56,7 +57,7 @@ file_put_contents("$dir/newer.json", json_encode([
 ]));
 file_put_contents("$dir/bad-version.json", '{"version":"<script>alert(1)</script>"}');
 file_put_contents("$dir/not-json.json", 'not json at all');
-file_put_contents("$dir/huge.json", json_encode(['version' => '1.0.0', 'notes' => str_repeat('x', 9000)]));
+file_put_contents("$dir/huge.json", json_encode(['version' => '1.0.0', 'notes' => str_repeat('x', 20000)]));
 file_put_contents("$dir/plain-link.json", '{"version":"1.0.0","url":"http://github.com/jooray/cashupayserver"}');
 file_put_contents("$dir/other-host.json", '{"version":"1.0.0","url":"https://evil.example.com/download"}');
 file_put_contents("$dir/odd-fields.json", json_encode([
@@ -132,11 +133,11 @@ check(UpdateCheck::status()['latest'] === null, 'and stops the notice, cache or 
 Config::set('update_check_enabled', true);
 check(UpdateCheck::status()['latest'] !== null, 'opting back in shows it again');
 
-echo "Not asking more than once a day\n";
+echo "Not asking more than every six hours\n";
 Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time()]);
 check(UpdateCheck::run() === 'skipped', 'a fresh answer is not re-fetched');
-Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time() - 86401]);
-check(UpdateCheck::run() === 'update available', 'a day-old answer is asked again');
+Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time() - 21601]);
+check(UpdateCheck::run() === 'update available', 'a six-hour-old answer is asked again');
 
 echo "\n$passed passed, $failed failed\n";
 exit($failed === 0 ? 0 : 1);

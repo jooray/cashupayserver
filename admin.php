@@ -330,9 +330,8 @@ function checkDataDirectoryProtection(): ?string {
             CURLOPT_TIMEOUT => 3,
             CURLOPT_CONNECTTIMEOUT => 2,
             CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_PROTOCOLS_STR => 'https,http',
             CURLOPT_SSL_VERIFYPEER => false,
-        ]);
+        ] + cashupay_curl_protocol_options());
 
         curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -1248,11 +1247,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // to guess at, so without this the store looked fine and then failed on its
                 // first payment with a message about seed fingerprints. The seed already
                 // exists, so restore is the right mode: it adopts the seed and picks up any
-                // ecash this seed already has at that mint.
+                // ecash this seed already has at that mint. Restore mode cannot mint until
+                // restore() completes, so run it now; if it does not finish, the background
+                // runner retries before polling invoices.
                 $walletWarning = null;
                 if ($mintChanged || $unitChanged) {
                     try {
-                        Invoice::initializeWalletForStore($storeId, true);
+                        if (!Invoice::readyStoreWallet($storeId)) {
+                            $walletWarning = 'The new mint is saved, but setting it up did not finish. '
+                                . 'This server will keep retrying in the background; payments will '
+                                . 'not complete until it does.';
+                        }
                     } catch (Throwable $e) {
                         error_log("CashuPayServer: could not initialize wallet for {$storeId} after mint change: " . $e->getMessage());
                         $walletWarning = 'The new mint is saved, but this server could not reach it to '
@@ -2418,7 +2423,7 @@ $isWp = Urls::isWordPress();
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="CashuPay">
-    <meta name="csrf-token" content="<?= htmlspecialchars(Auth::generateCsrfToken()) ?>">
+    <meta name="csrf-token" content="<?php echo htmlspecialchars(Auth::generateCsrfToken()); ?>">
     <title>CashuPayServer Admin</title>
     <?php if (!$isWp): ?><link rel="manifest" href="manifest.json"><?php endif; ?>
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%230f0f23' width='100' height='100' rx='20'/><text x='50' y='70' font-size='60' text-anchor='middle'>⚡</text></svg>">
@@ -3483,7 +3488,7 @@ $isWp = Urls::isWordPress();
                             </div>
 
                             <div style="padding: 0.75rem; background: rgba(247, 147, 26, 0.1); border-radius: 8px; margin-top: 1rem; font-size: 0.85rem; color: var(--text-secondary);">
-                                Auto-withdrawals include a <?= CASHUPAY_DONATION_PERCENT ?>% donation to support CashuPayServer development. Use manual withdrawal to opt out.
+                                Auto-withdrawals include a <?php echo CASHUPAY_DONATION_PERCENT; ?>% donation to support CashuPayServer development. Use manual withdrawal to opt out.
                             </div>
 
                             <button class="btn btn-full" id="btn-save-auto-melt" style="margin-top: 1rem;">
@@ -3605,7 +3610,7 @@ $isWp = Urls::isWordPress();
                         <div class="form-group">
                             <label class="form-label">Current Server URL</label>
                             <code id="current-server-url" style="display: block; background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; font-size: 0.9rem; word-break: break-all; user-select: all;">
-                                <?= htmlspecialchars(Urls::server()) ?>
+                                <?php echo htmlspecialchars(Urls::server()); ?>
                             </code>
                             <p class="form-help">This URL is used for e-commerce plugin integration</p>
                         </div>
@@ -3670,28 +3675,31 @@ $isWp = Urls::isWordPress();
                                 ? ['#a36a00', 'Important update available']
                                 : ['var(--text-secondary)', 'Update available']);
                         ?>
-                        <div style="color: <?= $sev[0] ?>; font-weight: 600; margin-bottom: 0.35rem;">
-                            <?= $sev[1] ?>: v<?= htmlspecialchars($cpsUpdate['latest'], ENT_QUOTES) ?>
+                        <div style="color: <?php echo $sev[0]; ?>; font-weight: 600; margin-bottom: 0.35rem;">
+                            <?php echo $sev[1]; ?>: v<?php echo htmlspecialchars($cpsUpdate['latest'], ENT_QUOTES); ?>
                             <?php if ($cpsUpdate['unsupported']): ?>
                                 &middot; this version is no longer supported
                             <?php endif; ?>
                         </div>
                         <?php if (!empty($cpsUpdate['notes'])): ?>
-                            <div style="margin-bottom: 0.35rem;"><?= htmlspecialchars($cpsUpdate['notes'], ENT_QUOTES) ?></div>
+                            <div style="margin-bottom: 0.35rem;"><?php echo htmlspecialchars($cpsUpdate['notes'], ENT_QUOTES); ?></div>
                         <?php endif; ?>
                     <?php endif; ?>
-                    CashuPayServer v<?= CASHUPAY_VERSION ?> &middot;
-                    <a href="<?= htmlspecialchars($cpsUpdate['url'] ?: 'https://github.com/jooray/cashupayserver/releases', ENT_QUOTES) ?>"
+                    CashuPayServer v<?php echo CASHUPAY_VERSION; ?> &middot;
+                    <a href="<?php echo htmlspecialchars($cpsUpdate['url'] ?: 'https://github.com/jooray/cashupayserver/releases', ENT_QUOTES); ?>"
                        target="_blank" rel="noopener"
-                       style="color: var(--text-secondary); text-decoration: none;"><?= $cpsUpdate['outdated'] ? 'How to upgrade' : 'Releases' ?></a>
+                       style="color: var(--text-secondary); text-decoration: none;"><?php echo $cpsUpdate['outdated'] ? 'How to upgrade' : 'Releases'; ?></a>
                     <div style="margin-top: 0.6rem; display: flex; gap: 0.4rem; align-items: flex-start; justify-content: center; text-align: left; max-width: 34rem; margin-left: auto; margin-right: auto;">
-                        <input type="checkbox" id="update-check-enabled" <?= UpdateCheck::enabled() ? 'checked' : '' ?>
+                        <input type="checkbox" id="update-check-enabled" <?php echo UpdateCheck::enabled() ? 'checked' : ''; ?>
                                onchange="saveUpdateCheck(this.checked)" style="width: 16px; height: 16px; margin-top: 0.15rem; flex: 0 0 auto;">
                         <label for="update-check-enabled" style="cursor: pointer;">
                             Tell me when a new version is released. Fetches
-                            <?= htmlspecialchars(UpdateCheck::endpoint(), ENT_QUOTES) ?> once a day and sends
-                            nothing about this server, not even which version it runs. Nothing is ever
-                            installed for you.
+                            <?php echo htmlspecialchars(UpdateCheck::endpoint(), ENT_QUOTES); ?> a few times a day.
+                            It sends nothing about this server, not even which version it runs; like any
+                            web request, the site sees this server's address. Nothing is ever installed
+                            for you. The same file can carry a signed emergency notice from the
+                            developers: if this version has a serious security hole, the server shuts
+                            itself down until you upgrade it.
                         </label>
                     </div>
                 </div>
@@ -3773,7 +3781,7 @@ $isWp = Urls::isWordPress();
                     <span>
                         <span style="display: block; font-weight: 500;">Support CashuPayServer</span>
                         <span style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
-                            Donate <?= CASHUPAY_DONATION_PERCENT ?>% (<span id="donate-amount">0</span> <span class="unit-label">SAT</span>) to help with development
+                            Donate <?php echo CASHUPAY_DONATION_PERCENT; ?>% (<span id="donate-amount">0</span> <span class="unit-label">SAT</span>) to help with development
                         </span>
                     </span>
                 </label>
@@ -3829,7 +3837,7 @@ $isWp = Urls::isWordPress();
                         <span>
                             <span style="display: block; font-weight: 500;">Support CashuPayServer</span>
                             <span style="display: block; font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.25rem;">
-                                Donate <?= CASHUPAY_DONATION_PERCENT ?>% (<span id="export-donate-amount">0</span> <span class="unit-label">SAT</span>) to help with development
+                                Donate <?php echo CASHUPAY_DONATION_PERCENT; ?>% (<span id="export-donate-amount">0</span> <span class="unit-label">SAT</span>) to help with development
                             </span>
                         </span>
                     </label>
@@ -3961,7 +3969,7 @@ $isWp = Urls::isWordPress();
         </div>
     </div>
 
-    <script src="<?= htmlspecialchars(Urls::assets('js/')) ?>mint-discovery.bundle.js"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>mint-discovery.bundle.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/qrious@4.0.2/dist/qrious.min.js"></script>
     <script type="module">
         // Import bc-ur library as ES module
@@ -3970,18 +3978,18 @@ $isWp = Urls::isWordPress();
         // Expose to global scope for AnimatedQR class
         window.bcur = { UR, UREncoder };
     </script>
-    <script src="<?= htmlspecialchars(Urls::assets('js/')) ?>animated-qr.js?v=4"></script>
+    <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>animated-qr.js?v=4"></script>
     <script>
         // WordPress mode - skip lock screen
-        const isWordPressMode = <?= Urls::isWordPress() ? 'true' : 'false' ?>;
-        const adminUrl = <?= json_encode(Urls::admin()) ?>;
-        const setupUrl = <?= json_encode(Urls::setup()) ?>;
+        const isWordPressMode = <?php echo Urls::isWordPress() ? 'true' : 'false'; ?>;
+        const adminUrl = <?php echo json_encode(Urls::admin()); ?>;
+        const setupUrl = <?php echo json_encode(Urls::setup()); ?>;
 
         // URL mode config (embedded from PHP)
         const urlModeConfig = {
-            isWordPress: <?= json_encode(Urls::isWordPress()) ?>,
-            currentMode: <?= json_encode(Config::getUrlMode()) ?>,
-            baseUrl: <?= json_encode(Urls::siteBase()) ?>
+            isWordPress: <?php echo json_encode(Urls::isWordPress()); ?>,
+            currentMode: <?php echo json_encode(Config::getUrlMode()); ?>,
+            baseUrl: <?php echo json_encode(Urls::siteBase()); ?>
         };
 
         // State
@@ -4002,12 +4010,12 @@ $isWp = Urls::isWordPress();
         }
 
         // Server URL for e-commerce integration
-        let serverUrl = <?= json_encode(Urls::server()) ?>;
+        let serverUrl = <?php echo json_encode(Urls::server()); ?>;
 
         // WordPress logout destination, when running as a plugin.
-        const WP_LOGOUT_URL = <?= json_encode(
+        const WP_LOGOUT_URL = <?php echo json_encode(
             Urls::isWordPress() && function_exists('wp_logout_url') ? wp_logout_url() : null
-        ) ?>;
+        ); ?>;
 
         // Helper for POST requests with CSRF token
         async function postWithCsrf(url, body) {
@@ -5241,10 +5249,10 @@ $isWp = Urls::isWordPress();
         }
 
         // Donation percentage constant
-        const DONATION_PERCENT = <?= CASHUPAY_DONATION_PERCENT ?>;
+        const DONATION_PERCENT = <?php echo CASHUPAY_DONATION_PERCENT; ?>;
 
         // API base URL for Greenfield API calls
-        let API_BASE_URL = <?= json_encode(Urls::api()) ?>;
+        let API_BASE_URL = <?php echo json_encode(Urls::api()); ?>;
 
         // Lightning routing fee buffer (same as auto-melt uses)
         const LN_FEE_BUFFER_PERCENT = 2; // 2%

@@ -129,8 +129,45 @@ function handleCurrentApiKey(array $auth, array $params, array $body): void {
     jsonResponse([
         'apiKey' => null, // never echo the credential back
         'label' => $auth['store_name'] ?? null,
-        'permissions' => array_values($auth['permissions'] ?? []),
+        'permissions' => greenfieldPermissions($auth),
     ]);
+}
+
+/**
+ * A key's permissions in BTCPay's wire form: every store permission scoped as
+ * "perm:storeId".
+ *
+ * The WooCommerce gateway rejects a key on settings save unless every permission
+ * names exactly one store and the set equals its required list (plus optional
+ * webhook and pull-payment permissions). Bare names failed the first check, `*`
+ * both, and the gateway then skipped creating its webhook.
+ *
+ * `*` (keys made in the admin) is reported as the set this server serves through
+ * Greenfield to a shop plugin. Pull payments are left out on purpose: the gateway
+ * reads that permission as "refunds work", and there are no refunds here.
+ */
+function greenfieldPermissions(array $auth): array {
+    $storeId = (string)($auth['store_id'] ?? '');
+    $held = array_values($auth['permissions'] ?? []);
+    if (in_array('*', $held, true)) {
+        $held = [
+            'btcpay.store.canviewinvoices',
+            'btcpay.store.cancreateinvoice',
+            'btcpay.store.canviewstoresettings',
+            'btcpay.store.canmodifyinvoices',
+            'btcpay.store.webhooks.canmodifywebhooks',
+        ];
+    }
+    $scoped = [];
+    foreach ($held as $permission) {
+        $permission = (string)$permission;
+        if (strpos($permission, 'btcpay.store.') === 0 && $storeId !== '') {
+            // Stored keys may already carry a scope; this key only ever serves its own store.
+            $permission = explode(':', $permission, 2)[0] . ':' . $storeId;
+        }
+        $scoped[] = $permission;
+    }
+    return array_values(array_unique($scoped));
 }
 
 /**

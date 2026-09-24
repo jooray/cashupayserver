@@ -98,7 +98,7 @@ $baseUrl = Config::getBaseUrl();
         <div class="logo">&#9889;</div>
         <h1>CashuPayServer</h1>
         <p class="tagline">Lightning payments with Cashu ecash</p>
-        <a href="<?= htmlspecialchars(Urls::admin()) ?>" class="btn">Admin Login</a>
+        <a href="<?php echo htmlspecialchars(Urls::admin()); ?>" class="btn">Admin Login</a>
         <div class="footer">
             <p>BTCPay Server compatible API for e-commerce integrations</p>
         </div>
