@@ -42,6 +42,9 @@ class UpdateCheck
 
     private const CACHE_KEY = 'update_check_state';
 
+    /** Largest manifest accepted; room for release notes plus a signed shutdown notice. */
+    private const MAX_BYTES = 16384;
+
     /** The operator asked not to be told. */
     public static function enabled(): bool
     {
@@ -102,8 +105,11 @@ class UpdateCheck
 
         $state = Config::get(self::CACHE_KEY);
         $state = is_array($state) ? $state : [];
+        // `at` is the last attempt; `failed` says whether it failed. A failure is retried
+        // after an hour even when an older answer is cached — keying the retry on "no
+        // answer yet" made every failure after a success wait the full interval.
         $last = (int)($state['at'] ?? 0);
-        $wait = empty($state['latest']) && $last > 0 ? self::RETRY_INTERVAL : self::INTERVAL;
+        $wait = !empty($state['failed']) || empty($state['latest']) ? self::RETRY_INTERVAL : self::INTERVAL;
         if ($last > time() - $wait) {
             return 'skipped';
         }
@@ -113,11 +119,13 @@ class UpdateCheck
             // Remember the attempt so a dead endpoint is retried hourly, not every
             // minute, and keep whatever we last knew rather than forgetting it.
             $state['at'] = time();
+            $state['failed'] = true;
             Config::set(self::CACHE_KEY, $state);
             return 'unreachable';
         }
 
         $fetched['at'] = time();
+        $fetched['ok_at'] = $fetched['at'];
         Config::set(self::CACHE_KEY, $fetched);
         return version_compare(CASHUPAY_VERSION, $fetched['latest'], '<') ? 'update available' : 'current';
     }
@@ -137,7 +145,17 @@ class UpdateCheck
             return null;
         }
         curl_setopt_array($ch, [
-            CURLOPT_RETURNTRANSFER => true,
+            // Stop reading past the size limit instead of buffering whatever the
+            // endpoint sends and checking afterwards.
+            CURLOPT_RETURNTRANSFER => false,
+            CURLOPT_WRITEFUNCTION  => function ($ch, string $chunk) use (&$body): int {
+                if (strlen($body) + strlen($chunk) > self::MAX_BYTES) {
+                    $body = null;
+                    return 0; // aborts the transfer
+                }
+                $body .= $chunk;
+                return strlen($chunk);
+            },
             CURLOPT_CONNECTTIMEOUT => 3,
             CURLOPT_TIMEOUT        => 8,
             CURLOPT_FOLLOWLOCATION => false,
@@ -148,11 +166,12 @@ class UpdateCheck
             CURLOPT_USERAGENT      => 'CashuPayServer',
             CURLOPT_HTTPHEADER     => ['Accept: application/json'],
         ] + cashupay_curl_protocol_options());
-        $body = curl_exec($ch);
+        $body = '';
+        curl_exec($ch);
         $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
         // No curl_close(): deprecated since PHP 8.5 and a no-op since 8.0.
 
-        if (!is_string($body) || $code !== 200 || strlen($body) > 16384) {
+        if (!is_string($body) || $body === '' || $code !== 200) {
             return null;
         }
         $data = json_decode($body, true);
@@ -196,21 +215,9 @@ class UpdateCheck
         return $out;
     }
 
-    /** HTTPS, and either the manifest's own host or the release host. */
+    /** HTTPS, and either the manifest's own host or this project's GitHub releases. */
     private static function acceptableLink(string $link, string $manifestUrl): bool
     {
-        $parts = parse_url($link);
-        if (($parts['scheme'] ?? '') !== 'https' || empty($parts['host'])) {
-            return false;
-        }
-        $host = strtolower($parts['host']);
-        $own = strtolower((string)(parse_url($manifestUrl)['host'] ?? ''));
-        if ($own !== '' && $host === $own) {
-            return true;
-        }
-        // github.com only for this project's own repository: any repository there would
-        // let a tampered manifest send operators to a look-alike fork to "upgrade".
-        return $host === 'github.com'
-            && str_starts_with((string)($parts['path'] ?? ''), '/jooray/cashupayserver/');
+        return cashupay_is_trusted_release_link($link, (string)(parse_url($manifestUrl)['host'] ?? ''));
     }
 }

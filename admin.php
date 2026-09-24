@@ -15,6 +15,12 @@ require_once __DIR__ . '/includes/transfer.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
+
+/** Shown while a mint account is still being checked for this seed's earlier payments. */
+const RECOVERY_IN_PROGRESS_MESSAGE = 'Saved. This server is now checking the mint for payments this '
+    . 'store\'s recovery phrase received there before, so nothing is missed or reused. That finishes '
+    . 'in the background, usually within a few minutes; until then new payments use another of your '
+    . 'mints if one is ready.';
 require_once __DIR__ . '/includes/update_check.php';
 
 use Cashu\ProofState;
@@ -214,6 +220,39 @@ function cashupay_diagnostics(?string $storeId): array {
         $unreachableAccounts[] = ['mint' => $mint, 'primary' => $isPrimary];
     }
 
+    // Accounts still scanning the seed's history at a mint (after a mint change, an
+    // imported seed or a new backup mint). A primary one means new payments wait for it.
+    $recoveringAccounts = [];
+    foreach (Database::fetchAll(
+        'SELECT id, mint_url, mint_unit, wallet_account_id FROM stores
+         WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL AND wallet_account_id IS NOT NULL'
+        . ($storeId ? ' AND id = ?' : ''),
+        $storeId ? [$storeId] : []
+    ) as $row) {
+        $accounts = [[$row['mint_url'], $row['mint_unit'] ?? 'sat', true]];
+        foreach (Database::fetchAll('SELECT mint_url, unit FROM store_mints WHERE store_id = ? AND enabled = 1', [$row['id']]) as $b) {
+            $accounts[] = [$b['mint_url'], $b['unit'] ?? 'sat', false];
+        }
+        foreach ($accounts as [$mint, $unit, $primary]) {
+            try {
+                $meta = Database::fetchOne(
+                    'SELECT ready, restore_error, restore_updated_at FROM cashu_wallet_metadata WHERE wallet_id = ?',
+                    [\Cashu\WalletStorage::deriveWalletId($mint, $unit, $row['wallet_account_id'])]
+                );
+            } catch (Throwable $e) {
+                $meta = null;
+            }
+            if ($meta !== null && (int)$meta['ready'] !== 1) {
+                $recoveringAccounts[] = [
+                    'mint' => $mint,
+                    'primary' => $primary,
+                    'error' => $meta['restore_error'] ?: null,
+                    'updatedAt' => $meta['restore_updated_at'] !== null ? (int)$meta['restore_updated_at'] : null,
+                ];
+            }
+        }
+    }
+
     $failedDeliveries = (int)(Database::fetchOne(
         "SELECT COUNT(*) AS cnt FROM webhook_deliveries
          WHERE delivered_at IS NULL AND attempts > 0"
@@ -245,6 +284,7 @@ function cashupay_diagnostics(?string $storeId): array {
         'failedWebhookDeliveries' => $failedDeliveries,
         'pendingWalletOperations' => $pendingJournals,
         'unreachableAccounts' => $unreachableAccounts,
+        'recoveringAccounts' => $recoveringAccounts,
         // A missing server address only *breaks* something when nothing else is
         // driving background work. With a real cron job running every minute the
         // installation is healthy, and shouting "needs attention" at an operator
@@ -253,6 +293,7 @@ function cashupay_diagnostics(?string $storeId): array {
         // not raise an alarm on its own — it is listed so the operator can act on it.
         'needsAttention' => $stale
             || !empty(array_filter($unreachableAccounts, fn($a) => $a['primary']))
+            || !empty(array_filter($recoveringAccounts, fn($a) => $a['primary'] || $a['error'] !== null))
             || $failedDeliveries > 0
             || !empty($stuckInvoices)
             || !empty(array_filter(
@@ -1088,10 +1129,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if ($mintUrl && $seedPhrase) {
                     $existingSeed = isset($_POST['seed_phrase']) && $_POST['seed_phrase'] !== '';
+                    $recoveryWarning = null;
                     try {
                         $wallet = Invoice::initializeWalletForStore($storeId, $existingSeed);
                         if ($existingSeed && $wallet->requiresRecovery()) {
-                            $wallet->restore();
+                            // Bounded: without GMP the full scan outlasts any request.
+                            // The background runner finishes it; until then this store
+                            // does not hand out invoices it could not collect.
+                            $recovery = Invoice::advanceStoreRecovery($storeId, 15.0);
+                            if ($recovery['error'] !== null) {
+                                throw new Exception($recovery['error']);
+                            }
+                            if (!$recovery['ready']) {
+                                $recoveryWarning = RECOVERY_IN_PROGRESS_MESSAGE;
+                            }
                         }
                     } catch (Throwable $e) {
                         http_response_code(409);
@@ -1110,6 +1161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode([
                     'id' => $storeId,
                     'name' => $name,
+                    'warning' => $recoveryWarning ?? null,
                     'isConfigured' => !empty($mintUrl) && !empty($seedPhrase),
                     'seedPhrase' => $seedPhrase, // Show once for backup
                 ]);
@@ -1253,10 +1305,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $walletWarning = null;
                 if ($mintChanged || $unitChanged) {
                     try {
-                        if (!Invoice::readyStoreWallet($storeId)) {
-                            $walletWarning = 'The new mint is saved, but setting it up did not finish. '
-                                . 'This server will keep retrying in the background; payments will '
-                                . 'not complete until it does.';
+                        if (!Invoice::readyStoreWallet($storeId, 15.0)) {
+                            $walletWarning = RECOVERY_IN_PROGRESS_MESSAGE;
                         }
                     } catch (Throwable $e) {
                         error_log("CashuPayServer: could not initialize wallet for {$storeId} after mint change: " . $e->getMessage());
@@ -2215,9 +2265,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $id = Config::addStoreBackupMint($storeId, $mintUrl, $unit, $priority);
+                $backupWarning = null;
                 try {
-                    $wallet = Invoice::initializeWalletForStore($storeId, true, $mintUrl, $unit);
-                    $wallet->restore();
+                    $recovery = Invoice::advanceStoreRecovery($storeId, 10.0, $mintUrl, $unit);
+                    if ($recovery['error'] !== null) {
+                        throw new Exception($recovery['error']);
+                    }
+                    if (!$recovery['ready']) {
+                        $backupWarning = RECOVERY_IN_PROGRESS_MESSAGE;
+                    }
                 } catch (Throwable $e) {
                     Config::updateStoreBackupMint($id, ['enabled' => 0]);
                     throw new Exception(
@@ -2228,8 +2284,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode([
                     'success' => true,
                     'id' => $id,
-                    'mint_info' => $test['info']
-                ]);
+                    'mint_info' => $test['info'],
+                ] + ($backupWarning !== null ? ['warning' => $backupWarning] : []));
             } catch (Exception $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
@@ -2254,14 +2310,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if (!$mint) {
                         throw new Exception('Backup mint not found');
                     }
-                    $wallet = Invoice::initializeWalletForStore(
+                    $recovery = Invoice::advanceStoreRecovery(
                         $mint['store_id'],
-                        true,
+                        10.0,
                         $mint['mint_url'],
                         $mint['unit']
                     );
-                    if ($wallet->requiresRecovery()) {
-                        $wallet->restore();
+                    if ($recovery['error'] !== null) {
+                        throw new Exception($recovery['error']);
                     }
                 }
                 Config::updateStoreBackupMint($id, $data);
@@ -3969,12 +4025,12 @@ $isWp = Urls::isWordPress();
         </div>
     </div>
 
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>mint-discovery.bundle.js"></script>
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/vendor/qrcode-generator.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/qr-canvas.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/mint-discovery.bundle.js')); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/vendor/qrcode-generator.js')); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/qr-canvas.js')); ?>"></script>
     <!-- Sets window.bcur = { UR, UREncoder } for the animated QR codes. -->
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/vendor/bc-ur.bundle.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>animated-qr.js?v=4"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/vendor/bc-ur.bundle.js')); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/animated-qr.js')); ?>"></script>
     <script>
         // WordPress mode - skip lock screen
         const isWordPressMode = <?php echo Urls::isWordPress() ? 'true' : 'false'; ?>;
@@ -4932,6 +4988,17 @@ $isWp = Urls::isWordPress();
                       + 'so this is only worth knowing; remove it under Stores if it stays down.');
             });
 
+            (diag.recoveringAccounts || []).forEach(a => {
+                const host = (() => { try { return new URL(a.mint).host; } catch (e) { return a.mint; } })();
+                const what = a.primary
+                    ? `Preparing payments with your mint (${host}): checking it for earlier payments to this `
+                      + 'store\'s recovery phrase, so nothing is missed or reused. New payments start once '
+                      + 'that finishes, usually within minutes. Payments already made are not affected.'
+                    : `Preparing the backup mint (${host}); it is used once the same check finishes.`;
+                items.push(a.error
+                    ? what + ` The last attempt failed (${a.error}); it is retried automatically.`
+                    : what);
+            });
             if (diag.failedWebhookDeliveries > 0) {
                 items.push(`${diag.failedWebhookDeliveries} webhook ${diag.failedWebhookDeliveries === 1 ? 'delivery has' : 'deliveries have'} not been acknowledged by the shop.`);
             }
@@ -6495,7 +6562,7 @@ $isWp = Urls::isWordPress();
                 const result = await response.json();
 
                 if (response.ok) {
-                    showToast('Backup mint added!', 'success');
+                    showToast(result.warning ? 'Backup mint added. ' + result.warning : 'Backup mint added!', 'success');
                     showStoreDetails(storeId, storeName);
                 } else {
                     showToast(result.error || 'Failed to add backup mint', 'error');
@@ -6796,7 +6863,7 @@ $isWp = Urls::isWordPress();
                 }
                 if (result.warning) {
                     // Saved, but not usable yet — that is not a success message.
-                    alert('Mint changed, but not ready\n\n' + result.warning);
+                    alert('Mint changed\n\n' + result.warning);
                 } else {
                     showToast('Mint updated. Any old balance is recoverable below.', 'success');
                 }

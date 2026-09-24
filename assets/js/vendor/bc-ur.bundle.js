@@ -1823,82 +1823,1200 @@
     }
   });
 
-  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/errors.js
-  var __extends, InvalidSchemeError, InvalidPathLengthError, InvalidTypeError, InvalidSequenceComponentError, InvalidChecksumError;
-  var init_errors = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/errors.js"() {
+  // node_modules/jsbi/dist/jsbi-umd.js
+  var require_jsbi_umd = __commonJS({
+    "node_modules/jsbi/dist/jsbi-umd.js"(exports, module) {
       init_buffer_shim();
-      __extends = /* @__PURE__ */ (function() {
-        var extendStatics = function(d, b) {
-          extendStatics = Object.setPrototypeOf || { __proto__: [] } instanceof Array && function(d2, b2) {
-            d2.__proto__ = b2;
-          } || function(d2, b2) {
-            for (var p in b2) if (Object.prototype.hasOwnProperty.call(b2, p)) d2[p] = b2[p];
-          };
-          return extendStatics(d, b);
-        };
-        return function(d, b) {
-          extendStatics(d, b);
-          function __() {
-            this.constructor = d;
+      (function(e, t) {
+        "object" == typeof exports && "undefined" != typeof module ? module.exports = t() : "function" == typeof define && define.amd ? define(t) : (e = e || self, e.JSBI = t());
+      })(exports, function() {
+        "use strict";
+        var e = Math.imul, t = Math.clz32;
+        function i(e2) {
+          "@babel/helpers - typeof";
+          return i = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function(e3) {
+            return typeof e3;
+          } : function(e3) {
+            return e3 && "function" == typeof Symbol && e3.constructor === Symbol && e3 !== Symbol.prototype ? "symbol" : typeof e3;
+          }, i(e2);
+        }
+        function _(e2, t2) {
+          if (!(e2 instanceof t2)) throw new TypeError("Cannot call a class as a function");
+        }
+        function n(e2, t2) {
+          for (var _2, n2 = 0; n2 < t2.length; n2++) _2 = t2[n2], _2.enumerable = _2.enumerable || false, _2.configurable = true, "value" in _2 && (_2.writable = true), Object.defineProperty(e2, _2.key, _2);
+        }
+        function l(e2, t2, i2) {
+          return t2 && n(e2.prototype, t2), i2 && n(e2, i2), e2;
+        }
+        function g(e2, t2) {
+          if ("function" != typeof t2 && null !== t2) throw new TypeError("Super expression must either be null or a function");
+          e2.prototype = Object.create(t2 && t2.prototype, { constructor: { value: e2, writable: true, configurable: true } }), t2 && u(e2, t2);
+        }
+        function a(e2) {
+          return a = Object.setPrototypeOf ? Object.getPrototypeOf : function(e3) {
+            return e3.__proto__ || Object.getPrototypeOf(e3);
+          }, a(e2);
+        }
+        function u(e2, t2) {
+          return u = Object.setPrototypeOf || function(e3, t3) {
+            return e3.__proto__ = t3, e3;
+          }, u(e2, t2);
+        }
+        function s() {
+          if ("undefined" == typeof Reflect || !Reflect.construct) return false;
+          if (Reflect.construct.sham) return false;
+          if ("function" == typeof Proxy) return true;
+          try {
+            return Boolean.prototype.valueOf.call(Reflect.construct(Boolean, [], function() {
+            })), true;
+          } catch (t2) {
+            return false;
           }
-          d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
-        };
-      })();
-      InvalidSchemeError = /** @class */
-      (function(_super) {
-        __extends(InvalidSchemeError2, _super);
-        function InvalidSchemeError2() {
-          var _this = _super.call(this, "Invalid Scheme") || this;
-          _this.name = "InvalidSchemeError";
-          return _this;
         }
-        return InvalidSchemeError2;
-      })(Error);
-      InvalidPathLengthError = /** @class */
-      (function(_super) {
-        __extends(InvalidPathLengthError2, _super);
-        function InvalidPathLengthError2() {
-          var _this = _super.call(this, "Invalid Path") || this;
-          _this.name = "InvalidPathLengthError";
-          return _this;
+        function r() {
+          return r = s() ? Reflect.construct : function(e2, t2, i2) {
+            var _2 = [null];
+            _2.push.apply(_2, t2);
+            var n2 = Function.bind.apply(e2, _2), l2 = new n2();
+            return i2 && u(l2, i2.prototype), l2;
+          }, r.apply(null, arguments);
         }
-        return InvalidPathLengthError2;
-      })(Error);
-      InvalidTypeError = /** @class */
-      (function(_super) {
-        __extends(InvalidTypeError2, _super);
-        function InvalidTypeError2() {
-          var _this = _super.call(this, "Invalid Type") || this;
-          _this.name = "InvalidTypeError";
-          return _this;
+        function d(e2) {
+          return -1 !== Function.toString.call(e2).indexOf("[native code]");
         }
-        return InvalidTypeError2;
-      })(Error);
-      InvalidSequenceComponentError = /** @class */
-      (function(_super) {
-        __extends(InvalidSequenceComponentError2, _super);
-        function InvalidSequenceComponentError2() {
-          var _this = _super.call(this, "Invalid Sequence Component") || this;
-          _this.name = "InvalidSequenceComponentError";
-          return _this;
+        function h(e2) {
+          var t2 = "function" == typeof Map ? /* @__PURE__ */ new Map() : void 0;
+          return h = function(e3) {
+            function i2() {
+              return r(e3, arguments, a(this).constructor);
+            }
+            if (null === e3 || !d(e3)) return e3;
+            if ("function" != typeof e3) throw new TypeError("Super expression must either be null or a function");
+            if ("undefined" != typeof t2) {
+              if (t2.has(e3)) return t2.get(e3);
+              t2.set(e3, i2);
+            }
+            return i2.prototype = Object.create(e3.prototype, { constructor: { value: i2, enumerable: false, writable: true, configurable: true } }), u(i2, e3);
+          }, h(e2);
         }
-        return InvalidSequenceComponentError2;
-      })(Error);
-      InvalidChecksumError = /** @class */
-      (function(_super) {
-        __extends(InvalidChecksumError2, _super);
-        function InvalidChecksumError2() {
-          var _this = _super.call(this, "Invalid Checksum") || this;
-          _this.name = "InvalidChecksumError";
-          return _this;
+        function b(e2) {
+          if (void 0 === e2) throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
+          return e2;
         }
-        return InvalidChecksumError2;
-      })(Error);
+        function m(e2, t2) {
+          return t2 && ("object" == typeof t2 || "function" == typeof t2) ? t2 : b(e2);
+        }
+        function c(e2) {
+          var t2 = s();
+          return function() {
+            var i2, _2 = a(e2);
+            if (t2) {
+              var n2 = a(this).constructor;
+              i2 = Reflect.construct(_2, arguments, n2);
+            } else i2 = _2.apply(this, arguments);
+            return m(this, i2);
+          };
+        }
+        function v(e2, t2) {
+          if (e2) {
+            if ("string" == typeof e2) return f(e2, t2);
+            var i2 = Object.prototype.toString.call(e2).slice(8, -1);
+            return "Object" === i2 && e2.constructor && (i2 = e2.constructor.name), "Map" === i2 || "Set" === i2 ? Array.from(e2) : "Arguments" === i2 || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(i2) ? f(e2, t2) : void 0;
+          }
+        }
+        function f(e2, t2) {
+          (null == t2 || t2 > e2.length) && (t2 = e2.length);
+          for (var _2 = 0, n2 = Array(t2); _2 < t2; _2++) n2[_2] = e2[_2];
+          return n2;
+        }
+        function y(e2, t2) {
+          var _2 = "undefined" != typeof Symbol && e2[Symbol.iterator] || e2["@@iterator"];
+          if (!_2) {
+            if (Array.isArray(e2) || (_2 = v(e2)) || t2 && e2 && "number" == typeof e2.length) {
+              _2 && (e2 = _2);
+              var n2 = 0, l2 = function() {
+              };
+              return { s: l2, n: function() {
+                return n2 >= e2.length ? { done: true } : { done: false, value: e2[n2++] };
+              }, e: function(t3) {
+                throw t3;
+              }, f: l2 };
+            }
+            throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
+          }
+          var g2, a2 = true, u2 = false;
+          return { s: function() {
+            _2 = _2.call(e2);
+          }, n: function() {
+            var e3 = _2.next();
+            return a2 = e3.done, e3;
+          }, e: function(t3) {
+            u2 = true, g2 = t3;
+          }, f: function() {
+            try {
+              a2 || null == _2.return || _2.return();
+            } finally {
+              if (u2) throw g2;
+            }
+          } };
+        }
+        var k = (function(e2) {
+          var t2 = Math.abs, n2 = Math.max;
+          function o(e3, t3) {
+            var i2;
+            if (_(this, o), e3 > o.__kMaxLength) throw new RangeError("Maximum BigInt size exceeded");
+            return i2 = a2.call(this, e3), i2.sign = t3, i2;
+          }
+          g(o, e2);
+          var a2 = c(o);
+          return l(o, [{ key: "toDebugString", value: function() {
+            var e3, t3 = ["BigInt["], i2 = y(this);
+            try {
+              for (i2.s(); !(e3 = i2.n()).done; ) {
+                var _2 = e3.value;
+                t3.push((_2 ? (_2 >>> 0).toString(16) : _2) + ", ");
+              }
+            } catch (e4) {
+              i2.e(e4);
+            } finally {
+              i2.f();
+            }
+            return t3.push("]"), t3.join("");
+          } }, { key: "toString", value: function() {
+            var e3 = 0 < arguments.length && void 0 !== arguments[0] ? arguments[0] : 10;
+            if (2 > e3 || 36 < e3) throw new RangeError("toString() radix argument must be between 2 and 36");
+            return 0 === this.length ? "0" : 0 == (e3 & e3 - 1) ? o.__toStringBasePowerOfTwo(this, e3) : o.__toStringGeneric(this, e3, false);
+          } }, { key: "__copy", value: function() {
+            for (var e3 = new o(this.length, this.sign), t3 = 0; t3 < this.length; t3++) e3[t3] = this[t3];
+            return e3;
+          } }, { key: "__trim", value: function() {
+            for (var e3 = this.length, t3 = this[e3 - 1]; 0 === t3; ) e3--, t3 = this[e3 - 1], this.pop();
+            return 0 === e3 && (this.sign = false), this;
+          } }, { key: "__initializeDigits", value: function() {
+            for (var e3 = 0; e3 < this.length; e3++) this[e3] = 0;
+          } }, { key: "__clzmsd", value: function() {
+            return o.__clz32(this[this.length - 1]);
+          } }, { key: "__inplaceMultiplyAdd", value: function(e3, t3, _2) {
+            _2 > this.length && (_2 = this.length);
+            for (var n3 = 65535 & e3, l2 = e3 >>> 16, g2 = 0, a3 = 65535 & t3, u2 = t3 >>> 16, s2 = 0; s2 < _2; s2++) {
+              var r2 = this.__digit(s2), d2 = 65535 & r2, h2 = r2 >>> 16, b2 = o.__imul(d2, n3), m2 = o.__imul(d2, l2), c2 = o.__imul(h2, n3), v2 = o.__imul(h2, l2), f2 = a3 + (65535 & b2), y2 = u2 + g2 + (f2 >>> 16) + (b2 >>> 16) + (65535 & m2) + (65535 & c2);
+              a3 = (m2 >>> 16) + (c2 >>> 16) + (65535 & v2) + (y2 >>> 16), g2 = a3 >>> 16, a3 &= 65535, u2 = v2 >>> 16;
+              this.__setDigit(s2, 65535 & f2 | y2 << 16);
+            }
+            if (0 !== g2 || 0 !== a3 || 0 !== u2) throw new Error("implementation bug");
+          } }, { key: "__inplaceAdd", value: function(e3, t3, _2) {
+            for (var n3, l2 = 0, g2 = 0; g2 < _2; g2++) n3 = this.__halfDigit(t3 + g2) + e3.__halfDigit(g2) + l2, l2 = n3 >>> 16, this.__setHalfDigit(t3 + g2, n3);
+            return l2;
+          } }, { key: "__inplaceSub", value: function(e3, t3, _2) {
+            var n3 = 0;
+            if (1 & t3) {
+              t3 >>= 1;
+              for (var l2 = this.__digit(t3), g2 = 65535 & l2, o2 = 0; o2 < _2 - 1 >>> 1; o2++) {
+                var a3 = e3.__digit(o2), u2 = (l2 >>> 16) - (65535 & a3) - n3;
+                n3 = 1 & u2 >>> 16, this.__setDigit(t3 + o2, u2 << 16 | 65535 & g2), l2 = this.__digit(t3 + o2 + 1), g2 = (65535 & l2) - (a3 >>> 16) - n3, n3 = 1 & g2 >>> 16;
+              }
+              var s2 = e3.__digit(o2), r2 = (l2 >>> 16) - (65535 & s2) - n3;
+              n3 = 1 & r2 >>> 16, this.__setDigit(t3 + o2, r2 << 16 | 65535 & g2);
+              if (t3 + o2 + 1 >= this.length) throw new RangeError("out of bounds");
+              0 == (1 & _2) && (l2 = this.__digit(t3 + o2 + 1), g2 = (65535 & l2) - (s2 >>> 16) - n3, n3 = 1 & g2 >>> 16, this.__setDigit(t3 + e3.length, 4294901760 & l2 | 65535 & g2));
+            } else {
+              t3 >>= 1;
+              for (var d2 = 0; d2 < e3.length - 1; d2++) {
+                var h2 = this.__digit(t3 + d2), b2 = e3.__digit(d2), m2 = (65535 & h2) - (65535 & b2) - n3;
+                n3 = 1 & m2 >>> 16;
+                var c2 = (h2 >>> 16) - (b2 >>> 16) - n3;
+                n3 = 1 & c2 >>> 16, this.__setDigit(t3 + d2, c2 << 16 | 65535 & m2);
+              }
+              var v2 = this.__digit(t3 + d2), f2 = e3.__digit(d2), y2 = (65535 & v2) - (65535 & f2) - n3;
+              n3 = 1 & y2 >>> 16;
+              var k2 = 0;
+              0 == (1 & _2) && (k2 = (v2 >>> 16) - (f2 >>> 16) - n3, n3 = 1 & k2 >>> 16), this.__setDigit(t3 + d2, k2 << 16 | 65535 & y2);
+            }
+            return n3;
+          } }, { key: "__inplaceRightShift", value: function(e3) {
+            if (0 !== e3) {
+              for (var t3, _2 = this.__digit(0) >>> e3, n3 = this.length - 1, l2 = 0; l2 < n3; l2++) t3 = this.__digit(l2 + 1), this.__setDigit(l2, t3 << 32 - e3 | _2), _2 = t3 >>> e3;
+              this.__setDigit(n3, _2);
+            }
+          } }, { key: "__digit", value: function(e3) {
+            return this[e3];
+          } }, { key: "__unsignedDigit", value: function(e3) {
+            return this[e3] >>> 0;
+          } }, { key: "__setDigit", value: function(e3, t3) {
+            this[e3] = 0 | t3;
+          } }, { key: "__setDigitGrow", value: function(e3, t3) {
+            this[e3] = 0 | t3;
+          } }, { key: "__halfDigitLength", value: function() {
+            var e3 = this.length;
+            return 65535 >= this.__unsignedDigit(e3 - 1) ? 2 * e3 - 1 : 2 * e3;
+          } }, { key: "__halfDigit", value: function(e3) {
+            return 65535 & this[e3 >>> 1] >>> ((1 & e3) << 4);
+          } }, { key: "__setHalfDigit", value: function(e3, t3) {
+            var i2 = e3 >>> 1, _2 = this.__digit(i2), n3 = 1 & e3 ? 65535 & _2 | t3 << 16 : 4294901760 & _2 | 65535 & t3;
+            this.__setDigit(i2, n3);
+          } }], [{ key: "BigInt", value: function(e3) {
+            var t3 = Math.floor, _2 = Number.isFinite;
+            if ("number" == typeof e3) {
+              if (0 === e3) return o.__zero();
+              if ((0 | e3) === e3) return 0 > e3 ? o.__oneDigit(-e3, true) : o.__oneDigit(e3, false);
+              if (!_2(e3) || t3(e3) !== e3) throw new RangeError("The number " + e3 + " cannot be converted to BigInt because it is not an integer");
+              return o.__fromDouble(e3);
+            }
+            if ("string" == typeof e3) {
+              var n3 = o.__fromString(e3);
+              if (null === n3) throw new SyntaxError("Cannot convert " + e3 + " to a BigInt");
+              return n3;
+            }
+            if ("boolean" == typeof e3) return true === e3 ? o.__oneDigit(1, false) : o.__zero();
+            if ("object" === i(e3)) {
+              if (e3.constructor === o) return e3;
+              var l2 = o.__toPrimitive(e3);
+              return o.BigInt(l2);
+            }
+            throw new TypeError("Cannot convert " + e3 + " to a BigInt");
+          } }, { key: "toNumber", value: function(e3) {
+            var t3 = e3.length;
+            if (0 === t3) return 0;
+            if (1 === t3) {
+              var i2 = e3.__unsignedDigit(0);
+              return e3.sign ? -i2 : i2;
+            }
+            var _2 = e3.__digit(t3 - 1), n3 = o.__clz32(_2), l2 = 32 * t3 - n3;
+            if (1024 < l2) return e3.sign ? -Infinity : 1 / 0;
+            var g2 = l2 - 1, a3 = _2, u2 = t3 - 1, s2 = n3 + 1, r2 = 32 === s2 ? 0 : a3 << s2;
+            r2 >>>= 12;
+            var d2 = s2 - 12, h2 = 12 <= s2 ? 0 : a3 << 20 + s2, b2 = 20 + s2;
+            0 < d2 && 0 < u2 && (u2--, a3 = e3.__digit(u2), r2 |= a3 >>> 32 - d2, h2 = a3 << d2, b2 = d2), 0 < b2 && 0 < u2 && (u2--, a3 = e3.__digit(u2), h2 |= a3 >>> 32 - b2, b2 -= 32);
+            var m2 = o.__decideRounding(e3, b2, u2, a3);
+            if ((1 === m2 || 0 === m2 && 1 == (1 & h2)) && (h2 = h2 + 1 >>> 0, 0 === h2 && (r2++, 0 != r2 >>> 20 && (r2 = 0, g2++, 1023 < g2)))) return e3.sign ? -Infinity : 1 / 0;
+            var c2 = e3.sign ? -2147483648 : 0;
+            return g2 = g2 + 1023 << 20, o.__kBitConversionInts[1] = c2 | g2 | r2, o.__kBitConversionInts[0] = h2, o.__kBitConversionDouble[0];
+          } }, { key: "unaryMinus", value: function(e3) {
+            if (0 === e3.length) return e3;
+            var t3 = e3.__copy();
+            return t3.sign = !e3.sign, t3;
+          } }, { key: "bitwiseNot", value: function(e3) {
+            return e3.sign ? o.__absoluteSubOne(e3).__trim() : o.__absoluteAddOne(e3, true);
+          } }, { key: "exponentiate", value: function(e3, t3) {
+            if (t3.sign) throw new RangeError("Exponent must be positive");
+            if (0 === t3.length) return o.__oneDigit(1, false);
+            if (0 === e3.length) return e3;
+            if (1 === e3.length && 1 === e3.__digit(0)) return e3.sign && 0 == (1 & t3.__digit(0)) ? o.unaryMinus(e3) : e3;
+            if (1 < t3.length) throw new RangeError("BigInt too big");
+            var i2 = t3.__unsignedDigit(0);
+            if (1 === i2) return e3;
+            if (i2 >= o.__kMaxLengthBits) throw new RangeError("BigInt too big");
+            if (1 === e3.length && 2 === e3.__digit(0)) {
+              var _2 = 1 + (i2 >>> 5), n3 = e3.sign && 0 != (1 & i2), l2 = new o(_2, n3);
+              l2.__initializeDigits();
+              var g2 = 1 << (31 & i2);
+              return l2.__setDigit(_2 - 1, g2), l2;
+            }
+            var a3 = null, u2 = e3;
+            for (0 != (1 & i2) && (a3 = e3), i2 >>= 1; 0 !== i2; i2 >>= 1) u2 = o.multiply(u2, u2), 0 != (1 & i2) && (null === a3 ? a3 = u2 : a3 = o.multiply(a3, u2));
+            return a3;
+          } }, { key: "multiply", value: function(e3, t3) {
+            if (0 === e3.length) return e3;
+            if (0 === t3.length) return t3;
+            var _2 = e3.length + t3.length;
+            32 <= e3.__clzmsd() + t3.__clzmsd() && _2--;
+            var n3 = new o(_2, e3.sign !== t3.sign);
+            n3.__initializeDigits();
+            for (var l2 = 0; l2 < e3.length; l2++) o.__multiplyAccumulate(t3, e3.__digit(l2), n3, l2);
+            return n3.__trim();
+          } }, { key: "divide", value: function(e3, t3) {
+            if (0 === t3.length) throw new RangeError("Division by zero");
+            if (0 > o.__absoluteCompare(e3, t3)) return o.__zero();
+            var i2, _2 = e3.sign !== t3.sign, n3 = t3.__unsignedDigit(0);
+            if (1 === t3.length && 65535 >= n3) {
+              if (1 === n3) return _2 === e3.sign ? e3 : o.unaryMinus(e3);
+              i2 = o.__absoluteDivSmall(e3, n3, null);
+            } else i2 = o.__absoluteDivLarge(e3, t3, true, false);
+            return i2.sign = _2, i2.__trim();
+          } }, { key: "remainder", value: function e3(t3, i2) {
+            if (0 === i2.length) throw new RangeError("Division by zero");
+            if (0 > o.__absoluteCompare(t3, i2)) return t3;
+            var _2 = i2.__unsignedDigit(0);
+            if (1 === i2.length && 65535 >= _2) {
+              if (1 === _2) return o.__zero();
+              var n3 = o.__absoluteModSmall(t3, _2);
+              return 0 === n3 ? o.__zero() : o.__oneDigit(n3, t3.sign);
+            }
+            var e4 = o.__absoluteDivLarge(t3, i2, false, true);
+            return e4.sign = t3.sign, e4.__trim();
+          } }, { key: "add", value: function(e3, t3) {
+            var i2 = e3.sign;
+            return i2 === t3.sign ? o.__absoluteAdd(e3, t3, i2) : 0 <= o.__absoluteCompare(e3, t3) ? o.__absoluteSub(e3, t3, i2) : o.__absoluteSub(t3, e3, !i2);
+          } }, { key: "subtract", value: function(e3, t3) {
+            var i2 = e3.sign;
+            return i2 === t3.sign ? 0 <= o.__absoluteCompare(e3, t3) ? o.__absoluteSub(e3, t3, i2) : o.__absoluteSub(t3, e3, !i2) : o.__absoluteAdd(e3, t3, i2);
+          } }, { key: "leftShift", value: function(e3, t3) {
+            return 0 === t3.length || 0 === e3.length ? e3 : t3.sign ? o.__rightShiftByAbsolute(e3, t3) : o.__leftShiftByAbsolute(e3, t3);
+          } }, { key: "signedRightShift", value: function(e3, t3) {
+            return 0 === t3.length || 0 === e3.length ? e3 : t3.sign ? o.__leftShiftByAbsolute(e3, t3) : o.__rightShiftByAbsolute(e3, t3);
+          } }, { key: "unsignedRightShift", value: function() {
+            throw new TypeError("BigInts have no unsigned right shift; use >> instead");
+          } }, { key: "lessThan", value: function(e3, t3) {
+            return 0 > o.__compareToBigInt(e3, t3);
+          } }, { key: "lessThanOrEqual", value: function(e3, t3) {
+            return 0 >= o.__compareToBigInt(e3, t3);
+          } }, { key: "greaterThan", value: function(e3, t3) {
+            return 0 < o.__compareToBigInt(e3, t3);
+          } }, { key: "greaterThanOrEqual", value: function(e3, t3) {
+            return 0 <= o.__compareToBigInt(e3, t3);
+          } }, { key: "equal", value: function(e3, t3) {
+            if (e3.sign !== t3.sign) return false;
+            if (e3.length !== t3.length) return false;
+            for (var _2 = 0; _2 < e3.length; _2++) if (e3.__digit(_2) !== t3.__digit(_2)) return false;
+            return true;
+          } }, { key: "notEqual", value: function(e3, t3) {
+            return !o.equal(e3, t3);
+          } }, { key: "bitwiseAnd", value: function(e3, t3) {
+            if (!e3.sign && !t3.sign) return o.__absoluteAnd(e3, t3).__trim();
+            if (e3.sign && t3.sign) {
+              var i2 = n2(e3.length, t3.length) + 1, _2 = o.__absoluteSubOne(e3, i2), l2 = o.__absoluteSubOne(t3);
+              return _2 = o.__absoluteOr(_2, l2, _2), o.__absoluteAddOne(_2, true, _2).__trim();
+            }
+            if (e3.sign) {
+              var g2 = [t3, e3];
+              e3 = g2[0], t3 = g2[1];
+            }
+            return o.__absoluteAndNot(e3, o.__absoluteSubOne(t3)).__trim();
+          } }, { key: "bitwiseXor", value: function(e3, t3) {
+            if (!e3.sign && !t3.sign) return o.__absoluteXor(e3, t3).__trim();
+            if (e3.sign && t3.sign) {
+              var i2 = n2(e3.length, t3.length), _2 = o.__absoluteSubOne(e3, i2), l2 = o.__absoluteSubOne(t3);
+              return o.__absoluteXor(_2, l2, _2).__trim();
+            }
+            var g2 = n2(e3.length, t3.length) + 1;
+            if (e3.sign) {
+              var a3 = [t3, e3];
+              e3 = a3[0], t3 = a3[1];
+            }
+            var u2 = o.__absoluteSubOne(t3, g2);
+            return u2 = o.__absoluteXor(u2, e3, u2), o.__absoluteAddOne(u2, true, u2).__trim();
+          } }, { key: "bitwiseOr", value: function(e3, t3) {
+            var i2 = n2(e3.length, t3.length);
+            if (!e3.sign && !t3.sign) return o.__absoluteOr(e3, t3).__trim();
+            if (e3.sign && t3.sign) {
+              var _2 = o.__absoluteSubOne(e3, i2), l2 = o.__absoluteSubOne(t3);
+              return _2 = o.__absoluteAnd(_2, l2, _2), o.__absoluteAddOne(_2, true, _2).__trim();
+            }
+            if (e3.sign) {
+              var g2 = [t3, e3];
+              e3 = g2[0], t3 = g2[1];
+            }
+            var a3 = o.__absoluteSubOne(t3, i2);
+            return a3 = o.__absoluteAndNot(a3, e3, a3), o.__absoluteAddOne(a3, true, a3).__trim();
+          } }, { key: "asIntN", value: function(e3, t3) {
+            if (0 === t3.length) return t3;
+            if (0 === e3) return o.__zero();
+            if (e3 >= o.__kMaxLengthBits) return t3;
+            var _2 = e3 + 31 >>> 5;
+            if (t3.length < _2) return t3;
+            var n3 = t3.__unsignedDigit(_2 - 1), l2 = 1 << (31 & e3 - 1);
+            if (t3.length === _2 && n3 < l2) return t3;
+            if (!((n3 & l2) === l2)) return o.__truncateToNBits(e3, t3);
+            if (!t3.sign) return o.__truncateAndSubFromPowerOfTwo(e3, t3, true);
+            if (0 == (n3 & l2 - 1)) {
+              for (var g2 = _2 - 2; 0 <= g2; g2--) if (0 !== t3.__digit(g2)) return o.__truncateAndSubFromPowerOfTwo(e3, t3, false);
+              return t3.length === _2 && n3 === l2 ? t3 : o.__truncateToNBits(e3, t3);
+            }
+            return o.__truncateAndSubFromPowerOfTwo(e3, t3, false);
+          } }, { key: "asUintN", value: function(e3, t3) {
+            if (0 === t3.length) return t3;
+            if (0 === e3) return o.__zero();
+            if (t3.sign) {
+              if (e3 > o.__kMaxLengthBits) throw new RangeError("BigInt too big");
+              return o.__truncateAndSubFromPowerOfTwo(e3, t3, false);
+            }
+            if (e3 >= o.__kMaxLengthBits) return t3;
+            var i2 = e3 + 31 >>> 5;
+            if (t3.length < i2) return t3;
+            var _2 = 31 & e3;
+            if (t3.length == i2) {
+              if (0 === _2) return t3;
+              var n3 = t3.__digit(i2 - 1);
+              if (0 == n3 >>> _2) return t3;
+            }
+            return o.__truncateToNBits(e3, t3);
+          } }, { key: "ADD", value: function(e3, t3) {
+            if (e3 = o.__toPrimitive(e3), t3 = o.__toPrimitive(t3), "string" == typeof e3) return "string" != typeof t3 && (t3 = t3.toString()), e3 + t3;
+            if ("string" == typeof t3) return e3.toString() + t3;
+            if (e3 = o.__toNumeric(e3), t3 = o.__toNumeric(t3), o.__isBigInt(e3) && o.__isBigInt(t3)) return o.add(e3, t3);
+            if ("number" == typeof e3 && "number" == typeof t3) return e3 + t3;
+            throw new TypeError("Cannot mix BigInt and other types, use explicit conversions");
+          } }, { key: "LT", value: function(e3, t3) {
+            return o.__compare(e3, t3, 0);
+          } }, { key: "LE", value: function(e3, t3) {
+            return o.__compare(e3, t3, 1);
+          } }, { key: "GT", value: function(e3, t3) {
+            return o.__compare(e3, t3, 2);
+          } }, { key: "GE", value: function(e3, t3) {
+            return o.__compare(e3, t3, 3);
+          } }, { key: "EQ", value: function(e3, t3) {
+            for (; ; ) {
+              if (o.__isBigInt(e3)) return o.__isBigInt(t3) ? o.equal(e3, t3) : o.EQ(t3, e3);
+              if ("number" == typeof e3) {
+                if (o.__isBigInt(t3)) return o.__equalToNumber(t3, e3);
+                if ("object" !== i(t3)) return e3 == t3;
+                t3 = o.__toPrimitive(t3);
+              } else if ("string" == typeof e3) {
+                if (o.__isBigInt(t3)) return e3 = o.__fromString(e3), null !== e3 && o.equal(e3, t3);
+                if ("object" !== i(t3)) return e3 == t3;
+                t3 = o.__toPrimitive(t3);
+              } else if ("boolean" == typeof e3) {
+                if (o.__isBigInt(t3)) return o.__equalToNumber(t3, +e3);
+                if ("object" !== i(t3)) return e3 == t3;
+                t3 = o.__toPrimitive(t3);
+              } else if ("symbol" === i(e3)) {
+                if (o.__isBigInt(t3)) return false;
+                if ("object" !== i(t3)) return e3 == t3;
+                t3 = o.__toPrimitive(t3);
+              } else if ("object" === i(e3)) {
+                if ("object" === i(t3) && t3.constructor !== o) return e3 == t3;
+                e3 = o.__toPrimitive(e3);
+              } else return e3 == t3;
+            }
+          } }, { key: "NE", value: function(e3, t3) {
+            return !o.EQ(e3, t3);
+          } }, { key: "__zero", value: function() {
+            return new o(0, false);
+          } }, { key: "__oneDigit", value: function(e3, t3) {
+            var i2 = new o(1, t3);
+            return i2.__setDigit(0, e3), i2;
+          } }, { key: "__decideRounding", value: function(e3, t3, i2, _2) {
+            if (0 < t3) return -1;
+            var n3;
+            if (0 > t3) n3 = -t3 - 1;
+            else {
+              if (0 === i2) return -1;
+              i2--, _2 = e3.__digit(i2), n3 = 31;
+            }
+            var l2 = 1 << n3;
+            if (0 == (_2 & l2)) return -1;
+            if (l2 -= 1, 0 != (_2 & l2)) return 1;
+            for (; 0 < i2; ) if (i2--, 0 !== e3.__digit(i2)) return 1;
+            return 0;
+          } }, { key: "__fromDouble", value: function(e3) {
+            o.__kBitConversionDouble[0] = e3;
+            var t3, i2 = 2047 & o.__kBitConversionInts[1] >>> 20, _2 = i2 - 1023, n3 = (_2 >>> 5) + 1, l2 = new o(n3, 0 > e3), g2 = 1048575 & o.__kBitConversionInts[1] | 1048576, a3 = o.__kBitConversionInts[0], u2 = 20, s2 = 31 & _2, r2 = 0;
+            if (s2 < u2) {
+              var d2 = u2 - s2;
+              r2 = d2 + 32, t3 = g2 >>> d2, g2 = g2 << 32 - d2 | a3 >>> d2, a3 <<= 32 - d2;
+            } else if (s2 === u2) r2 = 32, t3 = g2, g2 = a3;
+            else {
+              var h2 = s2 - u2;
+              r2 = 32 - h2, t3 = g2 << h2 | a3 >>> 32 - h2, g2 = a3 << h2;
+            }
+            l2.__setDigit(n3 - 1, t3);
+            for (var b2 = n3 - 2; 0 <= b2; b2--) 0 < r2 ? (r2 -= 32, t3 = g2, g2 = a3) : t3 = 0, l2.__setDigit(b2, t3);
+            return l2.__trim();
+          } }, { key: "__isWhitespace", value: function(e3) {
+            return !!(13 >= e3 && 9 <= e3) || (159 >= e3 ? 32 == e3 : 131071 >= e3 ? 160 == e3 || 5760 == e3 : 196607 >= e3 ? (e3 &= 131071, 10 >= e3 || 40 == e3 || 41 == e3 || 47 == e3 || 95 == e3 || 4096 == e3) : 65279 == e3);
+          } }, { key: "__fromString", value: function(e3) {
+            var t3 = 1 < arguments.length && void 0 !== arguments[1] ? arguments[1] : 0, i2 = 0, _2 = e3.length, n3 = 0;
+            if (n3 === _2) return o.__zero();
+            for (var l2 = e3.charCodeAt(n3); o.__isWhitespace(l2); ) {
+              if (++n3 === _2) return o.__zero();
+              l2 = e3.charCodeAt(n3);
+            }
+            if (43 === l2) {
+              if (++n3 === _2) return null;
+              l2 = e3.charCodeAt(n3), i2 = 1;
+            } else if (45 === l2) {
+              if (++n3 === _2) return null;
+              l2 = e3.charCodeAt(n3), i2 = -1;
+            }
+            if (0 === t3) {
+              if (t3 = 10, 48 === l2) {
+                if (++n3 === _2) return o.__zero();
+                if (l2 = e3.charCodeAt(n3), 88 === l2 || 120 === l2) {
+                  if (t3 = 16, ++n3 === _2) return null;
+                  l2 = e3.charCodeAt(n3);
+                } else if (79 === l2 || 111 === l2) {
+                  if (t3 = 8, ++n3 === _2) return null;
+                  l2 = e3.charCodeAt(n3);
+                } else if (66 === l2 || 98 === l2) {
+                  if (t3 = 2, ++n3 === _2) return null;
+                  l2 = e3.charCodeAt(n3);
+                }
+              }
+            } else if (16 === t3 && 48 === l2) {
+              if (++n3 === _2) return o.__zero();
+              if (l2 = e3.charCodeAt(n3), 88 === l2 || 120 === l2) {
+                if (++n3 === _2) return null;
+                l2 = e3.charCodeAt(n3);
+              }
+            }
+            for (; 48 === l2; ) {
+              if (++n3 === _2) return o.__zero();
+              l2 = e3.charCodeAt(n3);
+            }
+            var g2 = _2 - n3, a3 = o.__kMaxBitsPerChar[t3], u2 = o.__kBitsPerCharTableMultiplier - 1;
+            if (g2 > 1073741824 / a3) return null;
+            var s2 = a3 * g2 + u2 >>> o.__kBitsPerCharTableShift, r2 = new o(s2 + 31 >>> 5, false), h2 = 10 > t3 ? t3 : 10, b2 = 10 < t3 ? t3 - 10 : 0;
+            if (0 == (t3 & t3 - 1)) {
+              a3 >>= o.__kBitsPerCharTableShift;
+              var c2 = [], v2 = [], f2 = false;
+              do {
+                for (var y2, k2 = 0, D = 0; ; ) {
+                  if (y2 = void 0, l2 - 48 >>> 0 < h2) y2 = l2 - 48;
+                  else if ((32 | l2) - 97 >>> 0 < b2) y2 = (32 | l2) - 87;
+                  else {
+                    f2 = true;
+                    break;
+                  }
+                  if (D += a3, k2 = k2 << a3 | y2, ++n3 === _2) {
+                    f2 = true;
+                    break;
+                  }
+                  if (l2 = e3.charCodeAt(n3), 32 < D + a3) break;
+                }
+                c2.push(k2), v2.push(D);
+              } while (!f2);
+              o.__fillFromParts(r2, c2, v2);
+            } else {
+              r2.__initializeDigits();
+              var p = false, B = 0;
+              do {
+                for (var S, C = 0, A = 1; ; ) {
+                  if (S = void 0, l2 - 48 >>> 0 < h2) S = l2 - 48;
+                  else if ((32 | l2) - 97 >>> 0 < b2) S = (32 | l2) - 87;
+                  else {
+                    p = true;
+                    break;
+                  }
+                  var T = A * t3;
+                  if (4294967295 < T) break;
+                  if (A = T, C = C * t3 + S, B++, ++n3 === _2) {
+                    p = true;
+                    break;
+                  }
+                  l2 = e3.charCodeAt(n3);
+                }
+                u2 = 32 * o.__kBitsPerCharTableMultiplier - 1;
+                var m2 = a3 * B + u2 >>> o.__kBitsPerCharTableShift + 5;
+                r2.__inplaceMultiplyAdd(A, C, m2);
+              } while (!p);
+            }
+            if (n3 !== _2) {
+              if (!o.__isWhitespace(l2)) return null;
+              for (n3++; n3 < _2; n3++) if (l2 = e3.charCodeAt(n3), !o.__isWhitespace(l2)) return null;
+            }
+            return 0 !== i2 && 10 !== t3 ? null : (r2.sign = -1 === i2, r2.__trim());
+          } }, { key: "__fillFromParts", value: function(e3, t3, _2) {
+            for (var n3 = 0, l2 = 0, g2 = 0, o2 = t3.length - 1; 0 <= o2; o2--) {
+              var a3 = t3[o2], u2 = _2[o2];
+              l2 |= a3 << g2, g2 += u2, 32 === g2 ? (e3.__setDigit(n3++, l2), g2 = 0, l2 = 0) : 32 < g2 && (e3.__setDigit(n3++, l2), g2 -= 32, l2 = a3 >>> u2 - g2);
+            }
+            if (0 !== l2) {
+              if (n3 >= e3.length) throw new Error("implementation bug");
+              e3.__setDigit(n3++, l2);
+            }
+            for (; n3 < e3.length; n3++) e3.__setDigit(n3, 0);
+          } }, { key: "__toStringBasePowerOfTwo", value: function(e3, t3) {
+            var _2 = e3.length, n3 = t3 - 1;
+            n3 = (85 & n3 >>> 1) + (85 & n3), n3 = (51 & n3 >>> 2) + (51 & n3), n3 = (15 & n3 >>> 4) + (15 & n3);
+            var l2 = n3, g2 = t3 - 1, a3 = e3.__digit(_2 - 1), u2 = o.__clz32(a3), s2 = 0 | (32 * _2 - u2 + l2 - 1) / l2;
+            if (e3.sign && s2++, 268435456 < s2) throw new Error("string too long");
+            for (var r2 = Array(s2), d2 = s2 - 1, h2 = 0, b2 = 0, m2 = 0; m2 < _2 - 1; m2++) {
+              var c2 = e3.__digit(m2), v2 = (h2 | c2 << b2) & g2;
+              r2[d2--] = o.__kConversionChars[v2];
+              var f2 = l2 - b2;
+              for (h2 = c2 >>> f2, b2 = 32 - f2; b2 >= l2; ) r2[d2--] = o.__kConversionChars[h2 & g2], h2 >>>= l2, b2 -= l2;
+            }
+            var y2 = (h2 | a3 << b2) & g2;
+            for (r2[d2--] = o.__kConversionChars[y2], h2 = a3 >>> l2 - b2; 0 !== h2; ) r2[d2--] = o.__kConversionChars[h2 & g2], h2 >>>= l2;
+            if (e3.sign && (r2[d2--] = "-"), -1 !== d2) throw new Error("implementation bug");
+            return r2.join("");
+          } }, { key: "__toStringGeneric", value: function(e3, t3, _2) {
+            var n3 = e3.length;
+            if (0 === n3) return "";
+            if (1 === n3) {
+              var l2 = e3.__unsignedDigit(0).toString(t3);
+              return false === _2 && e3.sign && (l2 = "-" + l2), l2;
+            }
+            var g2 = 32 * n3 - o.__clz32(e3.__digit(n3 - 1)), a3 = o.__kMaxBitsPerChar[t3], u2 = a3 - 1, s2 = g2 * o.__kBitsPerCharTableMultiplier;
+            s2 += u2 - 1, s2 = 0 | s2 / u2;
+            var r2, d2, h2 = s2 + 1 >> 1, b2 = o.exponentiate(o.__oneDigit(t3, false), o.__oneDigit(h2, false)), m2 = b2.__unsignedDigit(0);
+            if (1 === b2.length && 65535 >= m2) {
+              r2 = new o(e3.length, false), r2.__initializeDigits();
+              for (var c2, v2 = 0, f2 = 2 * e3.length - 1; 0 <= f2; f2--) c2 = v2 << 16 | e3.__halfDigit(f2), r2.__setHalfDigit(f2, 0 | c2 / m2), v2 = 0 | c2 % m2;
+              d2 = v2.toString(t3);
+            } else {
+              var y2 = o.__absoluteDivLarge(e3, b2, true, true);
+              r2 = y2.quotient;
+              var k2 = y2.remainder.__trim();
+              d2 = o.__toStringGeneric(k2, t3, true);
+            }
+            r2.__trim();
+            for (var D = o.__toStringGeneric(r2, t3, true); d2.length < h2; ) d2 = "0" + d2;
+            return false === _2 && e3.sign && (D = "-" + D), D + d2;
+          } }, { key: "__unequalSign", value: function(e3) {
+            return e3 ? -1 : 1;
+          } }, { key: "__absoluteGreater", value: function(e3) {
+            return e3 ? -1 : 1;
+          } }, { key: "__absoluteLess", value: function(e3) {
+            return e3 ? 1 : -1;
+          } }, { key: "__compareToBigInt", value: function(e3, t3) {
+            var i2 = e3.sign;
+            if (i2 !== t3.sign) return o.__unequalSign(i2);
+            var _2 = o.__absoluteCompare(e3, t3);
+            return 0 < _2 ? o.__absoluteGreater(i2) : 0 > _2 ? o.__absoluteLess(i2) : 0;
+          } }, { key: "__compareToNumber", value: function(e3, i2) {
+            if (true | i2) {
+              var _2 = e3.sign, n3 = 0 > i2;
+              if (_2 !== n3) return o.__unequalSign(_2);
+              if (0 === e3.length) {
+                if (n3) throw new Error("implementation bug");
+                return 0 === i2 ? 0 : -1;
+              }
+              if (1 < e3.length) return o.__absoluteGreater(_2);
+              var l2 = t2(i2), g2 = e3.__unsignedDigit(0);
+              return g2 > l2 ? o.__absoluteGreater(_2) : g2 < l2 ? o.__absoluteLess(_2) : 0;
+            }
+            return o.__compareToDouble(e3, i2);
+          } }, { key: "__compareToDouble", value: function(e3, t3) {
+            if (t3 !== t3) return t3;
+            if (t3 === 1 / 0) return -1;
+            if (t3 === -Infinity) return 1;
+            var i2 = e3.sign;
+            if (i2 !== 0 > t3) return o.__unequalSign(i2);
+            if (0 === t3) throw new Error("implementation bug: should be handled elsewhere");
+            if (0 === e3.length) return -1;
+            o.__kBitConversionDouble[0] = t3;
+            var _2 = 2047 & o.__kBitConversionInts[1] >>> 20;
+            if (2047 == _2) throw new Error("implementation bug: handled elsewhere");
+            var n3 = _2 - 1023;
+            if (0 > n3) return o.__absoluteGreater(i2);
+            var l2 = e3.length, g2 = e3.__digit(l2 - 1), a3 = o.__clz32(g2), u2 = 32 * l2 - a3, s2 = n3 + 1;
+            if (u2 < s2) return o.__absoluteLess(i2);
+            if (u2 > s2) return o.__absoluteGreater(i2);
+            var r2 = 1048576 | 1048575 & o.__kBitConversionInts[1], d2 = o.__kBitConversionInts[0], h2 = 20, b2 = 31 - a3;
+            if (b2 !== (u2 - 1) % 31) throw new Error("implementation bug");
+            var m2, c2 = 0;
+            if (b2 < h2) {
+              var v2 = h2 - b2;
+              c2 = v2 + 32, m2 = r2 >>> v2, r2 = r2 << 32 - v2 | d2 >>> v2, d2 <<= 32 - v2;
+            } else if (b2 === h2) c2 = 32, m2 = r2, r2 = d2;
+            else {
+              var f2 = b2 - h2;
+              c2 = 32 - f2, m2 = r2 << f2 | d2 >>> 32 - f2, r2 = d2 << f2;
+            }
+            if (g2 >>>= 0, m2 >>>= 0, g2 > m2) return o.__absoluteGreater(i2);
+            if (g2 < m2) return o.__absoluteLess(i2);
+            for (var y2 = l2 - 2; 0 <= y2; y2--) {
+              0 < c2 ? (c2 -= 32, m2 = r2 >>> 0, r2 = d2, d2 = 0) : m2 = 0;
+              var k2 = e3.__unsignedDigit(y2);
+              if (k2 > m2) return o.__absoluteGreater(i2);
+              if (k2 < m2) return o.__absoluteLess(i2);
+            }
+            if (0 !== r2 || 0 !== d2) {
+              if (0 === c2) throw new Error("implementation bug");
+              return o.__absoluteLess(i2);
+            }
+            return 0;
+          } }, { key: "__equalToNumber", value: function(e3, i2) {
+            return i2 | 0 === i2 ? 0 === i2 ? 0 === e3.length : 1 === e3.length && e3.sign === 0 > i2 && e3.__unsignedDigit(0) === t2(i2) : 0 === o.__compareToDouble(e3, i2);
+          } }, { key: "__comparisonResultToBool", value: function(e3, t3) {
+            switch (t3) {
+              case 0:
+                return 0 > e3;
+              case 1:
+                return 0 >= e3;
+              case 2:
+                return 0 < e3;
+              case 3:
+                return 0 <= e3;
+            }
+            throw new Error("unreachable");
+          } }, { key: "__compare", value: function(e3, t3, i2) {
+            if (e3 = o.__toPrimitive(e3), t3 = o.__toPrimitive(t3), "string" == typeof e3 && "string" == typeof t3) switch (i2) {
+              case 0:
+                return e3 < t3;
+              case 1:
+                return e3 <= t3;
+              case 2:
+                return e3 > t3;
+              case 3:
+                return e3 >= t3;
+            }
+            if (o.__isBigInt(e3) && "string" == typeof t3) return t3 = o.__fromString(t3), null !== t3 && o.__comparisonResultToBool(o.__compareToBigInt(e3, t3), i2);
+            if ("string" == typeof e3 && o.__isBigInt(t3)) return e3 = o.__fromString(e3), null !== e3 && o.__comparisonResultToBool(o.__compareToBigInt(e3, t3), i2);
+            if (e3 = o.__toNumeric(e3), t3 = o.__toNumeric(t3), o.__isBigInt(e3)) {
+              if (o.__isBigInt(t3)) return o.__comparisonResultToBool(o.__compareToBigInt(e3, t3), i2);
+              if ("number" != typeof t3) throw new Error("implementation bug");
+              return o.__comparisonResultToBool(o.__compareToNumber(e3, t3), i2);
+            }
+            if ("number" != typeof e3) throw new Error("implementation bug");
+            if (o.__isBigInt(t3)) return o.__comparisonResultToBool(o.__compareToNumber(t3, e3), 2 ^ i2);
+            if ("number" != typeof t3) throw new Error("implementation bug");
+            return 0 === i2 ? e3 < t3 : 1 === i2 ? e3 <= t3 : 2 === i2 ? e3 > t3 : 3 === i2 ? e3 >= t3 : void 0;
+          } }, { key: "__absoluteAdd", value: function(e3, t3, _2) {
+            if (e3.length < t3.length) return o.__absoluteAdd(t3, e3, _2);
+            if (0 === e3.length) return e3;
+            if (0 === t3.length) return e3.sign === _2 ? e3 : o.unaryMinus(e3);
+            var n3 = e3.length;
+            (0 === e3.__clzmsd() || t3.length === e3.length && 0 === t3.__clzmsd()) && n3++;
+            for (var l2 = new o(n3, _2), g2 = 0, a3 = 0; a3 < t3.length; a3++) {
+              var u2 = t3.__digit(a3), s2 = e3.__digit(a3), r2 = (65535 & s2) + (65535 & u2) + g2, d2 = (s2 >>> 16) + (u2 >>> 16) + (r2 >>> 16);
+              g2 = d2 >>> 16, l2.__setDigit(a3, 65535 & r2 | d2 << 16);
+            }
+            for (; a3 < e3.length; a3++) {
+              var h2 = e3.__digit(a3), b2 = (65535 & h2) + g2, m2 = (h2 >>> 16) + (b2 >>> 16);
+              g2 = m2 >>> 16, l2.__setDigit(a3, 65535 & b2 | m2 << 16);
+            }
+            return a3 < l2.length && l2.__setDigit(a3, g2), l2.__trim();
+          } }, { key: "__absoluteSub", value: function(e3, t3, _2) {
+            if (0 === e3.length) return e3;
+            if (0 === t3.length) return e3.sign === _2 ? e3 : o.unaryMinus(e3);
+            for (var n3 = new o(e3.length, _2), l2 = 0, g2 = 0; g2 < t3.length; g2++) {
+              var a3 = e3.__digit(g2), u2 = t3.__digit(g2), s2 = (65535 & a3) - (65535 & u2) - l2;
+              l2 = 1 & s2 >>> 16;
+              var r2 = (a3 >>> 16) - (u2 >>> 16) - l2;
+              l2 = 1 & r2 >>> 16, n3.__setDigit(g2, 65535 & s2 | r2 << 16);
+            }
+            for (; g2 < e3.length; g2++) {
+              var d2 = e3.__digit(g2), h2 = (65535 & d2) - l2;
+              l2 = 1 & h2 >>> 16;
+              var b2 = (d2 >>> 16) - l2;
+              l2 = 1 & b2 >>> 16, n3.__setDigit(g2, 65535 & h2 | b2 << 16);
+            }
+            return n3.__trim();
+          } }, { key: "__absoluteAddOne", value: function(e3, t3) {
+            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length;
+            null === _2 ? _2 = new o(n3, t3) : _2.sign = t3;
+            for (var l2, g2 = true, a3 = 0; a3 < n3; a3++) {
+              if (l2 = e3.__digit(a3), g2) {
+                var u2 = -1 === l2;
+                l2 = 0 | l2 + 1, g2 = u2;
+              }
+              _2.__setDigit(a3, l2);
+            }
+            return g2 && _2.__setDigitGrow(n3, 1), _2;
+          } }, { key: "__absoluteSubOne", value: function(e3, t3) {
+            var _2 = e3.length;
+            t3 = t3 || _2;
+            for (var n3, l2 = new o(t3, false), g2 = true, a3 = 0; a3 < _2; a3++) {
+              if (n3 = e3.__digit(a3), g2) {
+                var u2 = 0 === n3;
+                n3 = 0 | n3 - 1, g2 = u2;
+              }
+              l2.__setDigit(a3, n3);
+            }
+            if (g2) throw new Error("implementation bug");
+            for (var s2 = _2; s2 < t3; s2++) l2.__setDigit(s2, 0);
+            return l2;
+          } }, { key: "__absoluteAnd", value: function(e3, t3) {
+            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
+            if (n3 < l2) {
+              g2 = n3;
+              var a3 = e3, u2 = n3;
+              e3 = t3, n3 = l2, t3 = a3, l2 = u2;
+            }
+            var s2 = g2;
+            null === _2 ? _2 = new o(s2, false) : s2 = _2.length;
+            for (var r2 = 0; r2 < g2; r2++) _2.__setDigit(r2, e3.__digit(r2) & t3.__digit(r2));
+            for (; r2 < s2; r2++) _2.__setDigit(r2, 0);
+            return _2;
+          } }, { key: "__absoluteAndNot", value: function(e3, t3) {
+            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
+            n3 < l2 && (g2 = n3);
+            var a3 = n3;
+            null === _2 ? _2 = new o(a3, false) : a3 = _2.length;
+            for (var u2 = 0; u2 < g2; u2++) _2.__setDigit(u2, e3.__digit(u2) & ~t3.__digit(u2));
+            for (; u2 < n3; u2++) _2.__setDigit(u2, e3.__digit(u2));
+            for (; u2 < a3; u2++) _2.__setDigit(u2, 0);
+            return _2;
+          } }, { key: "__absoluteOr", value: function(e3, t3) {
+            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
+            if (n3 < l2) {
+              g2 = n3;
+              var a3 = e3, u2 = n3;
+              e3 = t3, n3 = l2, t3 = a3, l2 = u2;
+            }
+            var s2 = n3;
+            null === _2 ? _2 = new o(s2, false) : s2 = _2.length;
+            for (var r2 = 0; r2 < g2; r2++) _2.__setDigit(r2, e3.__digit(r2) | t3.__digit(r2));
+            for (; r2 < n3; r2++) _2.__setDigit(r2, e3.__digit(r2));
+            for (; r2 < s2; r2++) _2.__setDigit(r2, 0);
+            return _2;
+          } }, { key: "__absoluteXor", value: function(e3, t3) {
+            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
+            if (n3 < l2) {
+              g2 = n3;
+              var a3 = e3, u2 = n3;
+              e3 = t3, n3 = l2, t3 = a3, l2 = u2;
+            }
+            var s2 = n3;
+            null === _2 ? _2 = new o(s2, false) : s2 = _2.length;
+            for (var r2 = 0; r2 < g2; r2++) _2.__setDigit(r2, e3.__digit(r2) ^ t3.__digit(r2));
+            for (; r2 < n3; r2++) _2.__setDigit(r2, e3.__digit(r2));
+            for (; r2 < s2; r2++) _2.__setDigit(r2, 0);
+            return _2;
+          } }, { key: "__absoluteCompare", value: function(e3, t3) {
+            var _2 = e3.length - t3.length;
+            if (0 != _2) return _2;
+            for (var n3 = e3.length - 1; 0 <= n3 && e3.__digit(n3) === t3.__digit(n3); ) n3--;
+            return 0 > n3 ? 0 : e3.__unsignedDigit(n3) > t3.__unsignedDigit(n3) ? 1 : -1;
+          } }, { key: "__multiplyAccumulate", value: function(e3, t3, _2, n3) {
+            if (0 !== t3) {
+              for (var l2 = 65535 & t3, g2 = t3 >>> 16, a3 = 0, u2 = 0, s2 = 0, r2 = 0; r2 < e3.length; r2++, n3++) {
+                var d2 = _2.__digit(n3), h2 = 65535 & d2, b2 = d2 >>> 16, m2 = e3.__digit(r2), c2 = 65535 & m2, v2 = m2 >>> 16, f2 = o.__imul(c2, l2), y2 = o.__imul(c2, g2), k2 = o.__imul(v2, l2), D = o.__imul(v2, g2);
+                h2 += u2 + (65535 & f2), b2 += s2 + a3 + (h2 >>> 16) + (f2 >>> 16) + (65535 & y2) + (65535 & k2), a3 = b2 >>> 16, u2 = (y2 >>> 16) + (k2 >>> 16) + (65535 & D) + a3, a3 = u2 >>> 16, u2 &= 65535, s2 = D >>> 16, d2 = 65535 & h2 | b2 << 16, _2.__setDigit(n3, d2);
+              }
+              for (; 0 !== a3 || 0 !== u2 || 0 !== s2; n3++) {
+                var p = _2.__digit(n3), B = (65535 & p) + u2, S = (p >>> 16) + (B >>> 16) + s2 + a3;
+                u2 = 0, s2 = 0, a3 = S >>> 16, p = 65535 & B | S << 16, _2.__setDigit(n3, p);
+              }
+            }
+          } }, { key: "__internalMultiplyAdd", value: function(e3, t3, _2, l2, g2) {
+            for (var a3 = _2, u2 = 0, s2 = 0; s2 < l2; s2++) {
+              var r2 = e3.__digit(s2), d2 = o.__imul(65535 & r2, t3), h2 = (65535 & d2) + u2 + a3;
+              a3 = h2 >>> 16;
+              var b2 = o.__imul(r2 >>> 16, t3), m2 = (65535 & b2) + (d2 >>> 16) + a3;
+              a3 = m2 >>> 16, u2 = b2 >>> 16, g2.__setDigit(s2, m2 << 16 | 65535 & h2);
+            }
+            if (g2.length > l2) for (g2.__setDigit(l2++, a3 + u2); l2 < g2.length; ) g2.__setDigit(l2++, 0);
+            else if (0 !== a3 + u2) throw new Error("implementation bug");
+          } }, { key: "__absoluteDivSmall", value: function(e3, t3, _2) {
+            null === _2 && (_2 = new o(e3.length, false));
+            for (var n3 = 0, l2 = 2 * e3.length - 1; 0 <= l2; l2 -= 2) {
+              var g2 = (n3 << 16 | e3.__halfDigit(l2)) >>> 0, a3 = 0 | g2 / t3;
+              n3 = 0 | g2 % t3, g2 = (n3 << 16 | e3.__halfDigit(l2 - 1)) >>> 0;
+              var u2 = 0 | g2 / t3;
+              n3 = 0 | g2 % t3, _2.__setDigit(l2 >>> 1, a3 << 16 | u2);
+            }
+            return _2;
+          } }, { key: "__absoluteModSmall", value: function(e3, t3) {
+            for (var _2, n3 = 0, l2 = 2 * e3.length - 1; 0 <= l2; l2--) _2 = (n3 << 16 | e3.__halfDigit(l2)) >>> 0, n3 = 0 | _2 % t3;
+            return n3;
+          } }, { key: "__absoluteDivLarge", value: function(e3, t3, i2, _2) {
+            var l2 = t3.__halfDigitLength(), n3 = t3.length, g2 = e3.__halfDigitLength() - l2, a3 = null;
+            i2 && (a3 = new o(g2 + 2 >>> 1, false), a3.__initializeDigits());
+            var s2 = new o(l2 + 2 >>> 1, false);
+            s2.__initializeDigits();
+            var r2 = o.__clz16(t3.__halfDigit(l2 - 1));
+            0 < r2 && (t3 = o.__specialLeftShift(t3, r2, 0));
+            for (var d2 = o.__specialLeftShift(e3, r2, 1), u2 = t3.__halfDigit(l2 - 1), h2 = 0, b2 = g2; 0 <= b2; b2--) {
+              var m2 = 65535, v2 = d2.__halfDigit(b2 + l2);
+              if (v2 !== u2) {
+                var f2 = (v2 << 16 | d2.__halfDigit(b2 + l2 - 1)) >>> 0;
+                m2 = 0 | f2 / u2;
+                for (var y2 = 0 | f2 % u2, k2 = t3.__halfDigit(l2 - 2), D = d2.__halfDigit(b2 + l2 - 2); o.__imul(m2, k2) >>> 0 > (y2 << 16 | D) >>> 0 && (m2--, y2 += u2, !(65535 < y2)); ) ;
+              }
+              o.__internalMultiplyAdd(t3, m2, 0, n3, s2);
+              var p = d2.__inplaceSub(s2, b2, l2 + 1);
+              0 !== p && (p = d2.__inplaceAdd(t3, b2, l2), d2.__setHalfDigit(b2 + l2, d2.__halfDigit(b2 + l2) + p), m2--), i2 && (1 & b2 ? h2 = m2 << 16 : a3.__setDigit(b2 >>> 1, h2 | m2));
+            }
+            return _2 ? (d2.__inplaceRightShift(r2), i2 ? { quotient: a3, remainder: d2 } : d2) : i2 ? a3 : void 0;
+          } }, { key: "__clz16", value: function(e3) {
+            return o.__clz32(e3) - 16;
+          } }, { key: "__specialLeftShift", value: function(e3, t3, _2) {
+            var l2 = e3.length, n3 = new o(l2 + _2, false);
+            if (0 === t3) {
+              for (var g2 = 0; g2 < l2; g2++) n3.__setDigit(g2, e3.__digit(g2));
+              return 0 < _2 && n3.__setDigit(l2, 0), n3;
+            }
+            for (var a3, u2 = 0, s2 = 0; s2 < l2; s2++) a3 = e3.__digit(s2), n3.__setDigit(s2, a3 << t3 | u2), u2 = a3 >>> 32 - t3;
+            return 0 < _2 && n3.__setDigit(l2, u2), n3;
+          } }, { key: "__leftShiftByAbsolute", value: function(e3, t3) {
+            var _2 = o.__toShiftAmount(t3);
+            if (0 > _2) throw new RangeError("BigInt too big");
+            var n3 = _2 >>> 5, l2 = 31 & _2, g2 = e3.length, a3 = 0 !== l2 && 0 != e3.__digit(g2 - 1) >>> 32 - l2, u2 = g2 + n3 + (a3 ? 1 : 0), s2 = new o(u2, e3.sign);
+            if (0 === l2) {
+              for (var r2 = 0; r2 < n3; r2++) s2.__setDigit(r2, 0);
+              for (; r2 < u2; r2++) s2.__setDigit(r2, e3.__digit(r2 - n3));
+            } else {
+              for (var h2 = 0, b2 = 0; b2 < n3; b2++) s2.__setDigit(b2, 0);
+              for (var m2, c2 = 0; c2 < g2; c2++) m2 = e3.__digit(c2), s2.__setDigit(c2 + n3, m2 << l2 | h2), h2 = m2 >>> 32 - l2;
+              if (a3) s2.__setDigit(g2 + n3, h2);
+              else if (0 !== h2) throw new Error("implementation bug");
+            }
+            return s2.__trim();
+          } }, { key: "__rightShiftByAbsolute", value: function(e3, t3) {
+            var _2 = e3.length, n3 = e3.sign, l2 = o.__toShiftAmount(t3);
+            if (0 > l2) return o.__rightShiftByMaximum(n3);
+            var g2 = l2 >>> 5, a3 = 31 & l2, u2 = _2 - g2;
+            if (0 >= u2) return o.__rightShiftByMaximum(n3);
+            var s2 = false;
+            if (n3) {
+              if (0 != (e3.__digit(g2) & (1 << a3) - 1)) s2 = true;
+              else for (var r2 = 0; r2 < g2; r2++) if (0 !== e3.__digit(r2)) {
+                s2 = true;
+                break;
+              }
+            }
+            if (s2 && 0 === a3) {
+              var h2 = e3.__digit(_2 - 1);
+              0 == ~h2 && u2++;
+            }
+            var b2 = new o(u2, n3);
+            if (0 === a3) for (var m2 = g2; m2 < _2; m2++) b2.__setDigit(m2 - g2, e3.__digit(m2));
+            else {
+              for (var c2, v2 = e3.__digit(g2) >>> a3, f2 = _2 - g2 - 1, y2 = 0; y2 < f2; y2++) c2 = e3.__digit(y2 + g2 + 1), b2.__setDigit(y2, c2 << 32 - a3 | v2), v2 = c2 >>> a3;
+              b2.__setDigit(f2, v2);
+            }
+            return s2 && (b2 = o.__absoluteAddOne(b2, true, b2)), b2.__trim();
+          } }, { key: "__rightShiftByMaximum", value: function(e3) {
+            return e3 ? o.__oneDigit(1, true) : o.__zero();
+          } }, { key: "__toShiftAmount", value: function(e3) {
+            if (1 < e3.length) return -1;
+            var t3 = e3.__unsignedDigit(0);
+            return t3 > o.__kMaxLengthBits ? -1 : t3;
+          } }, { key: "__toPrimitive", value: function(e3) {
+            var t3 = 1 < arguments.length && void 0 !== arguments[1] ? arguments[1] : "default";
+            if ("object" !== i(e3)) return e3;
+            if (e3.constructor === o) return e3;
+            var _2 = e3[Symbol.toPrimitive];
+            if (_2) {
+              var n3 = _2(t3);
+              if ("object" !== i(n3)) return n3;
+              throw new TypeError("Cannot convert object to primitive value");
+            }
+            var l2 = e3.valueOf;
+            if (l2) {
+              var g2 = l2.call(e3);
+              if ("object" !== i(g2)) return g2;
+            }
+            var a3 = e3.toString;
+            if (a3) {
+              var u2 = a3.call(e3);
+              if ("object" !== i(u2)) return u2;
+            }
+            throw new TypeError("Cannot convert object to primitive value");
+          } }, { key: "__toNumeric", value: function(e3) {
+            return o.__isBigInt(e3) ? e3 : +e3;
+          } }, { key: "__isBigInt", value: function(e3) {
+            return "object" === i(e3) && null !== e3 && e3.constructor === o;
+          } }, { key: "__truncateToNBits", value: function(e3, t3) {
+            for (var _2 = e3 + 31 >>> 5, n3 = new o(_2, t3.sign), l2 = _2 - 1, g2 = 0; g2 < l2; g2++) n3.__setDigit(g2, t3.__digit(g2));
+            var a3 = t3.__digit(l2);
+            if (0 != (31 & e3)) {
+              var u2 = 32 - (31 & e3);
+              a3 = a3 << u2 >>> u2;
+            }
+            return n3.__setDigit(l2, a3), n3.__trim();
+          } }, { key: "__truncateAndSubFromPowerOfTwo", value: function(e3, t3, _2) {
+            for (var n3 = Math.min, l2 = e3 + 31 >>> 5, g2 = new o(l2, _2), a3 = 0, u2 = l2 - 1, s2 = 0, r2 = n3(u2, t3.length); a3 < r2; a3++) {
+              var d2 = t3.__digit(a3), h2 = 0 - (65535 & d2) - s2;
+              s2 = 1 & h2 >>> 16;
+              var b2 = 0 - (d2 >>> 16) - s2;
+              s2 = 1 & b2 >>> 16, g2.__setDigit(a3, 65535 & h2 | b2 << 16);
+            }
+            for (; a3 < u2; a3++) g2.__setDigit(a3, 0 | -s2);
+            var m2, c2 = u2 < t3.length ? t3.__digit(u2) : 0, v2 = 31 & e3;
+            if (0 === v2) {
+              var f2 = 0 - (65535 & c2) - s2;
+              s2 = 1 & f2 >>> 16;
+              var y2 = 0 - (c2 >>> 16) - s2;
+              m2 = 65535 & f2 | y2 << 16;
+            } else {
+              var k2 = 32 - v2;
+              c2 = c2 << k2 >>> k2;
+              var D = 1 << 32 - k2, p = (65535 & D) - (65535 & c2) - s2;
+              s2 = 1 & p >>> 16;
+              var B = (D >>> 16) - (c2 >>> 16) - s2;
+              m2 = 65535 & p | B << 16, m2 &= D - 1;
+            }
+            return g2.__setDigit(u2, m2), g2.__trim();
+          } }, { key: "__digitPow", value: function(e3, t3) {
+            for (var i2 = 1; 0 < t3; ) 1 & t3 && (i2 *= e3), t3 >>>= 1, e3 *= e3;
+            return i2;
+          } }]), o;
+        })(h(Array));
+        return k.__kMaxLength = 33554432, k.__kMaxLengthBits = k.__kMaxLength << 5, k.__kMaxBitsPerChar = [0, 0, 32, 51, 64, 75, 83, 90, 96, 102, 107, 111, 115, 119, 122, 126, 128, 131, 134, 136, 139, 141, 143, 145, 147, 149, 151, 153, 154, 156, 158, 159, 160, 162, 163, 165, 166], k.__kBitsPerCharTableShift = 5, k.__kBitsPerCharTableMultiplier = 1 << k.__kBitsPerCharTableShift, k.__kConversionChars = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"], k.__kBitConversionBuffer = new ArrayBuffer(8), k.__kBitConversionDouble = new Float64Array(k.__kBitConversionBuffer), k.__kBitConversionInts = new Int32Array(k.__kBitConversionBuffer), k.__clz32 = t || function(e2) {
+          var t2 = Math.LN2, i2 = Math.log;
+          return 0 === e2 ? 32 : 0 | 31 - (0 | i2(e2 >>> 0) / t2);
+        }, k.__imul = e || function(e2, t2) {
+          return 0 | e2 * t2;
+        }, k;
+      });
     }
   });
 
+  // node_modules/@apocentre/alias-sampling/index.js
+  var require_alias_sampling = __commonJS({
+    "node_modules/@apocentre/alias-sampling/index.js"(exports, module) {
+      init_buffer_shim();
+      function Sample(probabilities, outcomes, rng) {
+        "use strict";
+        this.alias = [];
+        this.prob = [];
+        this.outcomes = outcomes || this.indexedOutcomes(probabilities.length);
+        this.rng = rng || Math.random;
+        this.precomputeAlias(probabilities);
+      }
+      Sample.prototype.next = function(numOfSamples) {
+        "use strict";
+        var n = numOfSamples || 1, out = [], i = 0;
+        do {
+          var c = Math.floor(this.rng() * this.prob.length);
+          out[i] = this.outcomes[this.rng() < this.prob[c] ? c : this.alias[c]];
+        } while (++i < n);
+        return n > 1 ? out : out[0];
+      };
+      Sample.prototype.precomputeAlias = function(p) {
+        "use strict";
+        var n = p.length, sum = 0, nS = 0, nL = 0, P = [], S = [], L = [], g, i, a;
+        for (i = 0; i < n; ++i) {
+          if (p[i] < 0) {
+            throw "Probability must be a positive: p[" + i + "]=" + p[i];
+          }
+          sum += p[i];
+        }
+        if (sum === 0) {
+          throw "Probability cannot be zero.";
+        }
+        for (i = 0; i < n; ++i) {
+          P[i] = p[i] * n / sum;
+        }
+        for (i = n - 1; i >= 0; --i) {
+          if (P[i] < 1)
+            S[nS++] = i;
+          else
+            L[nL++] = i;
+        }
+        while (nS && nL) {
+          a = S[--nS];
+          g = L[--nL];
+          this.prob[a] = P[a];
+          this.alias[a] = g;
+          P[g] = P[g] + P[a] - 1;
+          if (P[g] < 1)
+            S[nS++] = g;
+          else
+            L[nL++] = g;
+        }
+        while (nL)
+          this.prob[L[--nL]] = 1;
+        while (nS)
+          this.prob[S[--nS]] = 1;
+      };
+      Sample.prototype.indexedOutcomes = function(n) {
+        "use strict";
+        var o = [];
+        for (var i = 0; i < n; i++) o[i] = i;
+        return o;
+      };
+      Sample.prototype.randomInt = function(min, max) {
+        "use strict";
+        return Math.floor(this.rng() * (max - min)) + min;
+      };
+      module.exports = function(probabilities, outcomes, rng) {
+        "use strict";
+        return new Sample(probabilities, outcomes, rng);
+      };
+    }
+  });
+
+  // entry.js
+  init_buffer_shim();
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/index.js
+  init_buffer_shim();
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/ur.js
+  init_buffer_shim();
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/errors.js
+  init_buffer_shim();
+  var __extends = /* @__PURE__ */ (function() {
+    var extendStatics = function(d, b) {
+      extendStatics = Object.setPrototypeOf || { __proto__: [] } instanceof Array && function(d2, b2) {
+        d2.__proto__ = b2;
+      } || function(d2, b2) {
+        for (var p in b2) if (Object.prototype.hasOwnProperty.call(b2, p)) d2[p] = b2[p];
+      };
+      return extendStatics(d, b);
+    };
+    return function(d, b) {
+      extendStatics(d, b);
+      function __() {
+        this.constructor = d;
+      }
+      d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+    };
+  })();
+  var InvalidSchemeError = (
+    /** @class */
+    (function(_super) {
+      __extends(InvalidSchemeError2, _super);
+      function InvalidSchemeError2() {
+        var _this = _super.call(this, "Invalid Scheme") || this;
+        _this.name = "InvalidSchemeError";
+        return _this;
+      }
+      return InvalidSchemeError2;
+    })(Error)
+  );
+  var InvalidPathLengthError = (
+    /** @class */
+    (function(_super) {
+      __extends(InvalidPathLengthError2, _super);
+      function InvalidPathLengthError2() {
+        var _this = _super.call(this, "Invalid Path") || this;
+        _this.name = "InvalidPathLengthError";
+        return _this;
+      }
+      return InvalidPathLengthError2;
+    })(Error)
+  );
+  var InvalidTypeError = (
+    /** @class */
+    (function(_super) {
+      __extends(InvalidTypeError2, _super);
+      function InvalidTypeError2() {
+        var _this = _super.call(this, "Invalid Type") || this;
+        _this.name = "InvalidTypeError";
+        return _this;
+      }
+      return InvalidTypeError2;
+    })(Error)
+  );
+  var InvalidSequenceComponentError = (
+    /** @class */
+    (function(_super) {
+      __extends(InvalidSequenceComponentError2, _super);
+      function InvalidSequenceComponentError2() {
+        var _this = _super.call(this, "Invalid Sequence Component") || this;
+        _this.name = "InvalidSequenceComponentError";
+        return _this;
+      }
+      return InvalidSequenceComponentError2;
+    })(Error)
+  );
+  var InvalidChecksumError = (
+    /** @class */
+    (function(_super) {
+      __extends(InvalidChecksumError2, _super);
+      function InvalidChecksumError2() {
+        var _this = _super.call(this, "Invalid Checksum") || this;
+        _this.name = "InvalidChecksumError";
+        return _this;
+      }
+      return InvalidChecksumError2;
+    })(Error)
+  );
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/utils.js
+  init_buffer_shim();
+  var import_buffer2 = __toESM(require_buffer());
+
+  // node_modules/@noble/hashes/esm/sha256.js
+  init_buffer_shim();
+
+  // node_modules/@noble/hashes/esm/sha2.js
+  init_buffer_shim();
+
+  // node_modules/@noble/hashes/esm/_md.js
+  init_buffer_shim();
+
   // node_modules/@noble/hashes/esm/utils.js
+  init_buffer_shim();
+  /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
   function isBytes(a) {
     return a instanceof Uint8Array || ArrayBuffer.isView(a) && a.constructor.name === "Uint8Array";
   }
@@ -1943,6 +3061,8 @@
     abytes(data);
     return data;
   }
+  var Hash = class {
+  };
   function createHasher(hashCons) {
     const hashC = (msg) => hashCons().update(toBytes(msg)).digest();
     const tmp = hashCons();
@@ -1951,15 +3071,6 @@
     hashC.create = () => hashCons();
     return hashC;
   }
-  var Hash;
-  var init_utils = __esm({
-    "node_modules/@noble/hashes/esm/utils.js"() {
-      init_buffer_shim();
-      /*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) */
-      Hash = class {
-      };
-    }
-  });
 
   // node_modules/@noble/hashes/esm/_md.js
   function setBigUint64(view, byteOffset, value, isLE) {
@@ -1980,364 +3091,372 @@
   function Maj(a, b, c) {
     return a & b ^ a & c ^ b & c;
   }
-  var HashMD, SHA256_IV;
-  var init_md = __esm({
-    "node_modules/@noble/hashes/esm/_md.js"() {
-      init_buffer_shim();
-      init_utils();
-      HashMD = class extends Hash {
-        constructor(blockLen, outputLen, padOffset, isLE) {
-          super();
-          this.finished = false;
-          this.length = 0;
-          this.pos = 0;
-          this.destroyed = false;
-          this.blockLen = blockLen;
-          this.outputLen = outputLen;
-          this.padOffset = padOffset;
-          this.isLE = isLE;
-          this.buffer = new Uint8Array(blockLen);
-          this.view = createView(this.buffer);
-        }
-        update(data) {
-          aexists(this);
-          data = toBytes(data);
-          abytes(data);
-          const { view, buffer: buffer2, blockLen } = this;
-          const len = data.length;
-          for (let pos = 0; pos < len; ) {
-            const take = Math.min(blockLen - this.pos, len - pos);
-            if (take === blockLen) {
-              const dataView2 = createView(data);
-              for (; blockLen <= len - pos; pos += blockLen)
-                this.process(dataView2, pos);
-              continue;
-            }
-            buffer2.set(data.subarray(pos, pos + take), this.pos);
-            this.pos += take;
-            pos += take;
-            if (this.pos === blockLen) {
-              this.process(view, 0);
-              this.pos = 0;
-            }
-          }
-          this.length += data.length;
-          this.roundClean();
-          return this;
-        }
-        digestInto(out) {
-          aexists(this);
-          aoutput(out, this);
-          this.finished = true;
-          const { buffer: buffer2, view, blockLen, isLE } = this;
-          let { pos } = this;
-          buffer2[pos++] = 128;
-          clean(this.buffer.subarray(pos));
-          if (this.padOffset > blockLen - pos) {
-            this.process(view, 0);
-            pos = 0;
-          }
-          for (let i = pos; i < blockLen; i++)
-            buffer2[i] = 0;
-          setBigUint64(view, blockLen - 8, BigInt(this.length * 8), isLE);
-          this.process(view, 0);
-          const oview = createView(out);
-          const len = this.outputLen;
-          if (len % 4)
-            throw new Error("_sha2: outputLen should be aligned to 32bit");
-          const outLen = len / 4;
-          const state = this.get();
-          if (outLen > state.length)
-            throw new Error("_sha2: outputLen bigger than state");
-          for (let i = 0; i < outLen; i++)
-            oview.setUint32(4 * i, state[i], isLE);
-        }
-        digest() {
-          const { buffer: buffer2, outputLen } = this;
-          this.digestInto(buffer2);
-          const res = buffer2.slice(0, outputLen);
-          this.destroy();
-          return res;
-        }
-        _cloneInto(to) {
-          to || (to = new this.constructor());
-          to.set(...this.get());
-          const { blockLen, buffer: buffer2, length, finished, destroyed, pos } = this;
-          to.destroyed = destroyed;
-          to.finished = finished;
-          to.length = length;
-          to.pos = pos;
-          if (length % blockLen)
-            to.buffer.set(buffer2);
-          return to;
-        }
-        clone() {
-          return this._cloneInto();
-        }
-      };
-      SHA256_IV = /* @__PURE__ */ Uint32Array.from([
-        1779033703,
-        3144134277,
-        1013904242,
-        2773480762,
-        1359893119,
-        2600822924,
-        528734635,
-        1541459225
-      ]);
+  var HashMD = class extends Hash {
+    constructor(blockLen, outputLen, padOffset, isLE) {
+      super();
+      this.finished = false;
+      this.length = 0;
+      this.pos = 0;
+      this.destroyed = false;
+      this.blockLen = blockLen;
+      this.outputLen = outputLen;
+      this.padOffset = padOffset;
+      this.isLE = isLE;
+      this.buffer = new Uint8Array(blockLen);
+      this.view = createView(this.buffer);
     }
-  });
+    update(data) {
+      aexists(this);
+      data = toBytes(data);
+      abytes(data);
+      const { view, buffer: buffer2, blockLen } = this;
+      const len = data.length;
+      for (let pos = 0; pos < len; ) {
+        const take = Math.min(blockLen - this.pos, len - pos);
+        if (take === blockLen) {
+          const dataView2 = createView(data);
+          for (; blockLen <= len - pos; pos += blockLen)
+            this.process(dataView2, pos);
+          continue;
+        }
+        buffer2.set(data.subarray(pos, pos + take), this.pos);
+        this.pos += take;
+        pos += take;
+        if (this.pos === blockLen) {
+          this.process(view, 0);
+          this.pos = 0;
+        }
+      }
+      this.length += data.length;
+      this.roundClean();
+      return this;
+    }
+    digestInto(out) {
+      aexists(this);
+      aoutput(out, this);
+      this.finished = true;
+      const { buffer: buffer2, view, blockLen, isLE } = this;
+      let { pos } = this;
+      buffer2[pos++] = 128;
+      clean(this.buffer.subarray(pos));
+      if (this.padOffset > blockLen - pos) {
+        this.process(view, 0);
+        pos = 0;
+      }
+      for (let i = pos; i < blockLen; i++)
+        buffer2[i] = 0;
+      setBigUint64(view, blockLen - 8, BigInt(this.length * 8), isLE);
+      this.process(view, 0);
+      const oview = createView(out);
+      const len = this.outputLen;
+      if (len % 4)
+        throw new Error("_sha2: outputLen should be aligned to 32bit");
+      const outLen = len / 4;
+      const state = this.get();
+      if (outLen > state.length)
+        throw new Error("_sha2: outputLen bigger than state");
+      for (let i = 0; i < outLen; i++)
+        oview.setUint32(4 * i, state[i], isLE);
+    }
+    digest() {
+      const { buffer: buffer2, outputLen } = this;
+      this.digestInto(buffer2);
+      const res = buffer2.slice(0, outputLen);
+      this.destroy();
+      return res;
+    }
+    _cloneInto(to) {
+      to || (to = new this.constructor());
+      to.set(...this.get());
+      const { blockLen, buffer: buffer2, length, finished, destroyed, pos } = this;
+      to.destroyed = destroyed;
+      to.finished = finished;
+      to.length = length;
+      to.pos = pos;
+      if (length % blockLen)
+        to.buffer.set(buffer2);
+      return to;
+    }
+    clone() {
+      return this._cloneInto();
+    }
+  };
+  var SHA256_IV = /* @__PURE__ */ Uint32Array.from([
+    1779033703,
+    3144134277,
+    1013904242,
+    2773480762,
+    1359893119,
+    2600822924,
+    528734635,
+    1541459225
+  ]);
 
   // node_modules/@noble/hashes/esm/sha2.js
-  var SHA256_K, SHA256_W, SHA256, sha256;
-  var init_sha2 = __esm({
-    "node_modules/@noble/hashes/esm/sha2.js"() {
-      init_buffer_shim();
-      init_md();
-      init_utils();
-      SHA256_K = /* @__PURE__ */ Uint32Array.from([
-        1116352408,
-        1899447441,
-        3049323471,
-        3921009573,
-        961987163,
-        1508970993,
-        2453635748,
-        2870763221,
-        3624381080,
-        310598401,
-        607225278,
-        1426881987,
-        1925078388,
-        2162078206,
-        2614888103,
-        3248222580,
-        3835390401,
-        4022224774,
-        264347078,
-        604807628,
-        770255983,
-        1249150122,
-        1555081692,
-        1996064986,
-        2554220882,
-        2821834349,
-        2952996808,
-        3210313671,
-        3336571891,
-        3584528711,
-        113926993,
-        338241895,
-        666307205,
-        773529912,
-        1294757372,
-        1396182291,
-        1695183700,
-        1986661051,
-        2177026350,
-        2456956037,
-        2730485921,
-        2820302411,
-        3259730800,
-        3345764771,
-        3516065817,
-        3600352804,
-        4094571909,
-        275423344,
-        430227734,
-        506948616,
-        659060556,
-        883997877,
-        958139571,
-        1322822218,
-        1537002063,
-        1747873779,
-        1955562222,
-        2024104815,
-        2227730452,
-        2361852424,
-        2428436474,
-        2756734187,
-        3204031479,
-        3329325298
-      ]);
-      SHA256_W = /* @__PURE__ */ new Uint32Array(64);
-      SHA256 = class extends HashMD {
-        constructor(outputLen = 32) {
-          super(64, outputLen, 8, false);
-          this.A = SHA256_IV[0] | 0;
-          this.B = SHA256_IV[1] | 0;
-          this.C = SHA256_IV[2] | 0;
-          this.D = SHA256_IV[3] | 0;
-          this.E = SHA256_IV[4] | 0;
-          this.F = SHA256_IV[5] | 0;
-          this.G = SHA256_IV[6] | 0;
-          this.H = SHA256_IV[7] | 0;
-        }
-        get() {
-          const { A, B, C, D, E, F, G, H } = this;
-          return [A, B, C, D, E, F, G, H];
-        }
-        // prettier-ignore
-        set(A, B, C, D, E, F, G, H) {
-          this.A = A | 0;
-          this.B = B | 0;
-          this.C = C | 0;
-          this.D = D | 0;
-          this.E = E | 0;
-          this.F = F | 0;
-          this.G = G | 0;
-          this.H = H | 0;
-        }
-        process(view, offset) {
-          for (let i = 0; i < 16; i++, offset += 4)
-            SHA256_W[i] = view.getUint32(offset, false);
-          for (let i = 16; i < 64; i++) {
-            const W15 = SHA256_W[i - 15];
-            const W2 = SHA256_W[i - 2];
-            const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
-            const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
-            SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
-          }
-          let { A, B, C, D, E, F, G, H } = this;
-          for (let i = 0; i < 64; i++) {
-            const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
-            const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
-            const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
-            const T2 = sigma0 + Maj(A, B, C) | 0;
-            H = G;
-            G = F;
-            F = E;
-            E = D + T1 | 0;
-            D = C;
-            C = B;
-            B = A;
-            A = T1 + T2 | 0;
-          }
-          A = A + this.A | 0;
-          B = B + this.B | 0;
-          C = C + this.C | 0;
-          D = D + this.D | 0;
-          E = E + this.E | 0;
-          F = F + this.F | 0;
-          G = G + this.G | 0;
-          H = H + this.H | 0;
-          this.set(A, B, C, D, E, F, G, H);
-        }
-        roundClean() {
-          clean(SHA256_W);
-        }
-        destroy() {
-          this.set(0, 0, 0, 0, 0, 0, 0, 0);
-          clean(this.buffer);
-        }
-      };
-      sha256 = /* @__PURE__ */ createHasher(() => new SHA256());
+  var SHA256_K = /* @__PURE__ */ Uint32Array.from([
+    1116352408,
+    1899447441,
+    3049323471,
+    3921009573,
+    961987163,
+    1508970993,
+    2453635748,
+    2870763221,
+    3624381080,
+    310598401,
+    607225278,
+    1426881987,
+    1925078388,
+    2162078206,
+    2614888103,
+    3248222580,
+    3835390401,
+    4022224774,
+    264347078,
+    604807628,
+    770255983,
+    1249150122,
+    1555081692,
+    1996064986,
+    2554220882,
+    2821834349,
+    2952996808,
+    3210313671,
+    3336571891,
+    3584528711,
+    113926993,
+    338241895,
+    666307205,
+    773529912,
+    1294757372,
+    1396182291,
+    1695183700,
+    1986661051,
+    2177026350,
+    2456956037,
+    2730485921,
+    2820302411,
+    3259730800,
+    3345764771,
+    3516065817,
+    3600352804,
+    4094571909,
+    275423344,
+    430227734,
+    506948616,
+    659060556,
+    883997877,
+    958139571,
+    1322822218,
+    1537002063,
+    1747873779,
+    1955562222,
+    2024104815,
+    2227730452,
+    2361852424,
+    2428436474,
+    2756734187,
+    3204031479,
+    3329325298
+  ]);
+  var SHA256_W = /* @__PURE__ */ new Uint32Array(64);
+  var SHA256 = class extends HashMD {
+    constructor(outputLen = 32) {
+      super(64, outputLen, 8, false);
+      this.A = SHA256_IV[0] | 0;
+      this.B = SHA256_IV[1] | 0;
+      this.C = SHA256_IV[2] | 0;
+      this.D = SHA256_IV[3] | 0;
+      this.E = SHA256_IV[4] | 0;
+      this.F = SHA256_IV[5] | 0;
+      this.G = SHA256_IV[6] | 0;
+      this.H = SHA256_IV[7] | 0;
     }
-  });
+    get() {
+      const { A, B, C, D, E, F, G, H } = this;
+      return [A, B, C, D, E, F, G, H];
+    }
+    // prettier-ignore
+    set(A, B, C, D, E, F, G, H) {
+      this.A = A | 0;
+      this.B = B | 0;
+      this.C = C | 0;
+      this.D = D | 0;
+      this.E = E | 0;
+      this.F = F | 0;
+      this.G = G | 0;
+      this.H = H | 0;
+    }
+    process(view, offset) {
+      for (let i = 0; i < 16; i++, offset += 4)
+        SHA256_W[i] = view.getUint32(offset, false);
+      for (let i = 16; i < 64; i++) {
+        const W15 = SHA256_W[i - 15];
+        const W2 = SHA256_W[i - 2];
+        const s0 = rotr(W15, 7) ^ rotr(W15, 18) ^ W15 >>> 3;
+        const s1 = rotr(W2, 17) ^ rotr(W2, 19) ^ W2 >>> 10;
+        SHA256_W[i] = s1 + SHA256_W[i - 7] + s0 + SHA256_W[i - 16] | 0;
+      }
+      let { A, B, C, D, E, F, G, H } = this;
+      for (let i = 0; i < 64; i++) {
+        const sigma1 = rotr(E, 6) ^ rotr(E, 11) ^ rotr(E, 25);
+        const T1 = H + sigma1 + Chi(E, F, G) + SHA256_K[i] + SHA256_W[i] | 0;
+        const sigma0 = rotr(A, 2) ^ rotr(A, 13) ^ rotr(A, 22);
+        const T2 = sigma0 + Maj(A, B, C) | 0;
+        H = G;
+        G = F;
+        F = E;
+        E = D + T1 | 0;
+        D = C;
+        C = B;
+        B = A;
+        A = T1 + T2 | 0;
+      }
+      A = A + this.A | 0;
+      B = B + this.B | 0;
+      C = C + this.C | 0;
+      D = D + this.D | 0;
+      E = E + this.E | 0;
+      F = F + this.F | 0;
+      G = G + this.G | 0;
+      H = H + this.H | 0;
+      this.set(A, B, C, D, E, F, G, H);
+    }
+    roundClean() {
+      clean(SHA256_W);
+    }
+    destroy() {
+      this.set(0, 0, 0, 0, 0, 0, 0, 0);
+      clean(this.buffer);
+    }
+  };
+  var sha256 = /* @__PURE__ */ createHasher(() => new SHA256());
 
   // node_modules/@noble/hashes/esm/sha256.js
-  var sha2562;
-  var init_sha256 = __esm({
-    "node_modules/@noble/hashes/esm/sha256.js"() {
-      init_buffer_shim();
-      init_sha2();
-      sha2562 = sha256;
-    }
-  });
+  var sha2562 = sha256;
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/utils.js
-  var import_buffer2, CRC_TABLE, crc32, sha256Hash, partition, split, getCRC, getCRCHex, toUint32, intToBytes, isURType, arraysEqual, arrayContains, setDifference, bufferXOR;
-  var init_utils2 = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/utils.js"() {
-      init_buffer_shim();
-      import_buffer2 = __toESM(require_buffer());
-      init_sha256();
-      CRC_TABLE = (function() {
-        var c;
-        var crcTable = [];
-        for (var n = 0; n < 256; n++) {
-          c = n;
-          for (var k = 0; k < 8; k++) {
-            c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
-          }
-          crcTable[n] = c;
-        }
-        return crcTable;
-      })();
-      crc32 = function(message) {
-        var crc = 0 ^ -1;
-        for (var i = 0; i < message.length; i++) {
-          crc = crc >>> 8 ^ CRC_TABLE[(crc ^ message[i]) & 255];
-        }
-        return (crc ^ -1) >>> 0;
-      };
-      sha256Hash = function(data) {
-        return import_buffer2.Buffer.from(sha2562(data));
-      };
-      partition = function(s, n) {
-        return s.match(new RegExp(".{1," + n + "}", "g")) || [s];
-      };
-      split = function(s, length) {
-        return [s.slice(0, -length), s.slice(-length)];
-      };
-      getCRC = function(message) {
-        return crc32(message);
-      };
-      getCRCHex = function(message) {
-        return crc32(message).toString(16).padStart(8, "0");
-      };
-      toUint32 = function(number) {
-        return number >>> 0;
-      };
-      intToBytes = function(num) {
-        var arr = new ArrayBuffer(4);
-        var view = new DataView(arr);
-        view.setUint32(0, num, false);
-        return import_buffer2.Buffer.from(arr);
-      };
-      isURType = function(type) {
-        return type.split("").every(function(_, index) {
-          var c = type.charCodeAt(index);
-          if ("a".charCodeAt(0) <= c && c <= "z".charCodeAt(0))
-            return true;
-          if ("0".charCodeAt(0) <= c && c <= "9".charCodeAt(0))
-            return true;
-          if (c === "-".charCodeAt(0))
-            return true;
-          return false;
-        });
-      };
-      arraysEqual = function(ar1, ar2) {
-        if (ar1.length !== ar2.length) {
-          return false;
-        }
-        return ar1.every(function(el) {
-          return ar2.includes(el);
-        });
-      };
-      arrayContains = function(ar1, ar2) {
-        return ar2.every(function(v) {
-          return ar1.includes(v);
-        });
-      };
-      setDifference = function(ar1, ar2) {
-        return ar1.filter(function(x) {
-          return ar2.indexOf(x) < 0;
-        });
-      };
-      bufferXOR = function(a, b) {
-        var length = Math.max(a.length, b.length);
-        var buffer2 = import_buffer2.Buffer.allocUnsafe(length);
-        for (var i = 0; i < length; ++i) {
-          buffer2[i] = a[i] ^ b[i];
-        }
-        return buffer2;
-      };
+  var CRC_TABLE = (function() {
+    var c;
+    var crcTable = [];
+    for (var n = 0; n < 256; n++) {
+      c = n;
+      for (var k = 0; k < 8; k++) {
+        c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+      }
+      crcTable[n] = c;
     }
-  });
+    return crcTable;
+  })();
+  var crc32 = function(message) {
+    var crc = 0 ^ -1;
+    for (var i = 0; i < message.length; i++) {
+      crc = crc >>> 8 ^ CRC_TABLE[(crc ^ message[i]) & 255];
+    }
+    return (crc ^ -1) >>> 0;
+  };
+  var sha256Hash = function(data) {
+    return import_buffer2.Buffer.from(sha2562(data));
+  };
+  var partition = function(s, n) {
+    return s.match(new RegExp(".{1," + n + "}", "g")) || [s];
+  };
+  var split = function(s, length) {
+    return [s.slice(0, -length), s.slice(-length)];
+  };
+  var getCRC = function(message) {
+    return crc32(message);
+  };
+  var getCRCHex = function(message) {
+    return crc32(message).toString(16).padStart(8, "0");
+  };
+  var toUint32 = function(number) {
+    return number >>> 0;
+  };
+  var intToBytes = function(num) {
+    var arr = new ArrayBuffer(4);
+    var view = new DataView(arr);
+    view.setUint32(0, num, false);
+    return import_buffer2.Buffer.from(arr);
+  };
+  var isURType = function(type) {
+    return type.split("").every(function(_, index) {
+      var c = type.charCodeAt(index);
+      if ("a".charCodeAt(0) <= c && c <= "z".charCodeAt(0))
+        return true;
+      if ("0".charCodeAt(0) <= c && c <= "9".charCodeAt(0))
+        return true;
+      if (c === "-".charCodeAt(0))
+        return true;
+      return false;
+    });
+  };
+  var arraysEqual = function(ar1, ar2) {
+    if (ar1.length !== ar2.length) {
+      return false;
+    }
+    return ar1.every(function(el) {
+      return ar2.includes(el);
+    });
+  };
+  var arrayContains = function(ar1, ar2) {
+    return ar2.every(function(v) {
+      return ar1.includes(v);
+    });
+  };
+  var setDifference = function(ar1, ar2) {
+    return ar1.filter(function(x) {
+      return ar2.indexOf(x) < 0;
+    });
+  };
+  var bufferXOR = function(a, b) {
+    var length = Math.max(a.length, b.length);
+    var buffer2 = import_buffer2.Buffer.allocUnsafe(length);
+    for (var i = 0; i < length; ++i) {
+      buffer2[i] = a[i] ^ b[i];
+    }
+    return buffer2;
+  };
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/cbor.js
+  init_buffer_shim();
+  var import_buffer3 = __toESM(require_buffer());
+
+  // node_modules/cborg/cborg.js
+  init_buffer_shim();
+
+  // node_modules/cborg/lib/encode.js
+  init_buffer_shim();
 
   // node_modules/cborg/lib/is.js
+  init_buffer_shim();
+  var objectTypeNames = [
+    "Object",
+    // for Object.create(null) and other non-plain objects
+    "RegExp",
+    "Date",
+    "Error",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "ArrayBuffer",
+    "SharedArrayBuffer",
+    "DataView",
+    "Promise",
+    "URL",
+    "HTMLElement",
+    "Int8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array"
+  ];
   function is(value) {
     if (value === null) {
       return "null";
@@ -2377,115 +3496,86 @@
     }
     return void 0;
   }
-  var objectTypeNames;
-  var init_is = __esm({
-    "node_modules/cborg/lib/is.js"() {
-      init_buffer_shim();
-      objectTypeNames = [
-        "Object",
-        // for Object.create(null) and other non-plain objects
-        "RegExp",
-        "Date",
-        "Error",
-        "Map",
-        "Set",
-        "WeakMap",
-        "WeakSet",
-        "ArrayBuffer",
-        "SharedArrayBuffer",
-        "DataView",
-        "Promise",
-        "URL",
-        "HTMLElement",
-        "Int8Array",
-        "Uint8ClampedArray",
-        "Int16Array",
-        "Uint16Array",
-        "Int32Array",
-        "Uint32Array",
-        "Float32Array",
-        "Float64Array",
-        "BigInt64Array",
-        "BigUint64Array"
-      ];
-    }
-  });
 
   // node_modules/cborg/lib/token.js
-  var Type, Token;
-  var init_token = __esm({
-    "node_modules/cborg/lib/token.js"() {
-      init_buffer_shim();
-      Type = class {
-        /**
-         * @param {number} major
-         * @param {string} name
-         * @param {boolean} terminal
-         */
-        constructor(major, name, terminal) {
-          this.major = major;
-          this.majorEncoded = major << 5;
-          this.name = name;
-          this.terminal = terminal;
-        }
-        /* c8 ignore next 3 */
-        toString() {
-          return `Type[${this.major}].${this.name}`;
-        }
-        /**
-         * @param {Type} typ
-         * @returns {number}
-         */
-        compare(typ) {
-          return this.major < typ.major ? -1 : this.major > typ.major ? 1 : 0;
-        }
-        /**
-         * Check equality between two Type instances. Safe to use across different
-         * copies of the Type class (e.g., when bundlers duplicate the module).
-         * (major, name) uniquely identifies a Type; terminal is implied by these.
-         * @param {Type} a
-         * @param {Type} b
-         * @returns {boolean}
-         */
-        static equals(a, b) {
-          return a === b || a.major === b.major && a.name === b.name;
-        }
-      };
-      Type.uint = new Type(0, "uint", true);
-      Type.negint = new Type(1, "negint", true);
-      Type.bytes = new Type(2, "bytes", true);
-      Type.string = new Type(3, "string", true);
-      Type.array = new Type(4, "array", false);
-      Type.map = new Type(5, "map", false);
-      Type.tag = new Type(6, "tag", false);
-      Type.float = new Type(7, "float", true);
-      Type.false = new Type(7, "false", true);
-      Type.true = new Type(7, "true", true);
-      Type.null = new Type(7, "null", true);
-      Type.undefined = new Type(7, "undefined", true);
-      Type.break = new Type(7, "break", true);
-      Token = class {
-        /**
-         * @param {Type} type
-         * @param {any} [value]
-         * @param {number} [encodedLength]
-         */
-        constructor(type, value, encodedLength) {
-          this.type = type;
-          this.value = value;
-          this.encodedLength = encodedLength;
-          this.encodedBytes = void 0;
-          this.byteValue = void 0;
-        }
-        /* c8 ignore next 3 */
-        toString() {
-          return `Token[${this.type}].${this.value}`;
-        }
-      };
+  init_buffer_shim();
+  var Type = class {
+    /**
+     * @param {number} major
+     * @param {string} name
+     * @param {boolean} terminal
+     */
+    constructor(major, name, terminal) {
+      this.major = major;
+      this.majorEncoded = major << 5;
+      this.name = name;
+      this.terminal = terminal;
     }
-  });
+    /* c8 ignore next 3 */
+    toString() {
+      return `Type[${this.major}].${this.name}`;
+    }
+    /**
+     * @param {Type} typ
+     * @returns {number}
+     */
+    compare(typ) {
+      return this.major < typ.major ? -1 : this.major > typ.major ? 1 : 0;
+    }
+    /**
+     * Check equality between two Type instances. Safe to use across different
+     * copies of the Type class (e.g., when bundlers duplicate the module).
+     * (major, name) uniquely identifies a Type; terminal is implied by these.
+     * @param {Type} a
+     * @param {Type} b
+     * @returns {boolean}
+     */
+    static equals(a, b) {
+      return a === b || a.major === b.major && a.name === b.name;
+    }
+  };
+  Type.uint = new Type(0, "uint", true);
+  Type.negint = new Type(1, "negint", true);
+  Type.bytes = new Type(2, "bytes", true);
+  Type.string = new Type(3, "string", true);
+  Type.array = new Type(4, "array", false);
+  Type.map = new Type(5, "map", false);
+  Type.tag = new Type(6, "tag", false);
+  Type.float = new Type(7, "float", true);
+  Type.false = new Type(7, "false", true);
+  Type.true = new Type(7, "true", true);
+  Type.null = new Type(7, "null", true);
+  Type.undefined = new Type(7, "undefined", true);
+  Type.break = new Type(7, "break", true);
+  var Token = class {
+    /**
+     * @param {Type} type
+     * @param {any} [value]
+     * @param {number} [encodedLength]
+     */
+    constructor(type, value, encodedLength) {
+      this.type = type;
+      this.value = value;
+      this.encodedLength = encodedLength;
+      this.encodedBytes = void 0;
+      this.byteValue = void 0;
+    }
+    /* c8 ignore next 3 */
+    toString() {
+      return `Token[${this.type}].${this.value}`;
+    }
+  };
+
+  // node_modules/cborg/lib/bl.js
+  init_buffer_shim();
 
   // node_modules/cborg/lib/byte-utils.js
+  init_buffer_shim();
+  var useBuffer = globalThis.process && // @ts-ignore
+  !globalThis.process.browser && // @ts-ignore
+  globalThis.Buffer && // @ts-ignore
+  typeof globalThis.Buffer.isBuffer === "function";
+  var textEncoder = new TextEncoder();
   function isBuffer(buf) {
     return useBuffer && globalThis.Buffer.isBuffer(buf);
   }
@@ -2495,6 +3585,111 @@
     }
     return isBuffer(buf) ? new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength) : buf;
   }
+  var FROM_STRING_THRESHOLD_BUFFER = 24;
+  var FROM_STRING_THRESHOLD_TEXTENCODER = 200;
+  var fromString = useBuffer ? (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {string} string
+     */
+    (string) => {
+      return string.length >= FROM_STRING_THRESHOLD_BUFFER ? (
+        // eslint-disable-line operator-linebreak
+        // @ts-ignore
+        globalThis.Buffer.from(string)
+      ) : utf8ToBytes2(string);
+    }
+  ) : (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {string} string
+     */
+    (string) => {
+      return string.length >= FROM_STRING_THRESHOLD_TEXTENCODER ? textEncoder.encode(string) : utf8ToBytes2(string);
+    }
+  );
+  var fromArray = (arr) => {
+    return Uint8Array.from(arr);
+  };
+  var slice = useBuffer ? (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {Uint8Array} bytes
+     * @param {number} start
+     * @param {number} end
+     */
+    // Buffer.slice() returns a view, not a copy, so we need special handling
+    (bytes, start, end) => {
+      if (isBuffer(bytes)) {
+        return new Uint8Array(bytes.subarray(start, end));
+      }
+      return bytes.slice(start, end);
+    }
+  ) : (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {Uint8Array} bytes
+     * @param {number} start
+     * @param {number} end
+     */
+    (bytes, start, end) => {
+      return bytes.slice(start, end);
+    }
+  );
+  var concat = useBuffer ? (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {Uint8Array[]} chunks
+     * @param {number} length
+     * @returns {Uint8Array}
+     */
+    (chunks, length) => {
+      chunks = chunks.map((c) => c instanceof Uint8Array ? c : (
+        // eslint-disable-line operator-linebreak
+        // @ts-ignore
+        globalThis.Buffer.from(c)
+      ));
+      return asU8A(globalThis.Buffer.concat(chunks, length));
+    }
+  ) : (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {Uint8Array[]} chunks
+     * @param {number} length
+     * @returns {Uint8Array}
+     */
+    (chunks, length) => {
+      const out = new Uint8Array(length);
+      let off = 0;
+      for (let b of chunks) {
+        if (off + b.length > out.length) {
+          b = b.subarray(0, out.length - off);
+        }
+        out.set(b, off);
+        off += b.length;
+      }
+      return out;
+    }
+  );
+  var alloc = useBuffer ? (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {number} size
+     * @returns {Uint8Array}
+     */
+    (size) => {
+      return globalThis.Buffer.allocUnsafe(size);
+    }
+  ) : (
+    // eslint-disable-line operator-linebreak
+    /**
+     * @param {number} size
+     * @returns {Uint8Array}
+     */
+    (size) => {
+      return new Uint8Array(size);
+    }
+  );
   function compare(b1, b2) {
     if (isBuffer(b1) && isBuffer(b2)) {
       return b1.compare(b2);
@@ -2534,267 +3729,144 @@
     }
     return out;
   }
-  var useBuffer, textEncoder, FROM_STRING_THRESHOLD_BUFFER, FROM_STRING_THRESHOLD_TEXTENCODER, fromString, fromArray, slice, concat, alloc;
-  var init_byte_utils = __esm({
-    "node_modules/cborg/lib/byte-utils.js"() {
-      init_buffer_shim();
-      useBuffer = globalThis.process && // @ts-ignore
-      !globalThis.process.browser && // @ts-ignore
-      globalThis.Buffer && // @ts-ignore
-      typeof globalThis.Buffer.isBuffer === "function";
-      textEncoder = new TextEncoder();
-      FROM_STRING_THRESHOLD_BUFFER = 24;
-      FROM_STRING_THRESHOLD_TEXTENCODER = 200;
-      fromString = useBuffer ? (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {string} string
-         */
-        (string) => {
-          return string.length >= FROM_STRING_THRESHOLD_BUFFER ? (
-            // eslint-disable-line operator-linebreak
-            // @ts-ignore
-            globalThis.Buffer.from(string)
-          ) : utf8ToBytes2(string);
-        }
-      ) : (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {string} string
-         */
-        (string) => {
-          return string.length >= FROM_STRING_THRESHOLD_TEXTENCODER ? textEncoder.encode(string) : utf8ToBytes2(string);
-        }
-      );
-      fromArray = (arr) => {
-        return Uint8Array.from(arr);
-      };
-      slice = useBuffer ? (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {Uint8Array} bytes
-         * @param {number} start
-         * @param {number} end
-         */
-        // Buffer.slice() returns a view, not a copy, so we need special handling
-        (bytes, start, end) => {
-          if (isBuffer(bytes)) {
-            return new Uint8Array(bytes.subarray(start, end));
-          }
-          return bytes.slice(start, end);
-        }
-      ) : (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {Uint8Array} bytes
-         * @param {number} start
-         * @param {number} end
-         */
-        (bytes, start, end) => {
-          return bytes.slice(start, end);
-        }
-      );
-      concat = useBuffer ? (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {Uint8Array[]} chunks
-         * @param {number} length
-         * @returns {Uint8Array}
-         */
-        (chunks, length) => {
-          chunks = chunks.map((c) => c instanceof Uint8Array ? c : (
-            // eslint-disable-line operator-linebreak
-            // @ts-ignore
-            globalThis.Buffer.from(c)
-          ));
-          return asU8A(globalThis.Buffer.concat(chunks, length));
-        }
-      ) : (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {Uint8Array[]} chunks
-         * @param {number} length
-         * @returns {Uint8Array}
-         */
-        (chunks, length) => {
-          const out = new Uint8Array(length);
-          let off = 0;
-          for (let b of chunks) {
-            if (off + b.length > out.length) {
-              b = b.subarray(0, out.length - off);
-            }
-            out.set(b, off);
-            off += b.length;
-          }
-          return out;
-        }
-      );
-      alloc = useBuffer ? (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {number} size
-         * @returns {Uint8Array}
-         */
-        (size) => {
-          return globalThis.Buffer.allocUnsafe(size);
-        }
-      ) : (
-        // eslint-disable-line operator-linebreak
-        /**
-         * @param {number} size
-         * @returns {Uint8Array}
-         */
-        (size) => {
-          return new Uint8Array(size);
-        }
-      );
-    }
-  });
 
   // node_modules/cborg/lib/bl.js
-  var defaultChunkSize, Bl, U8Bl;
-  var init_bl = __esm({
-    "node_modules/cborg/lib/bl.js"() {
-      init_buffer_shim();
-      init_byte_utils();
-      defaultChunkSize = 256;
-      Bl = class {
-        /**
-         * @param {number} [chunkSize]
-         */
-        constructor(chunkSize = defaultChunkSize) {
-          this.chunkSize = chunkSize;
-          this.cursor = 0;
-          this.maxCursor = -1;
-          this.chunks = [];
-          this._initReuseChunk = null;
-        }
-        reset() {
-          this.cursor = 0;
-          this.maxCursor = -1;
-          if (this.chunks.length) {
-            this.chunks = [];
-          }
-          if (this._initReuseChunk !== null) {
-            this.chunks.push(this._initReuseChunk);
-            this.maxCursor = this._initReuseChunk.length - 1;
-          }
-        }
-        /**
-         * @param {Uint8Array|number[]} bytes
-         */
-        push(bytes) {
-          let topChunk = this.chunks[this.chunks.length - 1];
-          const newMax = this.cursor + bytes.length;
-          if (newMax <= this.maxCursor + 1) {
-            const chunkPos = topChunk.length - (this.maxCursor - this.cursor) - 1;
-            topChunk.set(bytes, chunkPos);
-          } else {
-            if (topChunk) {
-              const chunkPos = topChunk.length - (this.maxCursor - this.cursor) - 1;
-              if (chunkPos < topChunk.length) {
-                this.chunks[this.chunks.length - 1] = topChunk.subarray(0, chunkPos);
-                this.maxCursor = this.cursor - 1;
-              }
-            }
-            if (bytes.length < 64 && bytes.length < this.chunkSize) {
-              topChunk = alloc(this.chunkSize);
-              this.chunks.push(topChunk);
-              this.maxCursor += topChunk.length;
-              if (this._initReuseChunk === null) {
-                this._initReuseChunk = topChunk;
-              }
-              topChunk.set(bytes, 0);
-            } else {
-              this.chunks.push(bytes);
-              this.maxCursor += bytes.length;
-            }
-          }
-          this.cursor += bytes.length;
-        }
-        /**
-         * @param {boolean} [reset]
-         * @returns {Uint8Array}
-         */
-        toBytes(reset = false) {
-          let byts;
-          if (this.chunks.length === 1) {
-            const chunk = this.chunks[0];
-            if (reset && this.cursor > chunk.length / 2) {
-              byts = this.cursor === chunk.length ? chunk : chunk.subarray(0, this.cursor);
-              this._initReuseChunk = null;
-              this.chunks = [];
-            } else {
-              byts = slice(chunk, 0, this.cursor);
-            }
-          } else {
-            byts = concat(this.chunks, this.cursor);
-          }
-          if (reset) {
-            this.reset();
-          }
-          return byts;
-        }
-      };
-      U8Bl = class {
-        /**
-         * @param {Uint8Array} dest
-         */
-        constructor(dest) {
-          this.dest = dest;
-          this.cursor = 0;
-          this.chunks = [dest];
-        }
-        reset() {
-          this.cursor = 0;
-        }
-        /**
-         * @param {Uint8Array|number[]} bytes
-         */
-        push(bytes) {
-          if (this.cursor + bytes.length > this.dest.length) {
-            throw new Error("write out of bounds, destination buffer is too small");
-          }
-          this.dest.set(bytes, this.cursor);
-          this.cursor += bytes.length;
-        }
-        /**
-         * @param {boolean} [reset]
-         * @returns {Uint8Array}
-         */
-        toBytes(reset = false) {
-          const byts = this.dest.subarray(0, this.cursor);
-          if (reset) {
-            this.reset();
-          }
-          return byts;
-        }
-      };
+  var defaultChunkSize = 256;
+  var Bl = class {
+    /**
+     * @param {number} [chunkSize]
+     */
+    constructor(chunkSize = defaultChunkSize) {
+      this.chunkSize = chunkSize;
+      this.cursor = 0;
+      this.maxCursor = -1;
+      this.chunks = [];
+      this._initReuseChunk = null;
     }
-  });
+    reset() {
+      this.cursor = 0;
+      this.maxCursor = -1;
+      if (this.chunks.length) {
+        this.chunks = [];
+      }
+      if (this._initReuseChunk !== null) {
+        this.chunks.push(this._initReuseChunk);
+        this.maxCursor = this._initReuseChunk.length - 1;
+      }
+    }
+    /**
+     * @param {Uint8Array|number[]} bytes
+     */
+    push(bytes) {
+      let topChunk = this.chunks[this.chunks.length - 1];
+      const newMax = this.cursor + bytes.length;
+      if (newMax <= this.maxCursor + 1) {
+        const chunkPos = topChunk.length - (this.maxCursor - this.cursor) - 1;
+        topChunk.set(bytes, chunkPos);
+      } else {
+        if (topChunk) {
+          const chunkPos = topChunk.length - (this.maxCursor - this.cursor) - 1;
+          if (chunkPos < topChunk.length) {
+            this.chunks[this.chunks.length - 1] = topChunk.subarray(0, chunkPos);
+            this.maxCursor = this.cursor - 1;
+          }
+        }
+        if (bytes.length < 64 && bytes.length < this.chunkSize) {
+          topChunk = alloc(this.chunkSize);
+          this.chunks.push(topChunk);
+          this.maxCursor += topChunk.length;
+          if (this._initReuseChunk === null) {
+            this._initReuseChunk = topChunk;
+          }
+          topChunk.set(bytes, 0);
+        } else {
+          this.chunks.push(bytes);
+          this.maxCursor += bytes.length;
+        }
+      }
+      this.cursor += bytes.length;
+    }
+    /**
+     * @param {boolean} [reset]
+     * @returns {Uint8Array}
+     */
+    toBytes(reset = false) {
+      let byts;
+      if (this.chunks.length === 1) {
+        const chunk = this.chunks[0];
+        if (reset && this.cursor > chunk.length / 2) {
+          byts = this.cursor === chunk.length ? chunk : chunk.subarray(0, this.cursor);
+          this._initReuseChunk = null;
+          this.chunks = [];
+        } else {
+          byts = slice(chunk, 0, this.cursor);
+        }
+      } else {
+        byts = concat(this.chunks, this.cursor);
+      }
+      if (reset) {
+        this.reset();
+      }
+      return byts;
+    }
+  };
+  var U8Bl = class {
+    /**
+     * @param {Uint8Array} dest
+     */
+    constructor(dest) {
+      this.dest = dest;
+      this.cursor = 0;
+      this.chunks = [dest];
+    }
+    reset() {
+      this.cursor = 0;
+    }
+    /**
+     * @param {Uint8Array|number[]} bytes
+     */
+    push(bytes) {
+      if (this.cursor + bytes.length > this.dest.length) {
+        throw new Error("write out of bounds, destination buffer is too small");
+      }
+      this.dest.set(bytes, this.cursor);
+      this.cursor += bytes.length;
+    }
+    /**
+     * @param {boolean} [reset]
+     * @returns {Uint8Array}
+     */
+    toBytes(reset = false) {
+      const byts = this.dest.subarray(0, this.cursor);
+      if (reset) {
+        this.reset();
+      }
+      return byts;
+    }
+  };
 
   // node_modules/cborg/lib/common.js
+  init_buffer_shim();
+  var decodeErrPrefix = "CBOR decode error:";
+  var encodeErrPrefix = "CBOR encode error:";
+  var uintMinorPrefixBytes = [];
+  uintMinorPrefixBytes[23] = 1;
+  uintMinorPrefixBytes[24] = 2;
+  uintMinorPrefixBytes[25] = 3;
+  uintMinorPrefixBytes[26] = 5;
+  uintMinorPrefixBytes[27] = 9;
   function assertEnoughData(data, pos, need) {
     if (data.length - pos < need) {
       throw new Error(`${decodeErrPrefix} not enough data for type`);
     }
   }
-  var decodeErrPrefix, encodeErrPrefix, uintMinorPrefixBytes;
-  var init_common = __esm({
-    "node_modules/cborg/lib/common.js"() {
-      init_buffer_shim();
-      decodeErrPrefix = "CBOR decode error:";
-      encodeErrPrefix = "CBOR encode error:";
-      uintMinorPrefixBytes = [];
-      uintMinorPrefixBytes[23] = 1;
-      uintMinorPrefixBytes[24] = 2;
-      uintMinorPrefixBytes[25] = 3;
-      uintMinorPrefixBytes[26] = 5;
-      uintMinorPrefixBytes[27] = 9;
-    }
-  });
+
+  // node_modules/cborg/lib/jump.js
+  init_buffer_shim();
 
   // node_modules/cborg/lib/0uint.js
+  init_buffer_shim();
+  var uintBoundaries = [24, 256, 65536, 4294967296, BigInt("18446744073709551616")];
   function readUint8(data, offset, options) {
     assertEnoughData(data, offset, 1);
     const value = data[offset];
@@ -2889,41 +3961,33 @@
       }
     }
   }
-  var uintBoundaries;
-  var init_uint = __esm({
-    "node_modules/cborg/lib/0uint.js"() {
-      init_buffer_shim();
-      init_token();
-      init_common();
-      uintBoundaries = [24, 256, 65536, 4294967296, BigInt("18446744073709551616")];
-      encodeUint.encodedSize = function encodedSize(token) {
-        return encodeUintValue.encodedSize(token.value);
-      };
-      encodeUintValue.encodedSize = function encodedSize2(uint) {
-        if (uint < uintBoundaries[0]) {
-          return 1;
-        }
-        if (uint < uintBoundaries[1]) {
-          return 2;
-        }
-        if (uint < uintBoundaries[2]) {
-          return 3;
-        }
-        if (uint < uintBoundaries[3]) {
-          return 5;
-        }
-        return 9;
-      };
-      encodeUint.compareTokens = function compareTokens(tok1, tok2) {
-        return tok1.value < tok2.value ? -1 : tok1.value > tok2.value ? 1 : (
-          /* c8 ignore next */
-          0
-        );
-      };
+  encodeUint.encodedSize = function encodedSize(token) {
+    return encodeUintValue.encodedSize(token.value);
+  };
+  encodeUintValue.encodedSize = function encodedSize2(uint) {
+    if (uint < uintBoundaries[0]) {
+      return 1;
     }
-  });
+    if (uint < uintBoundaries[1]) {
+      return 2;
+    }
+    if (uint < uintBoundaries[2]) {
+      return 3;
+    }
+    if (uint < uintBoundaries[3]) {
+      return 5;
+    }
+    return 9;
+  };
+  encodeUint.compareTokens = function compareTokens(tok1, tok2) {
+    return tok1.value < tok2.value ? -1 : tok1.value > tok2.value ? 1 : (
+      /* c8 ignore next */
+      0
+    );
+  };
 
   // node_modules/cborg/lib/1negint.js
+  init_buffer_shim();
   function decodeNegint8(data, pos, _minor, options) {
     return new Token(Type.negint, -1 - readUint8(data, pos + 1, options), 2);
   }
@@ -2933,6 +3997,8 @@
   function decodeNegint32(data, pos, _minor, options) {
     return new Token(Type.negint, -1 - readUint32(data, pos + 1, options), 5);
   }
+  var neg1b = BigInt(-1);
+  var pos1b = BigInt(1);
   function decodeNegint64(data, pos, _minor, options) {
     const int = readUint64(data, pos + 1, options);
     if (typeof int !== "bigint") {
@@ -2951,42 +4017,32 @@
     const unsigned = typeof negint === "bigint" ? negint * neg1b - pos1b : negint * -1 - 1;
     encodeUintValue(writer, token.type.majorEncoded, unsigned);
   }
-  var neg1b, pos1b;
-  var init_negint = __esm({
-    "node_modules/cborg/lib/1negint.js"() {
-      init_buffer_shim();
-      init_token();
-      init_uint();
-      init_common();
-      neg1b = BigInt(-1);
-      pos1b = BigInt(1);
-      encodeNegint.encodedSize = function encodedSize3(token) {
-        const negint = token.value;
-        const unsigned = typeof negint === "bigint" ? negint * neg1b - pos1b : negint * -1 - 1;
-        if (unsigned < uintBoundaries[0]) {
-          return 1;
-        }
-        if (unsigned < uintBoundaries[1]) {
-          return 2;
-        }
-        if (unsigned < uintBoundaries[2]) {
-          return 3;
-        }
-        if (unsigned < uintBoundaries[3]) {
-          return 5;
-        }
-        return 9;
-      };
-      encodeNegint.compareTokens = function compareTokens2(tok1, tok2) {
-        return tok1.value < tok2.value ? 1 : tok1.value > tok2.value ? -1 : (
-          /* c8 ignore next */
-          0
-        );
-      };
+  encodeNegint.encodedSize = function encodedSize3(token) {
+    const negint = token.value;
+    const unsigned = typeof negint === "bigint" ? negint * neg1b - pos1b : negint * -1 - 1;
+    if (unsigned < uintBoundaries[0]) {
+      return 1;
     }
-  });
+    if (unsigned < uintBoundaries[1]) {
+      return 2;
+    }
+    if (unsigned < uintBoundaries[2]) {
+      return 3;
+    }
+    if (unsigned < uintBoundaries[3]) {
+      return 5;
+    }
+    return 9;
+  };
+  encodeNegint.compareTokens = function compareTokens2(tok1, tok2) {
+    return tok1.value < tok2.value ? 1 : tok1.value > tok2.value ? -1 : (
+      /* c8 ignore next */
+      0
+    );
+  };
 
   // node_modules/cborg/lib/2bytes.js
+  init_buffer_shim();
   function toToken(data, pos, prefix, length) {
     assertEnoughData(data, pos, prefix + length);
     const buf = data.slice(pos + prefix, pos + prefix + length);
@@ -3022,27 +4078,21 @@
     encodeUintValue(writer, token.type.majorEncoded, bytes.length);
     writer.push(bytes);
   }
+  encodeBytes.encodedSize = function encodedSize4(token) {
+    const bytes = tokenBytes(token);
+    return encodeUintValue.encodedSize(bytes.length) + bytes.length;
+  };
+  encodeBytes.compareTokens = function compareTokens3(tok1, tok2) {
+    return compareBytes(tokenBytes(tok1), tokenBytes(tok2));
+  };
   function compareBytes(b1, b2) {
     return b1.length < b2.length ? -1 : b1.length > b2.length ? 1 : compare(b1, b2);
   }
-  var init_bytes = __esm({
-    "node_modules/cborg/lib/2bytes.js"() {
-      init_buffer_shim();
-      init_token();
-      init_common();
-      init_uint();
-      init_byte_utils();
-      encodeBytes.encodedSize = function encodedSize4(token) {
-        const bytes = tokenBytes(token);
-        return encodeUintValue.encodedSize(bytes.length) + bytes.length;
-      };
-      encodeBytes.compareTokens = function compareTokens3(tok1, tok2) {
-        return compareBytes(tokenBytes(tok1), tokenBytes(tok2));
-      };
-    }
-  });
 
   // node_modules/cborg/lib/3string.js
+  init_buffer_shim();
+  var textDecoder = new TextDecoder();
+  var ASCII_THRESHOLD = 32;
   function toStr(bytes, start, end) {
     const len = end - start;
     if (len < ASCII_THRESHOLD) {
@@ -3086,21 +4136,10 @@
     }
     return toToken2(data, pos, 9, l, options);
   }
-  var textDecoder, ASCII_THRESHOLD, encodeString;
-  var init_string = __esm({
-    "node_modules/cborg/lib/3string.js"() {
-      init_buffer_shim();
-      init_token();
-      init_common();
-      init_uint();
-      init_bytes();
-      textDecoder = new TextDecoder();
-      ASCII_THRESHOLD = 32;
-      encodeString = encodeBytes;
-    }
-  });
+  var encodeString = encodeBytes;
 
   // node_modules/cborg/lib/4array.js
+  init_buffer_shim();
   function toToken3(_data, _pos, prefix, length) {
     return new Token(Type.array, length, prefix);
   }
@@ -3132,20 +4171,13 @@
   function encodeArray(writer, token) {
     encodeUintValue(writer, Type.array.majorEncoded, token.value);
   }
-  var init_array = __esm({
-    "node_modules/cborg/lib/4array.js"() {
-      init_buffer_shim();
-      init_token();
-      init_uint();
-      init_common();
-      encodeArray.compareTokens = encodeUint.compareTokens;
-      encodeArray.encodedSize = function encodedSize5(token) {
-        return encodeUintValue.encodedSize(token.value);
-      };
-    }
-  });
+  encodeArray.compareTokens = encodeUint.compareTokens;
+  encodeArray.encodedSize = function encodedSize5(token) {
+    return encodeUintValue.encodedSize(token.value);
+  };
 
   // node_modules/cborg/lib/5map.js
+  init_buffer_shim();
   function toToken4(_data, _pos, prefix, length) {
     return new Token(Type.map, length, prefix);
   }
@@ -3177,20 +4209,13 @@
   function encodeMap(writer, token) {
     encodeUintValue(writer, Type.map.majorEncoded, token.value);
   }
-  var init_map = __esm({
-    "node_modules/cborg/lib/5map.js"() {
-      init_buffer_shim();
-      init_token();
-      init_uint();
-      init_common();
-      encodeMap.compareTokens = encodeUint.compareTokens;
-      encodeMap.encodedSize = function encodedSize6(token) {
-        return encodeUintValue.encodedSize(token.value);
-      };
-    }
-  });
+  encodeMap.compareTokens = encodeUint.compareTokens;
+  encodeMap.encodedSize = function encodedSize6(token) {
+    return encodeUintValue.encodedSize(token.value);
+  };
 
   // node_modules/cborg/lib/6tag.js
+  init_buffer_shim();
   function decodeTagCompact(_data, _pos, minor, _options) {
     return new Token(Type.tag, minor, 1);
   }
@@ -3209,19 +4234,17 @@
   function encodeTag(writer, token) {
     encodeUintValue(writer, Type.tag.majorEncoded, token.value);
   }
-  var init_tag = __esm({
-    "node_modules/cborg/lib/6tag.js"() {
-      init_buffer_shim();
-      init_token();
-      init_uint();
-      encodeTag.compareTokens = encodeUint.compareTokens;
-      encodeTag.encodedSize = function encodedSize7(token) {
-        return encodeUintValue.encodedSize(token.value);
-      };
-    }
-  });
+  encodeTag.compareTokens = encodeUint.compareTokens;
+  encodeTag.encodedSize = function encodedSize7(token) {
+    return encodeUintValue.encodedSize(token.value);
+  };
 
   // node_modules/cborg/lib/7float.js
+  init_buffer_shim();
+  var MINOR_FALSE = 20;
+  var MINOR_TRUE = 21;
+  var MINOR_NULL = 22;
+  var MINOR_UNDEFINED = 23;
   function decodeUndefined(_data, _pos, _minor, options) {
     if (options.allowUndefined === false) {
       throw new Error(`${decodeErrPrefix} undefined values are not supported`);
@@ -3294,6 +4317,28 @@
       }
     }
   }
+  encodeFloat.encodedSize = function encodedSize8(token, options) {
+    const float = token.value;
+    if (float === false || float === true || float === null || float === void 0) {
+      return 1;
+    }
+    if (!options || options.float64 !== true) {
+      encodeFloat16(float);
+      let decoded = readFloat16(ui8a, 1);
+      if (float === decoded || Number.isNaN(float)) {
+        return 3;
+      }
+      encodeFloat32(float);
+      decoded = readFloat32(ui8a, 1);
+      if (float === decoded) {
+        return 5;
+      }
+    }
+    return 9;
+  };
+  var buffer = new ArrayBuffer(9);
+  var dataView = new DataView(buffer, 1);
+  var ui8a = new Uint8Array(buffer, 0);
   function encodeFloat16(inp) {
     if (inp === Infinity) {
       dataView.setUint16(0, 31744, false);
@@ -3369,42 +4414,7 @@
     const offset = (ui8a2.byteOffset || 0) + pos;
     return new DataView(ui8a2.buffer, offset, 8).getFloat64(0, false);
   }
-  var MINOR_FALSE, MINOR_TRUE, MINOR_NULL, MINOR_UNDEFINED, buffer, dataView, ui8a;
-  var init_float = __esm({
-    "node_modules/cborg/lib/7float.js"() {
-      init_buffer_shim();
-      init_token();
-      init_common();
-      init_uint();
-      MINOR_FALSE = 20;
-      MINOR_TRUE = 21;
-      MINOR_NULL = 22;
-      MINOR_UNDEFINED = 23;
-      encodeFloat.encodedSize = function encodedSize8(token, options) {
-        const float = token.value;
-        if (float === false || float === true || float === null || float === void 0) {
-          return 1;
-        }
-        if (!options || options.float64 !== true) {
-          encodeFloat16(float);
-          let decoded = readFloat16(ui8a, 1);
-          if (float === decoded || Number.isNaN(float)) {
-            return 3;
-          }
-          encodeFloat32(float);
-          decoded = readFloat32(ui8a, 1);
-          if (float === decoded) {
-            return 5;
-          }
-        }
-        return 9;
-      };
-      buffer = new ArrayBuffer(9);
-      dataView = new DataView(buffer, 1);
-      ui8a = new Uint8Array(buffer, 0);
-      encodeFloat.compareTokens = encodeUint.compareTokens;
-    }
-  });
+  encodeFloat.compareTokens = encodeUint.compareTokens;
 
   // node_modules/cborg/lib/jump.js
   function invalidMinor(data, pos, minor) {
@@ -3415,6 +4425,113 @@
       throw new Error(`${decodeErrPrefix} ${msg}`);
     };
   }
+  var jump = [];
+  for (let i = 0; i <= 23; i++) {
+    jump[i] = invalidMinor;
+  }
+  jump[24] = decodeUint8;
+  jump[25] = decodeUint16;
+  jump[26] = decodeUint32;
+  jump[27] = decodeUint64;
+  jump[28] = invalidMinor;
+  jump[29] = invalidMinor;
+  jump[30] = invalidMinor;
+  jump[31] = invalidMinor;
+  for (let i = 32; i <= 55; i++) {
+    jump[i] = invalidMinor;
+  }
+  jump[56] = decodeNegint8;
+  jump[57] = decodeNegint16;
+  jump[58] = decodeNegint32;
+  jump[59] = decodeNegint64;
+  jump[60] = invalidMinor;
+  jump[61] = invalidMinor;
+  jump[62] = invalidMinor;
+  jump[63] = invalidMinor;
+  for (let i = 64; i <= 87; i++) {
+    jump[i] = decodeBytesCompact;
+  }
+  jump[88] = decodeBytes8;
+  jump[89] = decodeBytes16;
+  jump[90] = decodeBytes32;
+  jump[91] = decodeBytes64;
+  jump[92] = invalidMinor;
+  jump[93] = invalidMinor;
+  jump[94] = invalidMinor;
+  jump[95] = errorer("indefinite length bytes/strings are not supported");
+  for (let i = 96; i <= 119; i++) {
+    jump[i] = decodeStringCompact;
+  }
+  jump[120] = decodeString8;
+  jump[121] = decodeString16;
+  jump[122] = decodeString32;
+  jump[123] = decodeString64;
+  jump[124] = invalidMinor;
+  jump[125] = invalidMinor;
+  jump[126] = invalidMinor;
+  jump[127] = errorer("indefinite length bytes/strings are not supported");
+  for (let i = 128; i <= 151; i++) {
+    jump[i] = decodeArrayCompact;
+  }
+  jump[152] = decodeArray8;
+  jump[153] = decodeArray16;
+  jump[154] = decodeArray32;
+  jump[155] = decodeArray64;
+  jump[156] = invalidMinor;
+  jump[157] = invalidMinor;
+  jump[158] = invalidMinor;
+  jump[159] = decodeArrayIndefinite;
+  for (let i = 160; i <= 183; i++) {
+    jump[i] = decodeMapCompact;
+  }
+  jump[184] = decodeMap8;
+  jump[185] = decodeMap16;
+  jump[186] = decodeMap32;
+  jump[187] = decodeMap64;
+  jump[188] = invalidMinor;
+  jump[189] = invalidMinor;
+  jump[190] = invalidMinor;
+  jump[191] = decodeMapIndefinite;
+  for (let i = 192; i <= 215; i++) {
+    jump[i] = decodeTagCompact;
+  }
+  jump[216] = decodeTag8;
+  jump[217] = decodeTag16;
+  jump[218] = decodeTag32;
+  jump[219] = decodeTag64;
+  jump[220] = invalidMinor;
+  jump[221] = invalidMinor;
+  jump[222] = invalidMinor;
+  jump[223] = invalidMinor;
+  for (let i = 224; i <= 243; i++) {
+    jump[i] = errorer("simple values are not supported");
+  }
+  jump[244] = invalidMinor;
+  jump[245] = invalidMinor;
+  jump[246] = invalidMinor;
+  jump[247] = decodeUndefined;
+  jump[248] = errorer("simple values are not supported");
+  jump[249] = decodeFloat16;
+  jump[250] = decodeFloat32;
+  jump[251] = decodeFloat64;
+  jump[252] = invalidMinor;
+  jump[253] = invalidMinor;
+  jump[254] = invalidMinor;
+  jump[255] = decodeBreak;
+  var quick = [];
+  for (let i = 0; i < 24; i++) {
+    quick[i] = new Token(Type.uint, i, 1);
+  }
+  for (let i = -1; i >= -24; i--) {
+    quick[31 - i] = new Token(Type.negint, i, 1);
+  }
+  quick[64] = new Token(Type.bytes, new Uint8Array(0), 1);
+  quick[96] = new Token(Type.string, "", 1);
+  quick[128] = new Token(Type.array, 0, 1);
+  quick[160] = new Token(Type.map, 0, 1);
+  quick[244] = new Token(Type.false, false, 1);
+  quick[245] = new Token(Type.true, true, 1);
+  quick[246] = new Token(Type.null, null, 1);
   function quickEncodeToken(token) {
     switch (token.type) {
       case Type.false:
@@ -3454,132 +4571,18 @@
         }
     }
   }
-  var jump, quick;
-  var init_jump = __esm({
-    "node_modules/cborg/lib/jump.js"() {
-      init_buffer_shim();
-      init_token();
-      init_uint();
-      init_negint();
-      init_bytes();
-      init_string();
-      init_array();
-      init_map();
-      init_tag();
-      init_float();
-      init_common();
-      init_byte_utils();
-      jump = [];
-      for (let i = 0; i <= 23; i++) {
-        jump[i] = invalidMinor;
-      }
-      jump[24] = decodeUint8;
-      jump[25] = decodeUint16;
-      jump[26] = decodeUint32;
-      jump[27] = decodeUint64;
-      jump[28] = invalidMinor;
-      jump[29] = invalidMinor;
-      jump[30] = invalidMinor;
-      jump[31] = invalidMinor;
-      for (let i = 32; i <= 55; i++) {
-        jump[i] = invalidMinor;
-      }
-      jump[56] = decodeNegint8;
-      jump[57] = decodeNegint16;
-      jump[58] = decodeNegint32;
-      jump[59] = decodeNegint64;
-      jump[60] = invalidMinor;
-      jump[61] = invalidMinor;
-      jump[62] = invalidMinor;
-      jump[63] = invalidMinor;
-      for (let i = 64; i <= 87; i++) {
-        jump[i] = decodeBytesCompact;
-      }
-      jump[88] = decodeBytes8;
-      jump[89] = decodeBytes16;
-      jump[90] = decodeBytes32;
-      jump[91] = decodeBytes64;
-      jump[92] = invalidMinor;
-      jump[93] = invalidMinor;
-      jump[94] = invalidMinor;
-      jump[95] = errorer("indefinite length bytes/strings are not supported");
-      for (let i = 96; i <= 119; i++) {
-        jump[i] = decodeStringCompact;
-      }
-      jump[120] = decodeString8;
-      jump[121] = decodeString16;
-      jump[122] = decodeString32;
-      jump[123] = decodeString64;
-      jump[124] = invalidMinor;
-      jump[125] = invalidMinor;
-      jump[126] = invalidMinor;
-      jump[127] = errorer("indefinite length bytes/strings are not supported");
-      for (let i = 128; i <= 151; i++) {
-        jump[i] = decodeArrayCompact;
-      }
-      jump[152] = decodeArray8;
-      jump[153] = decodeArray16;
-      jump[154] = decodeArray32;
-      jump[155] = decodeArray64;
-      jump[156] = invalidMinor;
-      jump[157] = invalidMinor;
-      jump[158] = invalidMinor;
-      jump[159] = decodeArrayIndefinite;
-      for (let i = 160; i <= 183; i++) {
-        jump[i] = decodeMapCompact;
-      }
-      jump[184] = decodeMap8;
-      jump[185] = decodeMap16;
-      jump[186] = decodeMap32;
-      jump[187] = decodeMap64;
-      jump[188] = invalidMinor;
-      jump[189] = invalidMinor;
-      jump[190] = invalidMinor;
-      jump[191] = decodeMapIndefinite;
-      for (let i = 192; i <= 215; i++) {
-        jump[i] = decodeTagCompact;
-      }
-      jump[216] = decodeTag8;
-      jump[217] = decodeTag16;
-      jump[218] = decodeTag32;
-      jump[219] = decodeTag64;
-      jump[220] = invalidMinor;
-      jump[221] = invalidMinor;
-      jump[222] = invalidMinor;
-      jump[223] = invalidMinor;
-      for (let i = 224; i <= 243; i++) {
-        jump[i] = errorer("simple values are not supported");
-      }
-      jump[244] = invalidMinor;
-      jump[245] = invalidMinor;
-      jump[246] = invalidMinor;
-      jump[247] = decodeUndefined;
-      jump[248] = errorer("simple values are not supported");
-      jump[249] = decodeFloat16;
-      jump[250] = decodeFloat32;
-      jump[251] = decodeFloat64;
-      jump[252] = invalidMinor;
-      jump[253] = invalidMinor;
-      jump[254] = invalidMinor;
-      jump[255] = decodeBreak;
-      quick = [];
-      for (let i = 0; i < 24; i++) {
-        quick[i] = new Token(Type.uint, i, 1);
-      }
-      for (let i = -1; i >= -24; i--) {
-        quick[31 - i] = new Token(Type.negint, i, 1);
-      }
-      quick[64] = new Token(Type.bytes, new Uint8Array(0), 1);
-      quick[96] = new Token(Type.string, "", 1);
-      quick[128] = new Token(Type.array, 0, 1);
-      quick[160] = new Token(Type.map, 0, 1);
-      quick[244] = new Token(Type.false, false, 1);
-      quick[245] = new Token(Type.true, true, 1);
-      quick[246] = new Token(Type.null, null, 1);
-    }
-  });
 
   // node_modules/cborg/lib/encode.js
+  var defaultEncodeOptions = {
+    float64: false,
+    mapSorter,
+    quickEncodeToken
+  };
+  var rfc8949EncodeOptions = Object.freeze({
+    float64: true,
+    mapSorter: rfc8949MapSorter,
+    quickEncodeToken
+  });
   function makeCborEncoders() {
     const encoders = [];
     encoders[Type.uint.major] = encodeUint;
@@ -3591,6 +4594,225 @@
     encoders[Type.tag.major] = encodeTag;
     encoders[Type.float.major] = encodeFloat;
     return encoders;
+  }
+  var cborEncoders = makeCborEncoders();
+  var defaultWriter = new Bl();
+  var Ref = class _Ref {
+    /**
+     * @param {object|any[]} obj
+     * @param {Reference|undefined} parent
+     */
+    constructor(obj, parent) {
+      this.obj = obj;
+      this.parent = parent;
+    }
+    /**
+     * @param {object|any[]} obj
+     * @returns {boolean}
+     */
+    includes(obj) {
+      let p = this;
+      do {
+        if (p.obj === obj) {
+          return true;
+        }
+      } while (p = p.parent);
+      return false;
+    }
+    /**
+     * @param {Reference|undefined} stack
+     * @param {object|any[]} obj
+     * @returns {Reference}
+     */
+    static createCheck(stack, obj) {
+      if (stack && stack.includes(obj)) {
+        throw new Error(`${encodeErrPrefix} object contains circular references`);
+      }
+      return new _Ref(obj, stack);
+    }
+  };
+  var simpleTokens = {
+    null: new Token(Type.null, null),
+    undefined: new Token(Type.undefined, void 0),
+    true: new Token(Type.true, true),
+    false: new Token(Type.false, false),
+    emptyArray: new Token(Type.array, 0),
+    emptyMap: new Token(Type.map, 0)
+  };
+  var typeEncoders = {
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    number(obj, _typ, _options, _refStack) {
+      if (!Number.isInteger(obj) || !Number.isSafeInteger(obj)) {
+        return new Token(Type.float, obj);
+      } else if (obj >= 0) {
+        return new Token(Type.uint, obj);
+      } else {
+        return new Token(Type.negint, obj);
+      }
+    },
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    bigint(obj, _typ, _options, _refStack) {
+      if (obj >= BigInt(0)) {
+        return new Token(Type.uint, obj);
+      } else {
+        return new Token(Type.negint, obj);
+      }
+    },
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    Uint8Array(obj, _typ, _options, _refStack) {
+      return new Token(Type.bytes, obj);
+    },
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    string(obj, _typ, _options, _refStack) {
+      return new Token(Type.string, obj);
+    },
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    boolean(obj, _typ, _options, _refStack) {
+      return obj ? simpleTokens.true : simpleTokens.false;
+    },
+    /**
+     * @param {any} _obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    null(_obj, _typ, _options, _refStack) {
+      return simpleTokens.null;
+    },
+    /**
+     * @param {any} _obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    undefined(_obj, _typ, _options, _refStack) {
+      return simpleTokens.undefined;
+    },
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    ArrayBuffer(obj, _typ, _options, _refStack) {
+      return new Token(Type.bytes, new Uint8Array(obj));
+    },
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} _options
+     * @param {Reference} [_refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    DataView(obj, _typ, _options, _refStack) {
+      return new Token(Type.bytes, new Uint8Array(obj.buffer, obj.byteOffset, obj.byteLength));
+    },
+    /**
+     * @param {any} obj
+     * @param {string} _typ
+     * @param {EncodeOptions} options
+     * @param {Reference} [refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    Array(obj, _typ, options, refStack) {
+      if (!obj.length) {
+        if (options.addBreakTokens === true) {
+          return [simpleTokens.emptyArray, new Token(Type.break)];
+        }
+        return simpleTokens.emptyArray;
+      }
+      refStack = Ref.createCheck(refStack, obj);
+      const entries = [];
+      let i = 0;
+      for (const e of obj) {
+        entries[i++] = objectToTokens(e, options, refStack);
+      }
+      if (options.addBreakTokens) {
+        return [new Token(Type.array, obj.length), entries, new Token(Type.break)];
+      }
+      return [new Token(Type.array, obj.length), entries];
+    },
+    /**
+     * @param {any} obj
+     * @param {string} typ
+     * @param {EncodeOptions} options
+     * @param {Reference} [refStack]
+     * @returns {TokenOrNestedTokens}
+     */
+    Object(obj, typ, options, refStack) {
+      const isMap = typ !== "Object";
+      const keys = isMap ? obj.keys() : Object.keys(obj);
+      const maxLength = isMap ? obj.size : keys.length;
+      let entries;
+      if (maxLength) {
+        entries = new Array(maxLength);
+        refStack = Ref.createCheck(refStack, obj);
+        const skipUndefined = !isMap && options.ignoreUndefinedProperties;
+        let i = 0;
+        for (const key of keys) {
+          const value = isMap ? obj.get(key) : obj[key];
+          if (skipUndefined && value === void 0) {
+            continue;
+          }
+          entries[i++] = [
+            objectToTokens(key, options, refStack),
+            objectToTokens(value, options, refStack)
+          ];
+        }
+        if (i < maxLength) {
+          entries.length = i;
+        }
+      }
+      if (!(entries == null ? void 0 : entries.length)) {
+        if (options.addBreakTokens === true) {
+          return [simpleTokens.emptyMap, new Token(Type.break)];
+        }
+        return simpleTokens.emptyMap;
+      }
+      sortMapEntries(entries, options);
+      if (options.addBreakTokens) {
+        return [new Token(Type.map, entries.length), entries, new Token(Type.break)];
+      }
+      return [new Token(Type.map, entries.length), entries];
+    }
+  };
+  typeEncoders.Map = typeEncoders.Object;
+  typeEncoders.Buffer = typeEncoders.Uint8Array;
+  for (const typ of "Uint8Clamped Uint16 Uint32 Int8 Int16 Int32 BigUint64 BigInt64 Float32 Float64".split(" ")) {
+    typeEncoders[`${typ}Array`] = typeEncoders.DataView;
   }
   function objectToTokens(obj, options = {}, refStack) {
     const typ = is(obj);
@@ -3658,6 +4880,17 @@
       encoders[tokens.type.major](writer, tokens, options);
     }
   }
+  var MAJOR_UINT = Type.uint.majorEncoded;
+  var MAJOR_NEGINT = Type.negint.majorEncoded;
+  var MAJOR_BYTES = Type.bytes.majorEncoded;
+  var MAJOR_STRING = Type.string.majorEncoded;
+  var MAJOR_ARRAY = Type.array.majorEncoded;
+  var SIMPLE_FALSE = Type.float.majorEncoded | MINOR_FALSE;
+  var SIMPLE_TRUE = Type.float.majorEncoded | MINOR_TRUE;
+  var SIMPLE_NULL = Type.float.majorEncoded | MINOR_NULL;
+  var SIMPLE_UNDEFINED = Type.float.majorEncoded | MINOR_UNDEFINED;
+  var neg1b2 = BigInt(-1);
+  var pos1b2 = BigInt(1);
   function canDirectEncode(options) {
     return options.addBreakTokens !== true;
   }
@@ -3774,268 +5007,48 @@
     }
     return encodeCustom(data, cborEncoders, options);
   }
-  var defaultEncodeOptions, rfc8949EncodeOptions, cborEncoders, defaultWriter, Ref, simpleTokens, typeEncoders, MAJOR_UINT, MAJOR_NEGINT, MAJOR_BYTES, MAJOR_STRING, MAJOR_ARRAY, SIMPLE_FALSE, SIMPLE_TRUE, SIMPLE_NULL, SIMPLE_UNDEFINED, neg1b2, pos1b2;
-  var init_encode = __esm({
-    "node_modules/cborg/lib/encode.js"() {
-      init_buffer_shim();
-      init_is();
-      init_token();
-      init_bl();
-      init_common();
-      init_jump();
-      init_byte_utils();
-      init_uint();
-      init_negint();
-      init_bytes();
-      init_string();
-      init_array();
-      init_map();
-      init_tag();
-      init_float();
-      defaultEncodeOptions = {
-        float64: false,
-        mapSorter,
-        quickEncodeToken
-      };
-      rfc8949EncodeOptions = Object.freeze({
-        float64: true,
-        mapSorter: rfc8949MapSorter,
-        quickEncodeToken
-      });
-      cborEncoders = makeCborEncoders();
-      defaultWriter = new Bl();
-      Ref = class _Ref {
-        /**
-         * @param {object|any[]} obj
-         * @param {Reference|undefined} parent
-         */
-        constructor(obj, parent) {
-          this.obj = obj;
-          this.parent = parent;
-        }
-        /**
-         * @param {object|any[]} obj
-         * @returns {boolean}
-         */
-        includes(obj) {
-          let p = this;
-          do {
-            if (p.obj === obj) {
-              return true;
-            }
-          } while (p = p.parent);
-          return false;
-        }
-        /**
-         * @param {Reference|undefined} stack
-         * @param {object|any[]} obj
-         * @returns {Reference}
-         */
-        static createCheck(stack, obj) {
-          if (stack && stack.includes(obj)) {
-            throw new Error(`${encodeErrPrefix} object contains circular references`);
-          }
-          return new _Ref(obj, stack);
-        }
-      };
-      simpleTokens = {
-        null: new Token(Type.null, null),
-        undefined: new Token(Type.undefined, void 0),
-        true: new Token(Type.true, true),
-        false: new Token(Type.false, false),
-        emptyArray: new Token(Type.array, 0),
-        emptyMap: new Token(Type.map, 0)
-      };
-      typeEncoders = {
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        number(obj, _typ, _options, _refStack) {
-          if (!Number.isInteger(obj) || !Number.isSafeInteger(obj)) {
-            return new Token(Type.float, obj);
-          } else if (obj >= 0) {
-            return new Token(Type.uint, obj);
-          } else {
-            return new Token(Type.negint, obj);
-          }
-        },
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        bigint(obj, _typ, _options, _refStack) {
-          if (obj >= BigInt(0)) {
-            return new Token(Type.uint, obj);
-          } else {
-            return new Token(Type.negint, obj);
-          }
-        },
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        Uint8Array(obj, _typ, _options, _refStack) {
-          return new Token(Type.bytes, obj);
-        },
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        string(obj, _typ, _options, _refStack) {
-          return new Token(Type.string, obj);
-        },
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        boolean(obj, _typ, _options, _refStack) {
-          return obj ? simpleTokens.true : simpleTokens.false;
-        },
-        /**
-         * @param {any} _obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        null(_obj, _typ, _options, _refStack) {
-          return simpleTokens.null;
-        },
-        /**
-         * @param {any} _obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        undefined(_obj, _typ, _options, _refStack) {
-          return simpleTokens.undefined;
-        },
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        ArrayBuffer(obj, _typ, _options, _refStack) {
-          return new Token(Type.bytes, new Uint8Array(obj));
-        },
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} _options
-         * @param {Reference} [_refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        DataView(obj, _typ, _options, _refStack) {
-          return new Token(Type.bytes, new Uint8Array(obj.buffer, obj.byteOffset, obj.byteLength));
-        },
-        /**
-         * @param {any} obj
-         * @param {string} _typ
-         * @param {EncodeOptions} options
-         * @param {Reference} [refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        Array(obj, _typ, options, refStack) {
-          if (!obj.length) {
-            if (options.addBreakTokens === true) {
-              return [simpleTokens.emptyArray, new Token(Type.break)];
-            }
-            return simpleTokens.emptyArray;
-          }
-          refStack = Ref.createCheck(refStack, obj);
-          const entries = [];
-          let i = 0;
-          for (const e of obj) {
-            entries[i++] = objectToTokens(e, options, refStack);
-          }
-          if (options.addBreakTokens) {
-            return [new Token(Type.array, obj.length), entries, new Token(Type.break)];
-          }
-          return [new Token(Type.array, obj.length), entries];
-        },
-        /**
-         * @param {any} obj
-         * @param {string} typ
-         * @param {EncodeOptions} options
-         * @param {Reference} [refStack]
-         * @returns {TokenOrNestedTokens}
-         */
-        Object(obj, typ, options, refStack) {
-          const isMap = typ !== "Object";
-          const keys = isMap ? obj.keys() : Object.keys(obj);
-          const maxLength = isMap ? obj.size : keys.length;
-          let entries;
-          if (maxLength) {
-            entries = new Array(maxLength);
-            refStack = Ref.createCheck(refStack, obj);
-            const skipUndefined = !isMap && options.ignoreUndefinedProperties;
-            let i = 0;
-            for (const key of keys) {
-              const value = isMap ? obj.get(key) : obj[key];
-              if (skipUndefined && value === void 0) {
-                continue;
-              }
-              entries[i++] = [
-                objectToTokens(key, options, refStack),
-                objectToTokens(value, options, refStack)
-              ];
-            }
-            if (i < maxLength) {
-              entries.length = i;
-            }
-          }
-          if (!(entries == null ? void 0 : entries.length)) {
-            if (options.addBreakTokens === true) {
-              return [simpleTokens.emptyMap, new Token(Type.break)];
-            }
-            return simpleTokens.emptyMap;
-          }
-          sortMapEntries(entries, options);
-          if (options.addBreakTokens) {
-            return [new Token(Type.map, entries.length), entries, new Token(Type.break)];
-          }
-          return [new Token(Type.map, entries.length), entries];
-        }
-      };
-      typeEncoders.Map = typeEncoders.Object;
-      typeEncoders.Buffer = typeEncoders.Uint8Array;
-      for (const typ of "Uint8Clamped Uint16 Uint32 Int8 Int16 Int32 BigUint64 BigInt64 Float32 Float64".split(" ")) {
-        typeEncoders[`${typ}Array`] = typeEncoders.DataView;
-      }
-      MAJOR_UINT = Type.uint.majorEncoded;
-      MAJOR_NEGINT = Type.negint.majorEncoded;
-      MAJOR_BYTES = Type.bytes.majorEncoded;
-      MAJOR_STRING = Type.string.majorEncoded;
-      MAJOR_ARRAY = Type.array.majorEncoded;
-      SIMPLE_FALSE = Type.float.majorEncoded | MINOR_FALSE;
-      SIMPLE_TRUE = Type.float.majorEncoded | MINOR_TRUE;
-      SIMPLE_NULL = Type.float.majorEncoded | MINOR_NULL;
-      SIMPLE_UNDEFINED = Type.float.majorEncoded | MINOR_UNDEFINED;
-      neg1b2 = BigInt(-1);
-      pos1b2 = BigInt(1);
-    }
-  });
 
   // node_modules/cborg/lib/decode.js
+  init_buffer_shim();
+  var defaultDecodeOptions = {
+    strict: false,
+    allowIndefinite: true,
+    allowUndefined: true,
+    allowBigInt: true
+  };
+  var Tokeniser = class {
+    /**
+     * @param {Uint8Array} data
+     * @param {DecodeOptions} options
+     */
+    constructor(data, options = {}) {
+      this._pos = 0;
+      this.data = data;
+      this.options = options;
+    }
+    pos() {
+      return this._pos;
+    }
+    done() {
+      return this._pos >= this.data.length;
+    }
+    next() {
+      const byt = this.data[this._pos];
+      let token = quick[byt];
+      if (token === void 0) {
+        const decoder = jump[byt];
+        if (!decoder) {
+          throw new Error(`${decodeErrPrefix} no decoder for major type ${byt >>> 5} (byte 0x${byt.toString(16).padStart(2, "0")})`);
+        }
+        const minor = byt & 31;
+        token = decoder(this.data, this._pos, minor, this.options);
+      }
+      this._pos += token.encodedLength;
+      return token;
+    }
+  };
+  var DONE = Symbol.for("DONE");
+  var BREAK = Symbol.for("BREAK");
   function tokenToArray(token, tokeniser, options) {
     const arr = [];
     for (let i = 0; i < token.value; i++) {
@@ -4138,136 +5151,86 @@
     }
     return decoded;
   }
-  var defaultDecodeOptions, Tokeniser, DONE, BREAK;
-  var init_decode = __esm({
-    "node_modules/cborg/lib/decode.js"() {
-      init_buffer_shim();
-      init_common();
-      init_token();
-      init_jump();
-      init_byte_utils();
-      defaultDecodeOptions = {
-        strict: false,
-        allowIndefinite: true,
-        allowUndefined: true,
-        allowBigInt: true
-      };
-      Tokeniser = class {
-        /**
-         * @param {Uint8Array} data
-         * @param {DecodeOptions} options
-         */
-        constructor(data, options = {}) {
-          this._pos = 0;
-          this.data = data;
-          this.options = options;
-        }
-        pos() {
-          return this._pos;
-        }
-        done() {
-          return this._pos >= this.data.length;
-        }
-        next() {
-          const byt = this.data[this._pos];
-          let token = quick[byt];
-          if (token === void 0) {
-            const decoder = jump[byt];
-            if (!decoder) {
-              throw new Error(`${decodeErrPrefix} no decoder for major type ${byt >>> 5} (byte 0x${byt.toString(16).padStart(2, "0")})`);
-            }
-            const minor = byt & 31;
-            token = decoder(this.data, this._pos, minor, this.options);
-          }
-          this._pos += token.encodedLength;
-          return token;
-        }
-      };
-      DONE = Symbol.for("DONE");
-      BREAK = Symbol.for("BREAK");
-    }
-  });
-
-  // node_modules/cborg/cborg.js
-  var init_cborg = __esm({
-    "node_modules/cborg/cborg.js"() {
-      init_buffer_shim();
-      init_encode();
-      init_decode();
-      init_token();
-    }
-  });
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/cbor.js
-  var import_buffer3, cborEncode, cborDecode;
-  var init_cbor = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/cbor.js"() {
-      init_buffer_shim();
-      import_buffer3 = __toESM(require_buffer());
-      init_cborg();
-      cborEncode = function(data) {
-        return import_buffer3.Buffer.from(encode(data));
-      };
-      cborDecode = function(data) {
-        return decode(import_buffer3.Buffer.isBuffer(data) ? data : import_buffer3.Buffer.from(data, "hex"));
-      };
-    }
-  });
+  var cborEncode = function(data) {
+    return import_buffer3.Buffer.from(encode(data));
+  };
+  var cborDecode = function(data) {
+    return decode(import_buffer3.Buffer.isBuffer(data) ? data : import_buffer3.Buffer.from(data, "hex"));
+  };
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/ur.js
-  var import_buffer4, UR, ur_default;
-  var init_ur = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/ur.js"() {
-      init_buffer_shim();
-      init_errors();
-      init_utils2();
-      init_cbor();
-      import_buffer4 = __toESM(require_buffer());
-      UR = /** @class */
-      (function() {
-        function UR2(_cborPayload, _type) {
-          if (_type === void 0) {
-            _type = "bytes";
-          }
-          this._cborPayload = _cborPayload;
-          this._type = _type;
-          if (!isURType(this._type)) {
-            throw new InvalidTypeError();
-          }
+  var import_buffer4 = __toESM(require_buffer());
+  var UR = (
+    /** @class */
+    (function() {
+      function UR2(_cborPayload, _type) {
+        if (_type === void 0) {
+          _type = "bytes";
         }
-        UR2.fromBuffer = function(buf) {
-          return new UR2(cborEncode(buf));
-        };
-        UR2.from = function(value) {
-          return UR2.fromBuffer(import_buffer4.Buffer.from(value));
-        };
-        UR2.prototype.decodeCBOR = function() {
-          return cborDecode(this._cborPayload);
-        };
-        Object.defineProperty(UR2.prototype, "type", {
-          get: function() {
-            return this._type;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(UR2.prototype, "cbor", {
-          get: function() {
-            return this._cborPayload;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        UR2.prototype.equals = function(ur2) {
-          return this.type === ur2.type && this.cbor.equals(ur2.cbor);
-        };
-        return UR2;
-      })();
-      ur_default = UR;
-    }
-  });
+        this._cborPayload = _cborPayload;
+        this._type = _type;
+        if (!isURType(this._type)) {
+          throw new InvalidTypeError();
+        }
+      }
+      UR2.fromBuffer = function(buf) {
+        return new UR2(cborEncode(buf));
+      };
+      UR2.from = function(value) {
+        return UR2.fromBuffer(import_buffer4.Buffer.from(value));
+      };
+      UR2.prototype.decodeCBOR = function() {
+        return cborDecode(this._cborPayload);
+      };
+      Object.defineProperty(UR2.prototype, "type", {
+        get: function() {
+          return this._type;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(UR2.prototype, "cbor", {
+        get: function() {
+          return this._cborPayload;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      UR2.prototype.equals = function(ur2) {
+        return this.type === ur2.type && this.cbor.equals(ur2.cbor);
+      };
+      return UR2;
+    })()
+  );
+  var ur_default = UR;
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/urEncoder.js
+  init_buffer_shim();
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainEncoder.js
+  init_buffer_shim();
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainUtils.js
+  init_buffer_shim();
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/xoshiro.js
+  init_buffer_shim();
 
   // node_modules/bignumber.js/bignumber.mjs
+  init_buffer_shim();
+  var isNumeric = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+  var mathceil = Math.ceil;
+  var mathfloor = Math.floor;
+  var bignumberError = "[BigNumber Error] ";
+  var tooManyDigits = bignumberError + "Number primitive has more than 15 significant digits: ";
+  var BASE = 1e14;
+  var LOG_BASE = 14;
+  var MAX_SAFE_INTEGER = 9007199254740991;
+  var POWS_TEN = [1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13];
+  var SQRT_BASE = 1e7;
+  var MAX = 1e9;
   function clone(configObject) {
     var div, convertBase, parseNumeric, P = BigNumber2.prototype = { constructor: BigNumber2, toString: null, valueOf: null }, ONE = new BigNumber2(1), DECIMAL_PLACES = 20, ROUNDING_MODE = 4, TO_EXP_NEG = -7, TO_EXP_POS = 21, MIN_EXP = -1e7, MAX_EXP = 1e7, CRYPTO = false, MODULO_MODE = 1, POW_PRECISION = 0, FORMAT = {
       prefix: "",
@@ -5597,2041 +6560,877 @@
     }
     return str;
   }
-  var isNumeric, mathceil, mathfloor, bignumberError, tooManyDigits, BASE, LOG_BASE, MAX_SAFE_INTEGER, POWS_TEN, SQRT_BASE, MAX, BigNumber, bignumber_default;
-  var init_bignumber = __esm({
-    "node_modules/bignumber.js/bignumber.mjs"() {
-      init_buffer_shim();
-      isNumeric = /^-?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
-      mathceil = Math.ceil;
-      mathfloor = Math.floor;
-      bignumberError = "[BigNumber Error] ";
-      tooManyDigits = bignumberError + "Number primitive has more than 15 significant digits: ";
-      BASE = 1e14;
-      LOG_BASE = 14;
-      MAX_SAFE_INTEGER = 9007199254740991;
-      POWS_TEN = [1, 10, 100, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13];
-      SQRT_BASE = 1e7;
-      MAX = 1e9;
-      BigNumber = clone();
-      bignumber_default = BigNumber;
-    }
-  });
-
-  // node_modules/jsbi/dist/jsbi-umd.js
-  var require_jsbi_umd = __commonJS({
-    "node_modules/jsbi/dist/jsbi-umd.js"(exports, module) {
-      init_buffer_shim();
-      (function(e, t) {
-        "object" == typeof exports && "undefined" != typeof module ? module.exports = t() : "function" == typeof define && define.amd ? define(t) : (e = e || self, e.JSBI = t());
-      })(exports, function() {
-        "use strict";
-        var e = Math.imul, t = Math.clz32;
-        function i(e2) {
-          "@babel/helpers - typeof";
-          return i = "function" == typeof Symbol && "symbol" == typeof Symbol.iterator ? function(e3) {
-            return typeof e3;
-          } : function(e3) {
-            return e3 && "function" == typeof Symbol && e3.constructor === Symbol && e3 !== Symbol.prototype ? "symbol" : typeof e3;
-          }, i(e2);
-        }
-        function _(e2, t2) {
-          if (!(e2 instanceof t2)) throw new TypeError("Cannot call a class as a function");
-        }
-        function n(e2, t2) {
-          for (var _2, n2 = 0; n2 < t2.length; n2++) _2 = t2[n2], _2.enumerable = _2.enumerable || false, _2.configurable = true, "value" in _2 && (_2.writable = true), Object.defineProperty(e2, _2.key, _2);
-        }
-        function l(e2, t2, i2) {
-          return t2 && n(e2.prototype, t2), i2 && n(e2, i2), e2;
-        }
-        function g(e2, t2) {
-          if ("function" != typeof t2 && null !== t2) throw new TypeError("Super expression must either be null or a function");
-          e2.prototype = Object.create(t2 && t2.prototype, { constructor: { value: e2, writable: true, configurable: true } }), t2 && u(e2, t2);
-        }
-        function a(e2) {
-          return a = Object.setPrototypeOf ? Object.getPrototypeOf : function(e3) {
-            return e3.__proto__ || Object.getPrototypeOf(e3);
-          }, a(e2);
-        }
-        function u(e2, t2) {
-          return u = Object.setPrototypeOf || function(e3, t3) {
-            return e3.__proto__ = t3, e3;
-          }, u(e2, t2);
-        }
-        function s() {
-          if ("undefined" == typeof Reflect || !Reflect.construct) return false;
-          if (Reflect.construct.sham) return false;
-          if ("function" == typeof Proxy) return true;
-          try {
-            return Boolean.prototype.valueOf.call(Reflect.construct(Boolean, [], function() {
-            })), true;
-          } catch (t2) {
-            return false;
-          }
-        }
-        function r() {
-          return r = s() ? Reflect.construct : function(e2, t2, i2) {
-            var _2 = [null];
-            _2.push.apply(_2, t2);
-            var n2 = Function.bind.apply(e2, _2), l2 = new n2();
-            return i2 && u(l2, i2.prototype), l2;
-          }, r.apply(null, arguments);
-        }
-        function d(e2) {
-          return -1 !== Function.toString.call(e2).indexOf("[native code]");
-        }
-        function h(e2) {
-          var t2 = "function" == typeof Map ? /* @__PURE__ */ new Map() : void 0;
-          return h = function(e3) {
-            function i2() {
-              return r(e3, arguments, a(this).constructor);
-            }
-            if (null === e3 || !d(e3)) return e3;
-            if ("function" != typeof e3) throw new TypeError("Super expression must either be null or a function");
-            if ("undefined" != typeof t2) {
-              if (t2.has(e3)) return t2.get(e3);
-              t2.set(e3, i2);
-            }
-            return i2.prototype = Object.create(e3.prototype, { constructor: { value: i2, enumerable: false, writable: true, configurable: true } }), u(i2, e3);
-          }, h(e2);
-        }
-        function b(e2) {
-          if (void 0 === e2) throw new ReferenceError("this hasn't been initialised - super() hasn't been called");
-          return e2;
-        }
-        function m(e2, t2) {
-          return t2 && ("object" == typeof t2 || "function" == typeof t2) ? t2 : b(e2);
-        }
-        function c(e2) {
-          var t2 = s();
-          return function() {
-            var i2, _2 = a(e2);
-            if (t2) {
-              var n2 = a(this).constructor;
-              i2 = Reflect.construct(_2, arguments, n2);
-            } else i2 = _2.apply(this, arguments);
-            return m(this, i2);
-          };
-        }
-        function v(e2, t2) {
-          if (e2) {
-            if ("string" == typeof e2) return f(e2, t2);
-            var i2 = Object.prototype.toString.call(e2).slice(8, -1);
-            return "Object" === i2 && e2.constructor && (i2 = e2.constructor.name), "Map" === i2 || "Set" === i2 ? Array.from(e2) : "Arguments" === i2 || /^(?:Ui|I)nt(?:8|16|32)(?:Clamped)?Array$/.test(i2) ? f(e2, t2) : void 0;
-          }
-        }
-        function f(e2, t2) {
-          (null == t2 || t2 > e2.length) && (t2 = e2.length);
-          for (var _2 = 0, n2 = Array(t2); _2 < t2; _2++) n2[_2] = e2[_2];
-          return n2;
-        }
-        function y(e2, t2) {
-          var _2 = "undefined" != typeof Symbol && e2[Symbol.iterator] || e2["@@iterator"];
-          if (!_2) {
-            if (Array.isArray(e2) || (_2 = v(e2)) || t2 && e2 && "number" == typeof e2.length) {
-              _2 && (e2 = _2);
-              var n2 = 0, l2 = function() {
-              };
-              return { s: l2, n: function() {
-                return n2 >= e2.length ? { done: true } : { done: false, value: e2[n2++] };
-              }, e: function(t3) {
-                throw t3;
-              }, f: l2 };
-            }
-            throw new TypeError("Invalid attempt to iterate non-iterable instance.\nIn order to be iterable, non-array objects must have a [Symbol.iterator]() method.");
-          }
-          var g2, a2 = true, u2 = false;
-          return { s: function() {
-            _2 = _2.call(e2);
-          }, n: function() {
-            var e3 = _2.next();
-            return a2 = e3.done, e3;
-          }, e: function(t3) {
-            u2 = true, g2 = t3;
-          }, f: function() {
-            try {
-              a2 || null == _2.return || _2.return();
-            } finally {
-              if (u2) throw g2;
-            }
-          } };
-        }
-        var k = (function(e2) {
-          var t2 = Math.abs, n2 = Math.max;
-          function o(e3, t3) {
-            var i2;
-            if (_(this, o), e3 > o.__kMaxLength) throw new RangeError("Maximum BigInt size exceeded");
-            return i2 = a2.call(this, e3), i2.sign = t3, i2;
-          }
-          g(o, e2);
-          var a2 = c(o);
-          return l(o, [{ key: "toDebugString", value: function() {
-            var e3, t3 = ["BigInt["], i2 = y(this);
-            try {
-              for (i2.s(); !(e3 = i2.n()).done; ) {
-                var _2 = e3.value;
-                t3.push((_2 ? (_2 >>> 0).toString(16) : _2) + ", ");
-              }
-            } catch (e4) {
-              i2.e(e4);
-            } finally {
-              i2.f();
-            }
-            return t3.push("]"), t3.join("");
-          } }, { key: "toString", value: function() {
-            var e3 = 0 < arguments.length && void 0 !== arguments[0] ? arguments[0] : 10;
-            if (2 > e3 || 36 < e3) throw new RangeError("toString() radix argument must be between 2 and 36");
-            return 0 === this.length ? "0" : 0 == (e3 & e3 - 1) ? o.__toStringBasePowerOfTwo(this, e3) : o.__toStringGeneric(this, e3, false);
-          } }, { key: "__copy", value: function() {
-            for (var e3 = new o(this.length, this.sign), t3 = 0; t3 < this.length; t3++) e3[t3] = this[t3];
-            return e3;
-          } }, { key: "__trim", value: function() {
-            for (var e3 = this.length, t3 = this[e3 - 1]; 0 === t3; ) e3--, t3 = this[e3 - 1], this.pop();
-            return 0 === e3 && (this.sign = false), this;
-          } }, { key: "__initializeDigits", value: function() {
-            for (var e3 = 0; e3 < this.length; e3++) this[e3] = 0;
-          } }, { key: "__clzmsd", value: function() {
-            return o.__clz32(this[this.length - 1]);
-          } }, { key: "__inplaceMultiplyAdd", value: function(e3, t3, _2) {
-            _2 > this.length && (_2 = this.length);
-            for (var n3 = 65535 & e3, l2 = e3 >>> 16, g2 = 0, a3 = 65535 & t3, u2 = t3 >>> 16, s2 = 0; s2 < _2; s2++) {
-              var r2 = this.__digit(s2), d2 = 65535 & r2, h2 = r2 >>> 16, b2 = o.__imul(d2, n3), m2 = o.__imul(d2, l2), c2 = o.__imul(h2, n3), v2 = o.__imul(h2, l2), f2 = a3 + (65535 & b2), y2 = u2 + g2 + (f2 >>> 16) + (b2 >>> 16) + (65535 & m2) + (65535 & c2);
-              a3 = (m2 >>> 16) + (c2 >>> 16) + (65535 & v2) + (y2 >>> 16), g2 = a3 >>> 16, a3 &= 65535, u2 = v2 >>> 16;
-              this.__setDigit(s2, 65535 & f2 | y2 << 16);
-            }
-            if (0 !== g2 || 0 !== a3 || 0 !== u2) throw new Error("implementation bug");
-          } }, { key: "__inplaceAdd", value: function(e3, t3, _2) {
-            for (var n3, l2 = 0, g2 = 0; g2 < _2; g2++) n3 = this.__halfDigit(t3 + g2) + e3.__halfDigit(g2) + l2, l2 = n3 >>> 16, this.__setHalfDigit(t3 + g2, n3);
-            return l2;
-          } }, { key: "__inplaceSub", value: function(e3, t3, _2) {
-            var n3 = 0;
-            if (1 & t3) {
-              t3 >>= 1;
-              for (var l2 = this.__digit(t3), g2 = 65535 & l2, o2 = 0; o2 < _2 - 1 >>> 1; o2++) {
-                var a3 = e3.__digit(o2), u2 = (l2 >>> 16) - (65535 & a3) - n3;
-                n3 = 1 & u2 >>> 16, this.__setDigit(t3 + o2, u2 << 16 | 65535 & g2), l2 = this.__digit(t3 + o2 + 1), g2 = (65535 & l2) - (a3 >>> 16) - n3, n3 = 1 & g2 >>> 16;
-              }
-              var s2 = e3.__digit(o2), r2 = (l2 >>> 16) - (65535 & s2) - n3;
-              n3 = 1 & r2 >>> 16, this.__setDigit(t3 + o2, r2 << 16 | 65535 & g2);
-              if (t3 + o2 + 1 >= this.length) throw new RangeError("out of bounds");
-              0 == (1 & _2) && (l2 = this.__digit(t3 + o2 + 1), g2 = (65535 & l2) - (s2 >>> 16) - n3, n3 = 1 & g2 >>> 16, this.__setDigit(t3 + e3.length, 4294901760 & l2 | 65535 & g2));
-            } else {
-              t3 >>= 1;
-              for (var d2 = 0; d2 < e3.length - 1; d2++) {
-                var h2 = this.__digit(t3 + d2), b2 = e3.__digit(d2), m2 = (65535 & h2) - (65535 & b2) - n3;
-                n3 = 1 & m2 >>> 16;
-                var c2 = (h2 >>> 16) - (b2 >>> 16) - n3;
-                n3 = 1 & c2 >>> 16, this.__setDigit(t3 + d2, c2 << 16 | 65535 & m2);
-              }
-              var v2 = this.__digit(t3 + d2), f2 = e3.__digit(d2), y2 = (65535 & v2) - (65535 & f2) - n3;
-              n3 = 1 & y2 >>> 16;
-              var k2 = 0;
-              0 == (1 & _2) && (k2 = (v2 >>> 16) - (f2 >>> 16) - n3, n3 = 1 & k2 >>> 16), this.__setDigit(t3 + d2, k2 << 16 | 65535 & y2);
-            }
-            return n3;
-          } }, { key: "__inplaceRightShift", value: function(e3) {
-            if (0 !== e3) {
-              for (var t3, _2 = this.__digit(0) >>> e3, n3 = this.length - 1, l2 = 0; l2 < n3; l2++) t3 = this.__digit(l2 + 1), this.__setDigit(l2, t3 << 32 - e3 | _2), _2 = t3 >>> e3;
-              this.__setDigit(n3, _2);
-            }
-          } }, { key: "__digit", value: function(e3) {
-            return this[e3];
-          } }, { key: "__unsignedDigit", value: function(e3) {
-            return this[e3] >>> 0;
-          } }, { key: "__setDigit", value: function(e3, t3) {
-            this[e3] = 0 | t3;
-          } }, { key: "__setDigitGrow", value: function(e3, t3) {
-            this[e3] = 0 | t3;
-          } }, { key: "__halfDigitLength", value: function() {
-            var e3 = this.length;
-            return 65535 >= this.__unsignedDigit(e3 - 1) ? 2 * e3 - 1 : 2 * e3;
-          } }, { key: "__halfDigit", value: function(e3) {
-            return 65535 & this[e3 >>> 1] >>> ((1 & e3) << 4);
-          } }, { key: "__setHalfDigit", value: function(e3, t3) {
-            var i2 = e3 >>> 1, _2 = this.__digit(i2), n3 = 1 & e3 ? 65535 & _2 | t3 << 16 : 4294901760 & _2 | 65535 & t3;
-            this.__setDigit(i2, n3);
-          } }], [{ key: "BigInt", value: function(e3) {
-            var t3 = Math.floor, _2 = Number.isFinite;
-            if ("number" == typeof e3) {
-              if (0 === e3) return o.__zero();
-              if ((0 | e3) === e3) return 0 > e3 ? o.__oneDigit(-e3, true) : o.__oneDigit(e3, false);
-              if (!_2(e3) || t3(e3) !== e3) throw new RangeError("The number " + e3 + " cannot be converted to BigInt because it is not an integer");
-              return o.__fromDouble(e3);
-            }
-            if ("string" == typeof e3) {
-              var n3 = o.__fromString(e3);
-              if (null === n3) throw new SyntaxError("Cannot convert " + e3 + " to a BigInt");
-              return n3;
-            }
-            if ("boolean" == typeof e3) return true === e3 ? o.__oneDigit(1, false) : o.__zero();
-            if ("object" === i(e3)) {
-              if (e3.constructor === o) return e3;
-              var l2 = o.__toPrimitive(e3);
-              return o.BigInt(l2);
-            }
-            throw new TypeError("Cannot convert " + e3 + " to a BigInt");
-          } }, { key: "toNumber", value: function(e3) {
-            var t3 = e3.length;
-            if (0 === t3) return 0;
-            if (1 === t3) {
-              var i2 = e3.__unsignedDigit(0);
-              return e3.sign ? -i2 : i2;
-            }
-            var _2 = e3.__digit(t3 - 1), n3 = o.__clz32(_2), l2 = 32 * t3 - n3;
-            if (1024 < l2) return e3.sign ? -Infinity : 1 / 0;
-            var g2 = l2 - 1, a3 = _2, u2 = t3 - 1, s2 = n3 + 1, r2 = 32 === s2 ? 0 : a3 << s2;
-            r2 >>>= 12;
-            var d2 = s2 - 12, h2 = 12 <= s2 ? 0 : a3 << 20 + s2, b2 = 20 + s2;
-            0 < d2 && 0 < u2 && (u2--, a3 = e3.__digit(u2), r2 |= a3 >>> 32 - d2, h2 = a3 << d2, b2 = d2), 0 < b2 && 0 < u2 && (u2--, a3 = e3.__digit(u2), h2 |= a3 >>> 32 - b2, b2 -= 32);
-            var m2 = o.__decideRounding(e3, b2, u2, a3);
-            if ((1 === m2 || 0 === m2 && 1 == (1 & h2)) && (h2 = h2 + 1 >>> 0, 0 === h2 && (r2++, 0 != r2 >>> 20 && (r2 = 0, g2++, 1023 < g2)))) return e3.sign ? -Infinity : 1 / 0;
-            var c2 = e3.sign ? -2147483648 : 0;
-            return g2 = g2 + 1023 << 20, o.__kBitConversionInts[1] = c2 | g2 | r2, o.__kBitConversionInts[0] = h2, o.__kBitConversionDouble[0];
-          } }, { key: "unaryMinus", value: function(e3) {
-            if (0 === e3.length) return e3;
-            var t3 = e3.__copy();
-            return t3.sign = !e3.sign, t3;
-          } }, { key: "bitwiseNot", value: function(e3) {
-            return e3.sign ? o.__absoluteSubOne(e3).__trim() : o.__absoluteAddOne(e3, true);
-          } }, { key: "exponentiate", value: function(e3, t3) {
-            if (t3.sign) throw new RangeError("Exponent must be positive");
-            if (0 === t3.length) return o.__oneDigit(1, false);
-            if (0 === e3.length) return e3;
-            if (1 === e3.length && 1 === e3.__digit(0)) return e3.sign && 0 == (1 & t3.__digit(0)) ? o.unaryMinus(e3) : e3;
-            if (1 < t3.length) throw new RangeError("BigInt too big");
-            var i2 = t3.__unsignedDigit(0);
-            if (1 === i2) return e3;
-            if (i2 >= o.__kMaxLengthBits) throw new RangeError("BigInt too big");
-            if (1 === e3.length && 2 === e3.__digit(0)) {
-              var _2 = 1 + (i2 >>> 5), n3 = e3.sign && 0 != (1 & i2), l2 = new o(_2, n3);
-              l2.__initializeDigits();
-              var g2 = 1 << (31 & i2);
-              return l2.__setDigit(_2 - 1, g2), l2;
-            }
-            var a3 = null, u2 = e3;
-            for (0 != (1 & i2) && (a3 = e3), i2 >>= 1; 0 !== i2; i2 >>= 1) u2 = o.multiply(u2, u2), 0 != (1 & i2) && (null === a3 ? a3 = u2 : a3 = o.multiply(a3, u2));
-            return a3;
-          } }, { key: "multiply", value: function(e3, t3) {
-            if (0 === e3.length) return e3;
-            if (0 === t3.length) return t3;
-            var _2 = e3.length + t3.length;
-            32 <= e3.__clzmsd() + t3.__clzmsd() && _2--;
-            var n3 = new o(_2, e3.sign !== t3.sign);
-            n3.__initializeDigits();
-            for (var l2 = 0; l2 < e3.length; l2++) o.__multiplyAccumulate(t3, e3.__digit(l2), n3, l2);
-            return n3.__trim();
-          } }, { key: "divide", value: function(e3, t3) {
-            if (0 === t3.length) throw new RangeError("Division by zero");
-            if (0 > o.__absoluteCompare(e3, t3)) return o.__zero();
-            var i2, _2 = e3.sign !== t3.sign, n3 = t3.__unsignedDigit(0);
-            if (1 === t3.length && 65535 >= n3) {
-              if (1 === n3) return _2 === e3.sign ? e3 : o.unaryMinus(e3);
-              i2 = o.__absoluteDivSmall(e3, n3, null);
-            } else i2 = o.__absoluteDivLarge(e3, t3, true, false);
-            return i2.sign = _2, i2.__trim();
-          } }, { key: "remainder", value: function e3(t3, i2) {
-            if (0 === i2.length) throw new RangeError("Division by zero");
-            if (0 > o.__absoluteCompare(t3, i2)) return t3;
-            var _2 = i2.__unsignedDigit(0);
-            if (1 === i2.length && 65535 >= _2) {
-              if (1 === _2) return o.__zero();
-              var n3 = o.__absoluteModSmall(t3, _2);
-              return 0 === n3 ? o.__zero() : o.__oneDigit(n3, t3.sign);
-            }
-            var e4 = o.__absoluteDivLarge(t3, i2, false, true);
-            return e4.sign = t3.sign, e4.__trim();
-          } }, { key: "add", value: function(e3, t3) {
-            var i2 = e3.sign;
-            return i2 === t3.sign ? o.__absoluteAdd(e3, t3, i2) : 0 <= o.__absoluteCompare(e3, t3) ? o.__absoluteSub(e3, t3, i2) : o.__absoluteSub(t3, e3, !i2);
-          } }, { key: "subtract", value: function(e3, t3) {
-            var i2 = e3.sign;
-            return i2 === t3.sign ? 0 <= o.__absoluteCompare(e3, t3) ? o.__absoluteSub(e3, t3, i2) : o.__absoluteSub(t3, e3, !i2) : o.__absoluteAdd(e3, t3, i2);
-          } }, { key: "leftShift", value: function(e3, t3) {
-            return 0 === t3.length || 0 === e3.length ? e3 : t3.sign ? o.__rightShiftByAbsolute(e3, t3) : o.__leftShiftByAbsolute(e3, t3);
-          } }, { key: "signedRightShift", value: function(e3, t3) {
-            return 0 === t3.length || 0 === e3.length ? e3 : t3.sign ? o.__leftShiftByAbsolute(e3, t3) : o.__rightShiftByAbsolute(e3, t3);
-          } }, { key: "unsignedRightShift", value: function() {
-            throw new TypeError("BigInts have no unsigned right shift; use >> instead");
-          } }, { key: "lessThan", value: function(e3, t3) {
-            return 0 > o.__compareToBigInt(e3, t3);
-          } }, { key: "lessThanOrEqual", value: function(e3, t3) {
-            return 0 >= o.__compareToBigInt(e3, t3);
-          } }, { key: "greaterThan", value: function(e3, t3) {
-            return 0 < o.__compareToBigInt(e3, t3);
-          } }, { key: "greaterThanOrEqual", value: function(e3, t3) {
-            return 0 <= o.__compareToBigInt(e3, t3);
-          } }, { key: "equal", value: function(e3, t3) {
-            if (e3.sign !== t3.sign) return false;
-            if (e3.length !== t3.length) return false;
-            for (var _2 = 0; _2 < e3.length; _2++) if (e3.__digit(_2) !== t3.__digit(_2)) return false;
-            return true;
-          } }, { key: "notEqual", value: function(e3, t3) {
-            return !o.equal(e3, t3);
-          } }, { key: "bitwiseAnd", value: function(e3, t3) {
-            if (!e3.sign && !t3.sign) return o.__absoluteAnd(e3, t3).__trim();
-            if (e3.sign && t3.sign) {
-              var i2 = n2(e3.length, t3.length) + 1, _2 = o.__absoluteSubOne(e3, i2), l2 = o.__absoluteSubOne(t3);
-              return _2 = o.__absoluteOr(_2, l2, _2), o.__absoluteAddOne(_2, true, _2).__trim();
-            }
-            if (e3.sign) {
-              var g2 = [t3, e3];
-              e3 = g2[0], t3 = g2[1];
-            }
-            return o.__absoluteAndNot(e3, o.__absoluteSubOne(t3)).__trim();
-          } }, { key: "bitwiseXor", value: function(e3, t3) {
-            if (!e3.sign && !t3.sign) return o.__absoluteXor(e3, t3).__trim();
-            if (e3.sign && t3.sign) {
-              var i2 = n2(e3.length, t3.length), _2 = o.__absoluteSubOne(e3, i2), l2 = o.__absoluteSubOne(t3);
-              return o.__absoluteXor(_2, l2, _2).__trim();
-            }
-            var g2 = n2(e3.length, t3.length) + 1;
-            if (e3.sign) {
-              var a3 = [t3, e3];
-              e3 = a3[0], t3 = a3[1];
-            }
-            var u2 = o.__absoluteSubOne(t3, g2);
-            return u2 = o.__absoluteXor(u2, e3, u2), o.__absoluteAddOne(u2, true, u2).__trim();
-          } }, { key: "bitwiseOr", value: function(e3, t3) {
-            var i2 = n2(e3.length, t3.length);
-            if (!e3.sign && !t3.sign) return o.__absoluteOr(e3, t3).__trim();
-            if (e3.sign && t3.sign) {
-              var _2 = o.__absoluteSubOne(e3, i2), l2 = o.__absoluteSubOne(t3);
-              return _2 = o.__absoluteAnd(_2, l2, _2), o.__absoluteAddOne(_2, true, _2).__trim();
-            }
-            if (e3.sign) {
-              var g2 = [t3, e3];
-              e3 = g2[0], t3 = g2[1];
-            }
-            var a3 = o.__absoluteSubOne(t3, i2);
-            return a3 = o.__absoluteAndNot(a3, e3, a3), o.__absoluteAddOne(a3, true, a3).__trim();
-          } }, { key: "asIntN", value: function(e3, t3) {
-            if (0 === t3.length) return t3;
-            if (0 === e3) return o.__zero();
-            if (e3 >= o.__kMaxLengthBits) return t3;
-            var _2 = e3 + 31 >>> 5;
-            if (t3.length < _2) return t3;
-            var n3 = t3.__unsignedDigit(_2 - 1), l2 = 1 << (31 & e3 - 1);
-            if (t3.length === _2 && n3 < l2) return t3;
-            if (!((n3 & l2) === l2)) return o.__truncateToNBits(e3, t3);
-            if (!t3.sign) return o.__truncateAndSubFromPowerOfTwo(e3, t3, true);
-            if (0 == (n3 & l2 - 1)) {
-              for (var g2 = _2 - 2; 0 <= g2; g2--) if (0 !== t3.__digit(g2)) return o.__truncateAndSubFromPowerOfTwo(e3, t3, false);
-              return t3.length === _2 && n3 === l2 ? t3 : o.__truncateToNBits(e3, t3);
-            }
-            return o.__truncateAndSubFromPowerOfTwo(e3, t3, false);
-          } }, { key: "asUintN", value: function(e3, t3) {
-            if (0 === t3.length) return t3;
-            if (0 === e3) return o.__zero();
-            if (t3.sign) {
-              if (e3 > o.__kMaxLengthBits) throw new RangeError("BigInt too big");
-              return o.__truncateAndSubFromPowerOfTwo(e3, t3, false);
-            }
-            if (e3 >= o.__kMaxLengthBits) return t3;
-            var i2 = e3 + 31 >>> 5;
-            if (t3.length < i2) return t3;
-            var _2 = 31 & e3;
-            if (t3.length == i2) {
-              if (0 === _2) return t3;
-              var n3 = t3.__digit(i2 - 1);
-              if (0 == n3 >>> _2) return t3;
-            }
-            return o.__truncateToNBits(e3, t3);
-          } }, { key: "ADD", value: function(e3, t3) {
-            if (e3 = o.__toPrimitive(e3), t3 = o.__toPrimitive(t3), "string" == typeof e3) return "string" != typeof t3 && (t3 = t3.toString()), e3 + t3;
-            if ("string" == typeof t3) return e3.toString() + t3;
-            if (e3 = o.__toNumeric(e3), t3 = o.__toNumeric(t3), o.__isBigInt(e3) && o.__isBigInt(t3)) return o.add(e3, t3);
-            if ("number" == typeof e3 && "number" == typeof t3) return e3 + t3;
-            throw new TypeError("Cannot mix BigInt and other types, use explicit conversions");
-          } }, { key: "LT", value: function(e3, t3) {
-            return o.__compare(e3, t3, 0);
-          } }, { key: "LE", value: function(e3, t3) {
-            return o.__compare(e3, t3, 1);
-          } }, { key: "GT", value: function(e3, t3) {
-            return o.__compare(e3, t3, 2);
-          } }, { key: "GE", value: function(e3, t3) {
-            return o.__compare(e3, t3, 3);
-          } }, { key: "EQ", value: function(e3, t3) {
-            for (; ; ) {
-              if (o.__isBigInt(e3)) return o.__isBigInt(t3) ? o.equal(e3, t3) : o.EQ(t3, e3);
-              if ("number" == typeof e3) {
-                if (o.__isBigInt(t3)) return o.__equalToNumber(t3, e3);
-                if ("object" !== i(t3)) return e3 == t3;
-                t3 = o.__toPrimitive(t3);
-              } else if ("string" == typeof e3) {
-                if (o.__isBigInt(t3)) return e3 = o.__fromString(e3), null !== e3 && o.equal(e3, t3);
-                if ("object" !== i(t3)) return e3 == t3;
-                t3 = o.__toPrimitive(t3);
-              } else if ("boolean" == typeof e3) {
-                if (o.__isBigInt(t3)) return o.__equalToNumber(t3, +e3);
-                if ("object" !== i(t3)) return e3 == t3;
-                t3 = o.__toPrimitive(t3);
-              } else if ("symbol" === i(e3)) {
-                if (o.__isBigInt(t3)) return false;
-                if ("object" !== i(t3)) return e3 == t3;
-                t3 = o.__toPrimitive(t3);
-              } else if ("object" === i(e3)) {
-                if ("object" === i(t3) && t3.constructor !== o) return e3 == t3;
-                e3 = o.__toPrimitive(e3);
-              } else return e3 == t3;
-            }
-          } }, { key: "NE", value: function(e3, t3) {
-            return !o.EQ(e3, t3);
-          } }, { key: "__zero", value: function() {
-            return new o(0, false);
-          } }, { key: "__oneDigit", value: function(e3, t3) {
-            var i2 = new o(1, t3);
-            return i2.__setDigit(0, e3), i2;
-          } }, { key: "__decideRounding", value: function(e3, t3, i2, _2) {
-            if (0 < t3) return -1;
-            var n3;
-            if (0 > t3) n3 = -t3 - 1;
-            else {
-              if (0 === i2) return -1;
-              i2--, _2 = e3.__digit(i2), n3 = 31;
-            }
-            var l2 = 1 << n3;
-            if (0 == (_2 & l2)) return -1;
-            if (l2 -= 1, 0 != (_2 & l2)) return 1;
-            for (; 0 < i2; ) if (i2--, 0 !== e3.__digit(i2)) return 1;
-            return 0;
-          } }, { key: "__fromDouble", value: function(e3) {
-            o.__kBitConversionDouble[0] = e3;
-            var t3, i2 = 2047 & o.__kBitConversionInts[1] >>> 20, _2 = i2 - 1023, n3 = (_2 >>> 5) + 1, l2 = new o(n3, 0 > e3), g2 = 1048575 & o.__kBitConversionInts[1] | 1048576, a3 = o.__kBitConversionInts[0], u2 = 20, s2 = 31 & _2, r2 = 0;
-            if (s2 < u2) {
-              var d2 = u2 - s2;
-              r2 = d2 + 32, t3 = g2 >>> d2, g2 = g2 << 32 - d2 | a3 >>> d2, a3 <<= 32 - d2;
-            } else if (s2 === u2) r2 = 32, t3 = g2, g2 = a3;
-            else {
-              var h2 = s2 - u2;
-              r2 = 32 - h2, t3 = g2 << h2 | a3 >>> 32 - h2, g2 = a3 << h2;
-            }
-            l2.__setDigit(n3 - 1, t3);
-            for (var b2 = n3 - 2; 0 <= b2; b2--) 0 < r2 ? (r2 -= 32, t3 = g2, g2 = a3) : t3 = 0, l2.__setDigit(b2, t3);
-            return l2.__trim();
-          } }, { key: "__isWhitespace", value: function(e3) {
-            return !!(13 >= e3 && 9 <= e3) || (159 >= e3 ? 32 == e3 : 131071 >= e3 ? 160 == e3 || 5760 == e3 : 196607 >= e3 ? (e3 &= 131071, 10 >= e3 || 40 == e3 || 41 == e3 || 47 == e3 || 95 == e3 || 4096 == e3) : 65279 == e3);
-          } }, { key: "__fromString", value: function(e3) {
-            var t3 = 1 < arguments.length && void 0 !== arguments[1] ? arguments[1] : 0, i2 = 0, _2 = e3.length, n3 = 0;
-            if (n3 === _2) return o.__zero();
-            for (var l2 = e3.charCodeAt(n3); o.__isWhitespace(l2); ) {
-              if (++n3 === _2) return o.__zero();
-              l2 = e3.charCodeAt(n3);
-            }
-            if (43 === l2) {
-              if (++n3 === _2) return null;
-              l2 = e3.charCodeAt(n3), i2 = 1;
-            } else if (45 === l2) {
-              if (++n3 === _2) return null;
-              l2 = e3.charCodeAt(n3), i2 = -1;
-            }
-            if (0 === t3) {
-              if (t3 = 10, 48 === l2) {
-                if (++n3 === _2) return o.__zero();
-                if (l2 = e3.charCodeAt(n3), 88 === l2 || 120 === l2) {
-                  if (t3 = 16, ++n3 === _2) return null;
-                  l2 = e3.charCodeAt(n3);
-                } else if (79 === l2 || 111 === l2) {
-                  if (t3 = 8, ++n3 === _2) return null;
-                  l2 = e3.charCodeAt(n3);
-                } else if (66 === l2 || 98 === l2) {
-                  if (t3 = 2, ++n3 === _2) return null;
-                  l2 = e3.charCodeAt(n3);
-                }
-              }
-            } else if (16 === t3 && 48 === l2) {
-              if (++n3 === _2) return o.__zero();
-              if (l2 = e3.charCodeAt(n3), 88 === l2 || 120 === l2) {
-                if (++n3 === _2) return null;
-                l2 = e3.charCodeAt(n3);
-              }
-            }
-            for (; 48 === l2; ) {
-              if (++n3 === _2) return o.__zero();
-              l2 = e3.charCodeAt(n3);
-            }
-            var g2 = _2 - n3, a3 = o.__kMaxBitsPerChar[t3], u2 = o.__kBitsPerCharTableMultiplier - 1;
-            if (g2 > 1073741824 / a3) return null;
-            var s2 = a3 * g2 + u2 >>> o.__kBitsPerCharTableShift, r2 = new o(s2 + 31 >>> 5, false), h2 = 10 > t3 ? t3 : 10, b2 = 10 < t3 ? t3 - 10 : 0;
-            if (0 == (t3 & t3 - 1)) {
-              a3 >>= o.__kBitsPerCharTableShift;
-              var c2 = [], v2 = [], f2 = false;
-              do {
-                for (var y2, k2 = 0, D = 0; ; ) {
-                  if (y2 = void 0, l2 - 48 >>> 0 < h2) y2 = l2 - 48;
-                  else if ((32 | l2) - 97 >>> 0 < b2) y2 = (32 | l2) - 87;
-                  else {
-                    f2 = true;
-                    break;
-                  }
-                  if (D += a3, k2 = k2 << a3 | y2, ++n3 === _2) {
-                    f2 = true;
-                    break;
-                  }
-                  if (l2 = e3.charCodeAt(n3), 32 < D + a3) break;
-                }
-                c2.push(k2), v2.push(D);
-              } while (!f2);
-              o.__fillFromParts(r2, c2, v2);
-            } else {
-              r2.__initializeDigits();
-              var p = false, B = 0;
-              do {
-                for (var S, C = 0, A = 1; ; ) {
-                  if (S = void 0, l2 - 48 >>> 0 < h2) S = l2 - 48;
-                  else if ((32 | l2) - 97 >>> 0 < b2) S = (32 | l2) - 87;
-                  else {
-                    p = true;
-                    break;
-                  }
-                  var T = A * t3;
-                  if (4294967295 < T) break;
-                  if (A = T, C = C * t3 + S, B++, ++n3 === _2) {
-                    p = true;
-                    break;
-                  }
-                  l2 = e3.charCodeAt(n3);
-                }
-                u2 = 32 * o.__kBitsPerCharTableMultiplier - 1;
-                var m2 = a3 * B + u2 >>> o.__kBitsPerCharTableShift + 5;
-                r2.__inplaceMultiplyAdd(A, C, m2);
-              } while (!p);
-            }
-            if (n3 !== _2) {
-              if (!o.__isWhitespace(l2)) return null;
-              for (n3++; n3 < _2; n3++) if (l2 = e3.charCodeAt(n3), !o.__isWhitespace(l2)) return null;
-            }
-            return 0 !== i2 && 10 !== t3 ? null : (r2.sign = -1 === i2, r2.__trim());
-          } }, { key: "__fillFromParts", value: function(e3, t3, _2) {
-            for (var n3 = 0, l2 = 0, g2 = 0, o2 = t3.length - 1; 0 <= o2; o2--) {
-              var a3 = t3[o2], u2 = _2[o2];
-              l2 |= a3 << g2, g2 += u2, 32 === g2 ? (e3.__setDigit(n3++, l2), g2 = 0, l2 = 0) : 32 < g2 && (e3.__setDigit(n3++, l2), g2 -= 32, l2 = a3 >>> u2 - g2);
-            }
-            if (0 !== l2) {
-              if (n3 >= e3.length) throw new Error("implementation bug");
-              e3.__setDigit(n3++, l2);
-            }
-            for (; n3 < e3.length; n3++) e3.__setDigit(n3, 0);
-          } }, { key: "__toStringBasePowerOfTwo", value: function(e3, t3) {
-            var _2 = e3.length, n3 = t3 - 1;
-            n3 = (85 & n3 >>> 1) + (85 & n3), n3 = (51 & n3 >>> 2) + (51 & n3), n3 = (15 & n3 >>> 4) + (15 & n3);
-            var l2 = n3, g2 = t3 - 1, a3 = e3.__digit(_2 - 1), u2 = o.__clz32(a3), s2 = 0 | (32 * _2 - u2 + l2 - 1) / l2;
-            if (e3.sign && s2++, 268435456 < s2) throw new Error("string too long");
-            for (var r2 = Array(s2), d2 = s2 - 1, h2 = 0, b2 = 0, m2 = 0; m2 < _2 - 1; m2++) {
-              var c2 = e3.__digit(m2), v2 = (h2 | c2 << b2) & g2;
-              r2[d2--] = o.__kConversionChars[v2];
-              var f2 = l2 - b2;
-              for (h2 = c2 >>> f2, b2 = 32 - f2; b2 >= l2; ) r2[d2--] = o.__kConversionChars[h2 & g2], h2 >>>= l2, b2 -= l2;
-            }
-            var y2 = (h2 | a3 << b2) & g2;
-            for (r2[d2--] = o.__kConversionChars[y2], h2 = a3 >>> l2 - b2; 0 !== h2; ) r2[d2--] = o.__kConversionChars[h2 & g2], h2 >>>= l2;
-            if (e3.sign && (r2[d2--] = "-"), -1 !== d2) throw new Error("implementation bug");
-            return r2.join("");
-          } }, { key: "__toStringGeneric", value: function(e3, t3, _2) {
-            var n3 = e3.length;
-            if (0 === n3) return "";
-            if (1 === n3) {
-              var l2 = e3.__unsignedDigit(0).toString(t3);
-              return false === _2 && e3.sign && (l2 = "-" + l2), l2;
-            }
-            var g2 = 32 * n3 - o.__clz32(e3.__digit(n3 - 1)), a3 = o.__kMaxBitsPerChar[t3], u2 = a3 - 1, s2 = g2 * o.__kBitsPerCharTableMultiplier;
-            s2 += u2 - 1, s2 = 0 | s2 / u2;
-            var r2, d2, h2 = s2 + 1 >> 1, b2 = o.exponentiate(o.__oneDigit(t3, false), o.__oneDigit(h2, false)), m2 = b2.__unsignedDigit(0);
-            if (1 === b2.length && 65535 >= m2) {
-              r2 = new o(e3.length, false), r2.__initializeDigits();
-              for (var c2, v2 = 0, f2 = 2 * e3.length - 1; 0 <= f2; f2--) c2 = v2 << 16 | e3.__halfDigit(f2), r2.__setHalfDigit(f2, 0 | c2 / m2), v2 = 0 | c2 % m2;
-              d2 = v2.toString(t3);
-            } else {
-              var y2 = o.__absoluteDivLarge(e3, b2, true, true);
-              r2 = y2.quotient;
-              var k2 = y2.remainder.__trim();
-              d2 = o.__toStringGeneric(k2, t3, true);
-            }
-            r2.__trim();
-            for (var D = o.__toStringGeneric(r2, t3, true); d2.length < h2; ) d2 = "0" + d2;
-            return false === _2 && e3.sign && (D = "-" + D), D + d2;
-          } }, { key: "__unequalSign", value: function(e3) {
-            return e3 ? -1 : 1;
-          } }, { key: "__absoluteGreater", value: function(e3) {
-            return e3 ? -1 : 1;
-          } }, { key: "__absoluteLess", value: function(e3) {
-            return e3 ? 1 : -1;
-          } }, { key: "__compareToBigInt", value: function(e3, t3) {
-            var i2 = e3.sign;
-            if (i2 !== t3.sign) return o.__unequalSign(i2);
-            var _2 = o.__absoluteCompare(e3, t3);
-            return 0 < _2 ? o.__absoluteGreater(i2) : 0 > _2 ? o.__absoluteLess(i2) : 0;
-          } }, { key: "__compareToNumber", value: function(e3, i2) {
-            if (true | i2) {
-              var _2 = e3.sign, n3 = 0 > i2;
-              if (_2 !== n3) return o.__unequalSign(_2);
-              if (0 === e3.length) {
-                if (n3) throw new Error("implementation bug");
-                return 0 === i2 ? 0 : -1;
-              }
-              if (1 < e3.length) return o.__absoluteGreater(_2);
-              var l2 = t2(i2), g2 = e3.__unsignedDigit(0);
-              return g2 > l2 ? o.__absoluteGreater(_2) : g2 < l2 ? o.__absoluteLess(_2) : 0;
-            }
-            return o.__compareToDouble(e3, i2);
-          } }, { key: "__compareToDouble", value: function(e3, t3) {
-            if (t3 !== t3) return t3;
-            if (t3 === 1 / 0) return -1;
-            if (t3 === -Infinity) return 1;
-            var i2 = e3.sign;
-            if (i2 !== 0 > t3) return o.__unequalSign(i2);
-            if (0 === t3) throw new Error("implementation bug: should be handled elsewhere");
-            if (0 === e3.length) return -1;
-            o.__kBitConversionDouble[0] = t3;
-            var _2 = 2047 & o.__kBitConversionInts[1] >>> 20;
-            if (2047 == _2) throw new Error("implementation bug: handled elsewhere");
-            var n3 = _2 - 1023;
-            if (0 > n3) return o.__absoluteGreater(i2);
-            var l2 = e3.length, g2 = e3.__digit(l2 - 1), a3 = o.__clz32(g2), u2 = 32 * l2 - a3, s2 = n3 + 1;
-            if (u2 < s2) return o.__absoluteLess(i2);
-            if (u2 > s2) return o.__absoluteGreater(i2);
-            var r2 = 1048576 | 1048575 & o.__kBitConversionInts[1], d2 = o.__kBitConversionInts[0], h2 = 20, b2 = 31 - a3;
-            if (b2 !== (u2 - 1) % 31) throw new Error("implementation bug");
-            var m2, c2 = 0;
-            if (b2 < h2) {
-              var v2 = h2 - b2;
-              c2 = v2 + 32, m2 = r2 >>> v2, r2 = r2 << 32 - v2 | d2 >>> v2, d2 <<= 32 - v2;
-            } else if (b2 === h2) c2 = 32, m2 = r2, r2 = d2;
-            else {
-              var f2 = b2 - h2;
-              c2 = 32 - f2, m2 = r2 << f2 | d2 >>> 32 - f2, r2 = d2 << f2;
-            }
-            if (g2 >>>= 0, m2 >>>= 0, g2 > m2) return o.__absoluteGreater(i2);
-            if (g2 < m2) return o.__absoluteLess(i2);
-            for (var y2 = l2 - 2; 0 <= y2; y2--) {
-              0 < c2 ? (c2 -= 32, m2 = r2 >>> 0, r2 = d2, d2 = 0) : m2 = 0;
-              var k2 = e3.__unsignedDigit(y2);
-              if (k2 > m2) return o.__absoluteGreater(i2);
-              if (k2 < m2) return o.__absoluteLess(i2);
-            }
-            if (0 !== r2 || 0 !== d2) {
-              if (0 === c2) throw new Error("implementation bug");
-              return o.__absoluteLess(i2);
-            }
-            return 0;
-          } }, { key: "__equalToNumber", value: function(e3, i2) {
-            return i2 | 0 === i2 ? 0 === i2 ? 0 === e3.length : 1 === e3.length && e3.sign === 0 > i2 && e3.__unsignedDigit(0) === t2(i2) : 0 === o.__compareToDouble(e3, i2);
-          } }, { key: "__comparisonResultToBool", value: function(e3, t3) {
-            switch (t3) {
-              case 0:
-                return 0 > e3;
-              case 1:
-                return 0 >= e3;
-              case 2:
-                return 0 < e3;
-              case 3:
-                return 0 <= e3;
-            }
-            throw new Error("unreachable");
-          } }, { key: "__compare", value: function(e3, t3, i2) {
-            if (e3 = o.__toPrimitive(e3), t3 = o.__toPrimitive(t3), "string" == typeof e3 && "string" == typeof t3) switch (i2) {
-              case 0:
-                return e3 < t3;
-              case 1:
-                return e3 <= t3;
-              case 2:
-                return e3 > t3;
-              case 3:
-                return e3 >= t3;
-            }
-            if (o.__isBigInt(e3) && "string" == typeof t3) return t3 = o.__fromString(t3), null !== t3 && o.__comparisonResultToBool(o.__compareToBigInt(e3, t3), i2);
-            if ("string" == typeof e3 && o.__isBigInt(t3)) return e3 = o.__fromString(e3), null !== e3 && o.__comparisonResultToBool(o.__compareToBigInt(e3, t3), i2);
-            if (e3 = o.__toNumeric(e3), t3 = o.__toNumeric(t3), o.__isBigInt(e3)) {
-              if (o.__isBigInt(t3)) return o.__comparisonResultToBool(o.__compareToBigInt(e3, t3), i2);
-              if ("number" != typeof t3) throw new Error("implementation bug");
-              return o.__comparisonResultToBool(o.__compareToNumber(e3, t3), i2);
-            }
-            if ("number" != typeof e3) throw new Error("implementation bug");
-            if (o.__isBigInt(t3)) return o.__comparisonResultToBool(o.__compareToNumber(t3, e3), 2 ^ i2);
-            if ("number" != typeof t3) throw new Error("implementation bug");
-            return 0 === i2 ? e3 < t3 : 1 === i2 ? e3 <= t3 : 2 === i2 ? e3 > t3 : 3 === i2 ? e3 >= t3 : void 0;
-          } }, { key: "__absoluteAdd", value: function(e3, t3, _2) {
-            if (e3.length < t3.length) return o.__absoluteAdd(t3, e3, _2);
-            if (0 === e3.length) return e3;
-            if (0 === t3.length) return e3.sign === _2 ? e3 : o.unaryMinus(e3);
-            var n3 = e3.length;
-            (0 === e3.__clzmsd() || t3.length === e3.length && 0 === t3.__clzmsd()) && n3++;
-            for (var l2 = new o(n3, _2), g2 = 0, a3 = 0; a3 < t3.length; a3++) {
-              var u2 = t3.__digit(a3), s2 = e3.__digit(a3), r2 = (65535 & s2) + (65535 & u2) + g2, d2 = (s2 >>> 16) + (u2 >>> 16) + (r2 >>> 16);
-              g2 = d2 >>> 16, l2.__setDigit(a3, 65535 & r2 | d2 << 16);
-            }
-            for (; a3 < e3.length; a3++) {
-              var h2 = e3.__digit(a3), b2 = (65535 & h2) + g2, m2 = (h2 >>> 16) + (b2 >>> 16);
-              g2 = m2 >>> 16, l2.__setDigit(a3, 65535 & b2 | m2 << 16);
-            }
-            return a3 < l2.length && l2.__setDigit(a3, g2), l2.__trim();
-          } }, { key: "__absoluteSub", value: function(e3, t3, _2) {
-            if (0 === e3.length) return e3;
-            if (0 === t3.length) return e3.sign === _2 ? e3 : o.unaryMinus(e3);
-            for (var n3 = new o(e3.length, _2), l2 = 0, g2 = 0; g2 < t3.length; g2++) {
-              var a3 = e3.__digit(g2), u2 = t3.__digit(g2), s2 = (65535 & a3) - (65535 & u2) - l2;
-              l2 = 1 & s2 >>> 16;
-              var r2 = (a3 >>> 16) - (u2 >>> 16) - l2;
-              l2 = 1 & r2 >>> 16, n3.__setDigit(g2, 65535 & s2 | r2 << 16);
-            }
-            for (; g2 < e3.length; g2++) {
-              var d2 = e3.__digit(g2), h2 = (65535 & d2) - l2;
-              l2 = 1 & h2 >>> 16;
-              var b2 = (d2 >>> 16) - l2;
-              l2 = 1 & b2 >>> 16, n3.__setDigit(g2, 65535 & h2 | b2 << 16);
-            }
-            return n3.__trim();
-          } }, { key: "__absoluteAddOne", value: function(e3, t3) {
-            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length;
-            null === _2 ? _2 = new o(n3, t3) : _2.sign = t3;
-            for (var l2, g2 = true, a3 = 0; a3 < n3; a3++) {
-              if (l2 = e3.__digit(a3), g2) {
-                var u2 = -1 === l2;
-                l2 = 0 | l2 + 1, g2 = u2;
-              }
-              _2.__setDigit(a3, l2);
-            }
-            return g2 && _2.__setDigitGrow(n3, 1), _2;
-          } }, { key: "__absoluteSubOne", value: function(e3, t3) {
-            var _2 = e3.length;
-            t3 = t3 || _2;
-            for (var n3, l2 = new o(t3, false), g2 = true, a3 = 0; a3 < _2; a3++) {
-              if (n3 = e3.__digit(a3), g2) {
-                var u2 = 0 === n3;
-                n3 = 0 | n3 - 1, g2 = u2;
-              }
-              l2.__setDigit(a3, n3);
-            }
-            if (g2) throw new Error("implementation bug");
-            for (var s2 = _2; s2 < t3; s2++) l2.__setDigit(s2, 0);
-            return l2;
-          } }, { key: "__absoluteAnd", value: function(e3, t3) {
-            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
-            if (n3 < l2) {
-              g2 = n3;
-              var a3 = e3, u2 = n3;
-              e3 = t3, n3 = l2, t3 = a3, l2 = u2;
-            }
-            var s2 = g2;
-            null === _2 ? _2 = new o(s2, false) : s2 = _2.length;
-            for (var r2 = 0; r2 < g2; r2++) _2.__setDigit(r2, e3.__digit(r2) & t3.__digit(r2));
-            for (; r2 < s2; r2++) _2.__setDigit(r2, 0);
-            return _2;
-          } }, { key: "__absoluteAndNot", value: function(e3, t3) {
-            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
-            n3 < l2 && (g2 = n3);
-            var a3 = n3;
-            null === _2 ? _2 = new o(a3, false) : a3 = _2.length;
-            for (var u2 = 0; u2 < g2; u2++) _2.__setDigit(u2, e3.__digit(u2) & ~t3.__digit(u2));
-            for (; u2 < n3; u2++) _2.__setDigit(u2, e3.__digit(u2));
-            for (; u2 < a3; u2++) _2.__setDigit(u2, 0);
-            return _2;
-          } }, { key: "__absoluteOr", value: function(e3, t3) {
-            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
-            if (n3 < l2) {
-              g2 = n3;
-              var a3 = e3, u2 = n3;
-              e3 = t3, n3 = l2, t3 = a3, l2 = u2;
-            }
-            var s2 = n3;
-            null === _2 ? _2 = new o(s2, false) : s2 = _2.length;
-            for (var r2 = 0; r2 < g2; r2++) _2.__setDigit(r2, e3.__digit(r2) | t3.__digit(r2));
-            for (; r2 < n3; r2++) _2.__setDigit(r2, e3.__digit(r2));
-            for (; r2 < s2; r2++) _2.__setDigit(r2, 0);
-            return _2;
-          } }, { key: "__absoluteXor", value: function(e3, t3) {
-            var _2 = 2 < arguments.length && void 0 !== arguments[2] ? arguments[2] : null, n3 = e3.length, l2 = t3.length, g2 = l2;
-            if (n3 < l2) {
-              g2 = n3;
-              var a3 = e3, u2 = n3;
-              e3 = t3, n3 = l2, t3 = a3, l2 = u2;
-            }
-            var s2 = n3;
-            null === _2 ? _2 = new o(s2, false) : s2 = _2.length;
-            for (var r2 = 0; r2 < g2; r2++) _2.__setDigit(r2, e3.__digit(r2) ^ t3.__digit(r2));
-            for (; r2 < n3; r2++) _2.__setDigit(r2, e3.__digit(r2));
-            for (; r2 < s2; r2++) _2.__setDigit(r2, 0);
-            return _2;
-          } }, { key: "__absoluteCompare", value: function(e3, t3) {
-            var _2 = e3.length - t3.length;
-            if (0 != _2) return _2;
-            for (var n3 = e3.length - 1; 0 <= n3 && e3.__digit(n3) === t3.__digit(n3); ) n3--;
-            return 0 > n3 ? 0 : e3.__unsignedDigit(n3) > t3.__unsignedDigit(n3) ? 1 : -1;
-          } }, { key: "__multiplyAccumulate", value: function(e3, t3, _2, n3) {
-            if (0 !== t3) {
-              for (var l2 = 65535 & t3, g2 = t3 >>> 16, a3 = 0, u2 = 0, s2 = 0, r2 = 0; r2 < e3.length; r2++, n3++) {
-                var d2 = _2.__digit(n3), h2 = 65535 & d2, b2 = d2 >>> 16, m2 = e3.__digit(r2), c2 = 65535 & m2, v2 = m2 >>> 16, f2 = o.__imul(c2, l2), y2 = o.__imul(c2, g2), k2 = o.__imul(v2, l2), D = o.__imul(v2, g2);
-                h2 += u2 + (65535 & f2), b2 += s2 + a3 + (h2 >>> 16) + (f2 >>> 16) + (65535 & y2) + (65535 & k2), a3 = b2 >>> 16, u2 = (y2 >>> 16) + (k2 >>> 16) + (65535 & D) + a3, a3 = u2 >>> 16, u2 &= 65535, s2 = D >>> 16, d2 = 65535 & h2 | b2 << 16, _2.__setDigit(n3, d2);
-              }
-              for (; 0 !== a3 || 0 !== u2 || 0 !== s2; n3++) {
-                var p = _2.__digit(n3), B = (65535 & p) + u2, S = (p >>> 16) + (B >>> 16) + s2 + a3;
-                u2 = 0, s2 = 0, a3 = S >>> 16, p = 65535 & B | S << 16, _2.__setDigit(n3, p);
-              }
-            }
-          } }, { key: "__internalMultiplyAdd", value: function(e3, t3, _2, l2, g2) {
-            for (var a3 = _2, u2 = 0, s2 = 0; s2 < l2; s2++) {
-              var r2 = e3.__digit(s2), d2 = o.__imul(65535 & r2, t3), h2 = (65535 & d2) + u2 + a3;
-              a3 = h2 >>> 16;
-              var b2 = o.__imul(r2 >>> 16, t3), m2 = (65535 & b2) + (d2 >>> 16) + a3;
-              a3 = m2 >>> 16, u2 = b2 >>> 16, g2.__setDigit(s2, m2 << 16 | 65535 & h2);
-            }
-            if (g2.length > l2) for (g2.__setDigit(l2++, a3 + u2); l2 < g2.length; ) g2.__setDigit(l2++, 0);
-            else if (0 !== a3 + u2) throw new Error("implementation bug");
-          } }, { key: "__absoluteDivSmall", value: function(e3, t3, _2) {
-            null === _2 && (_2 = new o(e3.length, false));
-            for (var n3 = 0, l2 = 2 * e3.length - 1; 0 <= l2; l2 -= 2) {
-              var g2 = (n3 << 16 | e3.__halfDigit(l2)) >>> 0, a3 = 0 | g2 / t3;
-              n3 = 0 | g2 % t3, g2 = (n3 << 16 | e3.__halfDigit(l2 - 1)) >>> 0;
-              var u2 = 0 | g2 / t3;
-              n3 = 0 | g2 % t3, _2.__setDigit(l2 >>> 1, a3 << 16 | u2);
-            }
-            return _2;
-          } }, { key: "__absoluteModSmall", value: function(e3, t3) {
-            for (var _2, n3 = 0, l2 = 2 * e3.length - 1; 0 <= l2; l2--) _2 = (n3 << 16 | e3.__halfDigit(l2)) >>> 0, n3 = 0 | _2 % t3;
-            return n3;
-          } }, { key: "__absoluteDivLarge", value: function(e3, t3, i2, _2) {
-            var l2 = t3.__halfDigitLength(), n3 = t3.length, g2 = e3.__halfDigitLength() - l2, a3 = null;
-            i2 && (a3 = new o(g2 + 2 >>> 1, false), a3.__initializeDigits());
-            var s2 = new o(l2 + 2 >>> 1, false);
-            s2.__initializeDigits();
-            var r2 = o.__clz16(t3.__halfDigit(l2 - 1));
-            0 < r2 && (t3 = o.__specialLeftShift(t3, r2, 0));
-            for (var d2 = o.__specialLeftShift(e3, r2, 1), u2 = t3.__halfDigit(l2 - 1), h2 = 0, b2 = g2; 0 <= b2; b2--) {
-              var m2 = 65535, v2 = d2.__halfDigit(b2 + l2);
-              if (v2 !== u2) {
-                var f2 = (v2 << 16 | d2.__halfDigit(b2 + l2 - 1)) >>> 0;
-                m2 = 0 | f2 / u2;
-                for (var y2 = 0 | f2 % u2, k2 = t3.__halfDigit(l2 - 2), D = d2.__halfDigit(b2 + l2 - 2); o.__imul(m2, k2) >>> 0 > (y2 << 16 | D) >>> 0 && (m2--, y2 += u2, !(65535 < y2)); ) ;
-              }
-              o.__internalMultiplyAdd(t3, m2, 0, n3, s2);
-              var p = d2.__inplaceSub(s2, b2, l2 + 1);
-              0 !== p && (p = d2.__inplaceAdd(t3, b2, l2), d2.__setHalfDigit(b2 + l2, d2.__halfDigit(b2 + l2) + p), m2--), i2 && (1 & b2 ? h2 = m2 << 16 : a3.__setDigit(b2 >>> 1, h2 | m2));
-            }
-            return _2 ? (d2.__inplaceRightShift(r2), i2 ? { quotient: a3, remainder: d2 } : d2) : i2 ? a3 : void 0;
-          } }, { key: "__clz16", value: function(e3) {
-            return o.__clz32(e3) - 16;
-          } }, { key: "__specialLeftShift", value: function(e3, t3, _2) {
-            var l2 = e3.length, n3 = new o(l2 + _2, false);
-            if (0 === t3) {
-              for (var g2 = 0; g2 < l2; g2++) n3.__setDigit(g2, e3.__digit(g2));
-              return 0 < _2 && n3.__setDigit(l2, 0), n3;
-            }
-            for (var a3, u2 = 0, s2 = 0; s2 < l2; s2++) a3 = e3.__digit(s2), n3.__setDigit(s2, a3 << t3 | u2), u2 = a3 >>> 32 - t3;
-            return 0 < _2 && n3.__setDigit(l2, u2), n3;
-          } }, { key: "__leftShiftByAbsolute", value: function(e3, t3) {
-            var _2 = o.__toShiftAmount(t3);
-            if (0 > _2) throw new RangeError("BigInt too big");
-            var n3 = _2 >>> 5, l2 = 31 & _2, g2 = e3.length, a3 = 0 !== l2 && 0 != e3.__digit(g2 - 1) >>> 32 - l2, u2 = g2 + n3 + (a3 ? 1 : 0), s2 = new o(u2, e3.sign);
-            if (0 === l2) {
-              for (var r2 = 0; r2 < n3; r2++) s2.__setDigit(r2, 0);
-              for (; r2 < u2; r2++) s2.__setDigit(r2, e3.__digit(r2 - n3));
-            } else {
-              for (var h2 = 0, b2 = 0; b2 < n3; b2++) s2.__setDigit(b2, 0);
-              for (var m2, c2 = 0; c2 < g2; c2++) m2 = e3.__digit(c2), s2.__setDigit(c2 + n3, m2 << l2 | h2), h2 = m2 >>> 32 - l2;
-              if (a3) s2.__setDigit(g2 + n3, h2);
-              else if (0 !== h2) throw new Error("implementation bug");
-            }
-            return s2.__trim();
-          } }, { key: "__rightShiftByAbsolute", value: function(e3, t3) {
-            var _2 = e3.length, n3 = e3.sign, l2 = o.__toShiftAmount(t3);
-            if (0 > l2) return o.__rightShiftByMaximum(n3);
-            var g2 = l2 >>> 5, a3 = 31 & l2, u2 = _2 - g2;
-            if (0 >= u2) return o.__rightShiftByMaximum(n3);
-            var s2 = false;
-            if (n3) {
-              if (0 != (e3.__digit(g2) & (1 << a3) - 1)) s2 = true;
-              else for (var r2 = 0; r2 < g2; r2++) if (0 !== e3.__digit(r2)) {
-                s2 = true;
-                break;
-              }
-            }
-            if (s2 && 0 === a3) {
-              var h2 = e3.__digit(_2 - 1);
-              0 == ~h2 && u2++;
-            }
-            var b2 = new o(u2, n3);
-            if (0 === a3) for (var m2 = g2; m2 < _2; m2++) b2.__setDigit(m2 - g2, e3.__digit(m2));
-            else {
-              for (var c2, v2 = e3.__digit(g2) >>> a3, f2 = _2 - g2 - 1, y2 = 0; y2 < f2; y2++) c2 = e3.__digit(y2 + g2 + 1), b2.__setDigit(y2, c2 << 32 - a3 | v2), v2 = c2 >>> a3;
-              b2.__setDigit(f2, v2);
-            }
-            return s2 && (b2 = o.__absoluteAddOne(b2, true, b2)), b2.__trim();
-          } }, { key: "__rightShiftByMaximum", value: function(e3) {
-            return e3 ? o.__oneDigit(1, true) : o.__zero();
-          } }, { key: "__toShiftAmount", value: function(e3) {
-            if (1 < e3.length) return -1;
-            var t3 = e3.__unsignedDigit(0);
-            return t3 > o.__kMaxLengthBits ? -1 : t3;
-          } }, { key: "__toPrimitive", value: function(e3) {
-            var t3 = 1 < arguments.length && void 0 !== arguments[1] ? arguments[1] : "default";
-            if ("object" !== i(e3)) return e3;
-            if (e3.constructor === o) return e3;
-            var _2 = e3[Symbol.toPrimitive];
-            if (_2) {
-              var n3 = _2(t3);
-              if ("object" !== i(n3)) return n3;
-              throw new TypeError("Cannot convert object to primitive value");
-            }
-            var l2 = e3.valueOf;
-            if (l2) {
-              var g2 = l2.call(e3);
-              if ("object" !== i(g2)) return g2;
-            }
-            var a3 = e3.toString;
-            if (a3) {
-              var u2 = a3.call(e3);
-              if ("object" !== i(u2)) return u2;
-            }
-            throw new TypeError("Cannot convert object to primitive value");
-          } }, { key: "__toNumeric", value: function(e3) {
-            return o.__isBigInt(e3) ? e3 : +e3;
-          } }, { key: "__isBigInt", value: function(e3) {
-            return "object" === i(e3) && null !== e3 && e3.constructor === o;
-          } }, { key: "__truncateToNBits", value: function(e3, t3) {
-            for (var _2 = e3 + 31 >>> 5, n3 = new o(_2, t3.sign), l2 = _2 - 1, g2 = 0; g2 < l2; g2++) n3.__setDigit(g2, t3.__digit(g2));
-            var a3 = t3.__digit(l2);
-            if (0 != (31 & e3)) {
-              var u2 = 32 - (31 & e3);
-              a3 = a3 << u2 >>> u2;
-            }
-            return n3.__setDigit(l2, a3), n3.__trim();
-          } }, { key: "__truncateAndSubFromPowerOfTwo", value: function(e3, t3, _2) {
-            for (var n3 = Math.min, l2 = e3 + 31 >>> 5, g2 = new o(l2, _2), a3 = 0, u2 = l2 - 1, s2 = 0, r2 = n3(u2, t3.length); a3 < r2; a3++) {
-              var d2 = t3.__digit(a3), h2 = 0 - (65535 & d2) - s2;
-              s2 = 1 & h2 >>> 16;
-              var b2 = 0 - (d2 >>> 16) - s2;
-              s2 = 1 & b2 >>> 16, g2.__setDigit(a3, 65535 & h2 | b2 << 16);
-            }
-            for (; a3 < u2; a3++) g2.__setDigit(a3, 0 | -s2);
-            var m2, c2 = u2 < t3.length ? t3.__digit(u2) : 0, v2 = 31 & e3;
-            if (0 === v2) {
-              var f2 = 0 - (65535 & c2) - s2;
-              s2 = 1 & f2 >>> 16;
-              var y2 = 0 - (c2 >>> 16) - s2;
-              m2 = 65535 & f2 | y2 << 16;
-            } else {
-              var k2 = 32 - v2;
-              c2 = c2 << k2 >>> k2;
-              var D = 1 << 32 - k2, p = (65535 & D) - (65535 & c2) - s2;
-              s2 = 1 & p >>> 16;
-              var B = (D >>> 16) - (c2 >>> 16) - s2;
-              m2 = 65535 & p | B << 16, m2 &= D - 1;
-            }
-            return g2.__setDigit(u2, m2), g2.__trim();
-          } }, { key: "__digitPow", value: function(e3, t3) {
-            for (var i2 = 1; 0 < t3; ) 1 & t3 && (i2 *= e3), t3 >>>= 1, e3 *= e3;
-            return i2;
-          } }]), o;
-        })(h(Array));
-        return k.__kMaxLength = 33554432, k.__kMaxLengthBits = k.__kMaxLength << 5, k.__kMaxBitsPerChar = [0, 0, 32, 51, 64, 75, 83, 90, 96, 102, 107, 111, 115, 119, 122, 126, 128, 131, 134, 136, 139, 141, 143, 145, 147, 149, 151, 153, 154, 156, 158, 159, 160, 162, 163, 165, 166], k.__kBitsPerCharTableShift = 5, k.__kBitsPerCharTableMultiplier = 1 << k.__kBitsPerCharTableShift, k.__kConversionChars = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"], k.__kBitConversionBuffer = new ArrayBuffer(8), k.__kBitConversionDouble = new Float64Array(k.__kBitConversionBuffer), k.__kBitConversionInts = new Int32Array(k.__kBitConversionBuffer), k.__clz32 = t || function(e2) {
-          var t2 = Math.LN2, i2 = Math.log;
-          return 0 === e2 ? 32 : 0 | 31 - (0 | i2(e2 >>> 0) / t2);
-        }, k.__imul = e || function(e2, t2) {
-          return 0 | e2 * t2;
-        }, k;
-      });
-    }
-  });
+  var BigNumber = clone();
+  var bignumber_default = BigNumber;
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/xoshiro.js
-  var import_jsbi, __spreadArrays, MAX_UINT64, rotl, Xoshiro, xoshiro_default;
-  var init_xoshiro = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/xoshiro.js"() {
-      init_buffer_shim();
-      init_utils2();
-      init_bignumber();
-      import_jsbi = __toESM(require_jsbi_umd());
-      __spreadArrays = function() {
-        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
-        for (var r = Array(s), k = 0, i = 0; i < il; i++)
-          for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
-            r[k] = a[j];
-        return r;
-      };
-      MAX_UINT64 = 18446744073709552e3;
-      rotl = function(x, k) {
-        return import_jsbi.default.bitwiseXor(import_jsbi.default.asUintN(64, import_jsbi.default.leftShift(x, import_jsbi.default.BigInt(k))), import_jsbi.default.BigInt(import_jsbi.default.asUintN(64, import_jsbi.default.signedRightShift(x, import_jsbi.default.subtract(import_jsbi.default.BigInt(64), import_jsbi.default.BigInt(k))))));
-      };
-      Xoshiro = /** @class */
-      (function() {
-        function Xoshiro2(seed) {
-          var _this = this;
-          this.next = function() {
-            return new bignumber_default(_this.roll().toString());
-          };
-          this.nextDouble = function() {
-            return new bignumber_default(_this.roll().toString()).div(MAX_UINT64 + 1);
-          };
-          this.nextInt = function(low, high) {
-            return Math.floor(_this.nextDouble().toNumber() * (high - low + 1) + low);
-          };
-          this.nextByte = function() {
-            return _this.nextInt(0, 255);
-          };
-          this.nextData = function(count) {
-            return __spreadArrays(new Array(count)).map(function() {
-              return _this.nextByte();
-            });
-          };
-          var digest = sha256Hash(seed);
-          this.s = [import_jsbi.default.BigInt(0), import_jsbi.default.BigInt(0), import_jsbi.default.BigInt(0), import_jsbi.default.BigInt(0)];
-          this.setS(digest);
-        }
-        Xoshiro2.prototype.setS = function(digest) {
-          for (var i = 0; i < 4; i++) {
-            var o = i * 8;
-            var v = import_jsbi.default.BigInt(0);
-            for (var n = 0; n < 8; n++) {
-              v = import_jsbi.default.asUintN(64, import_jsbi.default.leftShift(v, import_jsbi.default.BigInt(8)));
-              v = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseOr(v, import_jsbi.default.BigInt(digest[o + n])));
-            }
-            this.s[i] = import_jsbi.default.asUintN(64, v);
-          }
+  var import_jsbi = __toESM(require_jsbi_umd());
+  var __spreadArrays = function() {
+    for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
+    for (var r = Array(s), k = 0, i = 0; i < il; i++)
+      for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
+        r[k] = a[j];
+    return r;
+  };
+  var MAX_UINT64 = 18446744073709552e3;
+  var rotl = function(x, k) {
+    return import_jsbi.default.bitwiseXor(import_jsbi.default.asUintN(64, import_jsbi.default.leftShift(x, import_jsbi.default.BigInt(k))), import_jsbi.default.BigInt(import_jsbi.default.asUintN(64, import_jsbi.default.signedRightShift(x, import_jsbi.default.subtract(import_jsbi.default.BigInt(64), import_jsbi.default.BigInt(k))))));
+  };
+  var Xoshiro = (
+    /** @class */
+    (function() {
+      function Xoshiro2(seed) {
+        var _this = this;
+        this.next = function() {
+          return new bignumber_default(_this.roll().toString());
         };
-        Xoshiro2.prototype.roll = function() {
-          var result = import_jsbi.default.asUintN(64, import_jsbi.default.multiply(rotl(import_jsbi.default.asUintN(64, import_jsbi.default.multiply(this.s[1], import_jsbi.default.BigInt(5))), 7), import_jsbi.default.BigInt(9)));
-          var t = import_jsbi.default.asUintN(64, import_jsbi.default.leftShift(this.s[1], import_jsbi.default.BigInt(17)));
-          this.s[2] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[2], import_jsbi.default.BigInt(this.s[0])));
-          this.s[3] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[3], import_jsbi.default.BigInt(this.s[1])));
-          this.s[1] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[1], import_jsbi.default.BigInt(this.s[2])));
-          this.s[0] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[0], import_jsbi.default.BigInt(this.s[3])));
-          this.s[2] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[2], import_jsbi.default.BigInt(t)));
-          this.s[3] = import_jsbi.default.asUintN(64, rotl(this.s[3], 45));
-          return result;
+        this.nextDouble = function() {
+          return new bignumber_default(_this.roll().toString()).div(MAX_UINT64 + 1);
         };
-        return Xoshiro2;
-      })();
-      xoshiro_default = Xoshiro;
-    }
-  });
-
-  // node_modules/@apocentre/alias-sampling/index.js
-  var require_alias_sampling = __commonJS({
-    "node_modules/@apocentre/alias-sampling/index.js"(exports, module) {
-      init_buffer_shim();
-      function Sample(probabilities, outcomes, rng) {
-        "use strict";
-        this.alias = [];
-        this.prob = [];
-        this.outcomes = outcomes || this.indexedOutcomes(probabilities.length);
-        this.rng = rng || Math.random;
-        this.precomputeAlias(probabilities);
+        this.nextInt = function(low, high) {
+          return Math.floor(_this.nextDouble().toNumber() * (high - low + 1) + low);
+        };
+        this.nextByte = function() {
+          return _this.nextInt(0, 255);
+        };
+        this.nextData = function(count) {
+          return __spreadArrays(new Array(count)).map(function() {
+            return _this.nextByte();
+          });
+        };
+        var digest = sha256Hash(seed);
+        this.s = [import_jsbi.default.BigInt(0), import_jsbi.default.BigInt(0), import_jsbi.default.BigInt(0), import_jsbi.default.BigInt(0)];
+        this.setS(digest);
       }
-      Sample.prototype.next = function(numOfSamples) {
-        "use strict";
-        var n = numOfSamples || 1, out = [], i = 0;
-        do {
-          var c = Math.floor(this.rng() * this.prob.length);
-          out[i] = this.outcomes[this.rng() < this.prob[c] ? c : this.alias[c]];
-        } while (++i < n);
-        return n > 1 ? out : out[0];
-      };
-      Sample.prototype.precomputeAlias = function(p) {
-        "use strict";
-        var n = p.length, sum = 0, nS = 0, nL = 0, P = [], S = [], L = [], g, i, a;
-        for (i = 0; i < n; ++i) {
-          if (p[i] < 0) {
-            throw "Probability must be a positive: p[" + i + "]=" + p[i];
+      Xoshiro2.prototype.setS = function(digest) {
+        for (var i = 0; i < 4; i++) {
+          var o = i * 8;
+          var v = import_jsbi.default.BigInt(0);
+          for (var n = 0; n < 8; n++) {
+            v = import_jsbi.default.asUintN(64, import_jsbi.default.leftShift(v, import_jsbi.default.BigInt(8)));
+            v = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseOr(v, import_jsbi.default.BigInt(digest[o + n])));
           }
-          sum += p[i];
+          this.s[i] = import_jsbi.default.asUintN(64, v);
         }
-        if (sum === 0) {
-          throw "Probability cannot be zero.";
-        }
-        for (i = 0; i < n; ++i) {
-          P[i] = p[i] * n / sum;
-        }
-        for (i = n - 1; i >= 0; --i) {
-          if (P[i] < 1)
-            S[nS++] = i;
-          else
-            L[nL++] = i;
-        }
-        while (nS && nL) {
-          a = S[--nS];
-          g = L[--nL];
-          this.prob[a] = P[a];
-          this.alias[a] = g;
-          P[g] = P[g] + P[a] - 1;
-          if (P[g] < 1)
-            S[nS++] = g;
-          else
-            L[nL++] = g;
-        }
-        while (nL)
-          this.prob[L[--nL]] = 1;
-        while (nS)
-          this.prob[S[--nS]] = 1;
       };
-      Sample.prototype.indexedOutcomes = function(n) {
-        "use strict";
-        var o = [];
-        for (var i = 0; i < n; i++) o[i] = i;
-        return o;
+      Xoshiro2.prototype.roll = function() {
+        var result = import_jsbi.default.asUintN(64, import_jsbi.default.multiply(rotl(import_jsbi.default.asUintN(64, import_jsbi.default.multiply(this.s[1], import_jsbi.default.BigInt(5))), 7), import_jsbi.default.BigInt(9)));
+        var t = import_jsbi.default.asUintN(64, import_jsbi.default.leftShift(this.s[1], import_jsbi.default.BigInt(17)));
+        this.s[2] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[2], import_jsbi.default.BigInt(this.s[0])));
+        this.s[3] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[3], import_jsbi.default.BigInt(this.s[1])));
+        this.s[1] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[1], import_jsbi.default.BigInt(this.s[2])));
+        this.s[0] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[0], import_jsbi.default.BigInt(this.s[3])));
+        this.s[2] = import_jsbi.default.asUintN(64, import_jsbi.default.bitwiseXor(this.s[2], import_jsbi.default.BigInt(t)));
+        this.s[3] = import_jsbi.default.asUintN(64, rotl(this.s[3], 45));
+        return result;
       };
-      Sample.prototype.randomInt = function(min, max) {
-        "use strict";
-        return Math.floor(this.rng() * (max - min)) + min;
-      };
-      module.exports = function(probabilities, outcomes, rng) {
-        "use strict";
-        return new Sample(probabilities, outcomes, rng);
-      };
-    }
-  });
+      return Xoshiro2;
+    })()
+  );
+  var xoshiro_default = Xoshiro;
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainUtils.js
-  var import_alias_sampling, import_buffer5, __spreadArrays2, chooseDegree, shuffle, chooseFragments;
-  var init_fountainUtils = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainUtils.js"() {
-      init_buffer_shim();
-      init_utils2();
-      init_xoshiro();
-      import_alias_sampling = __toESM(require_alias_sampling());
-      import_buffer5 = __toESM(require_buffer());
-      __spreadArrays2 = function() {
-        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
-        for (var r = Array(s), k = 0, i = 0; i < il; i++)
-          for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
-            r[k] = a[j];
-        return r;
-      };
-      chooseDegree = function(seqLenth, rng) {
-        var degreeProbabilities = __spreadArrays2(new Array(seqLenth)).map(function(_, index) {
-          return 1 / (index + 1);
-        });
-        var degreeChooser = (0, import_alias_sampling.default)(degreeProbabilities, null, rng.nextDouble);
-        return degreeChooser.next() + 1;
-      };
-      shuffle = function(items, rng) {
-        var remaining = __spreadArrays2(items);
-        var result = [];
-        while (remaining.length > 0) {
-          var index = rng.nextInt(0, remaining.length - 1);
-          var item = remaining[index];
-          remaining.splice(index, 1);
-          result.push(item);
-        }
-        return result;
-      };
-      chooseFragments = function(seqNum, seqLength, checksum) {
-        if (seqNum <= seqLength) {
-          return [seqNum - 1];
-        } else {
-          var seed = import_buffer5.Buffer.concat([intToBytes(seqNum), intToBytes(checksum)]);
-          var rng = new xoshiro_default(seed);
-          var degree = chooseDegree(seqLength, rng);
-          var indexes = __spreadArrays2(new Array(seqLength)).map(function(_, index) {
-            return index;
-          });
-          var shuffledIndexes = shuffle(indexes, rng);
-          return shuffledIndexes.slice(0, degree);
-        }
-      };
+  var import_alias_sampling = __toESM(require_alias_sampling());
+  var import_buffer5 = __toESM(require_buffer());
+  var __spreadArrays2 = function() {
+    for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
+    for (var r = Array(s), k = 0, i = 0; i < il; i++)
+      for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
+        r[k] = a[j];
+    return r;
+  };
+  var chooseDegree = function(seqLenth, rng) {
+    var degreeProbabilities = __spreadArrays2(new Array(seqLenth)).map(function(_, index) {
+      return 1 / (index + 1);
+    });
+    var degreeChooser = (0, import_alias_sampling.default)(degreeProbabilities, null, rng.nextDouble);
+    return degreeChooser.next() + 1;
+  };
+  var shuffle = function(items, rng) {
+    var remaining = __spreadArrays2(items);
+    var result = [];
+    while (remaining.length > 0) {
+      var index = rng.nextInt(0, remaining.length - 1);
+      var item = remaining[index];
+      remaining.splice(index, 1);
+      result.push(item);
     }
-  });
+    return result;
+  };
+  var chooseFragments = function(seqNum, seqLength, checksum) {
+    if (seqNum <= seqLength) {
+      return [seqNum - 1];
+    } else {
+      var seed = import_buffer5.Buffer.concat([intToBytes(seqNum), intToBytes(checksum)]);
+      var rng = new xoshiro_default(seed);
+      var degree = chooseDegree(seqLength, rng);
+      var indexes = __spreadArrays2(new Array(seqLength)).map(function(_, index) {
+        return index;
+      });
+      var shuffledIndexes = shuffle(indexes, rng);
+      return shuffledIndexes.slice(0, degree);
+    }
+  };
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainEncoder.js
-  var import_buffer6, FountainEncoderPart, FountainEncoder, fountainEncoder_default;
-  var init_fountainEncoder = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainEncoder.js"() {
-      init_buffer_shim();
-      init_utils2();
-      init_fountainUtils();
-      init_cbor();
-      import_buffer6 = __toESM(require_buffer());
-      FountainEncoderPart = /** @class */
-      (function() {
-        function FountainEncoderPart2(_seqNum, _seqLength, _messageLength, _checksum, _fragment) {
-          this._seqNum = _seqNum;
-          this._seqLength = _seqLength;
-          this._messageLength = _messageLength;
-          this._checksum = _checksum;
-          this._fragment = _fragment;
+  var import_buffer6 = __toESM(require_buffer());
+  var FountainEncoderPart = (
+    /** @class */
+    (function() {
+      function FountainEncoderPart2(_seqNum, _seqLength, _messageLength, _checksum, _fragment) {
+        this._seqNum = _seqNum;
+        this._seqLength = _seqLength;
+        this._messageLength = _messageLength;
+        this._checksum = _checksum;
+        this._fragment = _fragment;
+      }
+      Object.defineProperty(FountainEncoderPart2.prototype, "messageLength", {
+        get: function() {
+          return this._messageLength;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(FountainEncoderPart2.prototype, "fragment", {
+        get: function() {
+          return this._fragment;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(FountainEncoderPart2.prototype, "seqNum", {
+        get: function() {
+          return this._seqNum;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(FountainEncoderPart2.prototype, "seqLength", {
+        get: function() {
+          return this._seqLength;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(FountainEncoderPart2.prototype, "checksum", {
+        get: function() {
+          return this._checksum;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      FountainEncoderPart2.prototype.cbor = function() {
+        var result = cborEncode([
+          this._seqNum,
+          this._seqLength,
+          this._messageLength,
+          this._checksum,
+          this._fragment
+        ]);
+        return import_buffer6.Buffer.from(result);
+      };
+      FountainEncoderPart2.prototype.description = function() {
+        return "seqNum:" + this._seqNum + ", seqLen:" + this._seqLength + ", messageLen:" + this._messageLength + ", checksum:" + this._checksum + ", data:" + this._fragment.toString("hex");
+      };
+      FountainEncoderPart2.fromCBOR = function(cborPayload) {
+        var _a = cborDecode(cborPayload), seqNum = _a[0], seqLength = _a[1], messageLength = _a[2], checksum = _a[3], fragment = _a[4];
+        if (typeof seqNum !== "number" || typeof seqLength !== "number" || typeof messageLength !== "number" || typeof checksum !== "number" || import_buffer6.Buffer.isBuffer(fragment) && fragment.length <= 0) {
+          throw new Error("type error");
         }
-        Object.defineProperty(FountainEncoderPart2.prototype, "messageLength", {
-          get: function() {
-            return this._messageLength;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(FountainEncoderPart2.prototype, "fragment", {
-          get: function() {
-            return this._fragment;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(FountainEncoderPart2.prototype, "seqNum", {
-          get: function() {
-            return this._seqNum;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(FountainEncoderPart2.prototype, "seqLength", {
-          get: function() {
-            return this._seqLength;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(FountainEncoderPart2.prototype, "checksum", {
-          get: function() {
-            return this._checksum;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        FountainEncoderPart2.prototype.cbor = function() {
-          var result = cborEncode([
-            this._seqNum,
-            this._seqLength,
-            this._messageLength,
-            this._checksum,
-            this._fragment
-          ]);
-          return import_buffer6.Buffer.from(result);
-        };
-        FountainEncoderPart2.prototype.description = function() {
-          return "seqNum:" + this._seqNum + ", seqLen:" + this._seqLength + ", messageLen:" + this._messageLength + ", checksum:" + this._checksum + ", data:" + this._fragment.toString("hex");
-        };
-        FountainEncoderPart2.fromCBOR = function(cborPayload) {
-          var _a = cborDecode(cborPayload), seqNum = _a[0], seqLength = _a[1], messageLength = _a[2], checksum = _a[3], fragment = _a[4];
-          if (typeof seqNum !== "number" || typeof seqLength !== "number" || typeof messageLength !== "number" || typeof checksum !== "number" || import_buffer6.Buffer.isBuffer(fragment) && fragment.length <= 0) {
-            throw new Error("type error");
-          }
-          return new FountainEncoderPart2(seqNum, seqLength, messageLength, checksum, import_buffer6.Buffer.from(fragment));
-        };
-        return FountainEncoderPart2;
-      })();
-      FountainEncoder = /** @class */
-      (function() {
-        function FountainEncoder2(message, maxFragmentLength, firstSeqNum, minFragmentLength) {
-          if (maxFragmentLength === void 0) {
-            maxFragmentLength = 100;
-          }
-          if (firstSeqNum === void 0) {
-            firstSeqNum = 0;
-          }
-          if (minFragmentLength === void 0) {
-            minFragmentLength = 10;
-          }
-          var fragmentLength = FountainEncoder2.findNominalFragmentLength(message.length, minFragmentLength, maxFragmentLength);
-          this._messageLength = message.length;
-          this._fragments = FountainEncoder2.partitionMessage(message, fragmentLength);
-          this.fragmentLength = fragmentLength;
-          this.seqNum = toUint32(firstSeqNum);
-          this.checksum = getCRC(message);
+        return new FountainEncoderPart2(seqNum, seqLength, messageLength, checksum, import_buffer6.Buffer.from(fragment));
+      };
+      return FountainEncoderPart2;
+    })()
+  );
+  var FountainEncoder = (
+    /** @class */
+    (function() {
+      function FountainEncoder2(message, maxFragmentLength, firstSeqNum, minFragmentLength) {
+        if (maxFragmentLength === void 0) {
+          maxFragmentLength = 100;
         }
-        Object.defineProperty(FountainEncoder2.prototype, "fragmentsLength", {
-          get: function() {
-            return this._fragments.length;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(FountainEncoder2.prototype, "fragments", {
-          get: function() {
-            return this._fragments;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(FountainEncoder2.prototype, "messageLength", {
-          get: function() {
-            return this._messageLength;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        FountainEncoder2.prototype.isComplete = function() {
-          return this.seqNum >= this._fragments.length;
-        };
-        FountainEncoder2.prototype.isSinglePart = function() {
-          return this._fragments.length === 1;
-        };
-        FountainEncoder2.prototype.seqLength = function() {
+        if (firstSeqNum === void 0) {
+          firstSeqNum = 0;
+        }
+        if (minFragmentLength === void 0) {
+          minFragmentLength = 10;
+        }
+        var fragmentLength = FountainEncoder2.findNominalFragmentLength(message.length, minFragmentLength, maxFragmentLength);
+        this._messageLength = message.length;
+        this._fragments = FountainEncoder2.partitionMessage(message, fragmentLength);
+        this.fragmentLength = fragmentLength;
+        this.seqNum = toUint32(firstSeqNum);
+        this.checksum = getCRC(message);
+      }
+      Object.defineProperty(FountainEncoder2.prototype, "fragmentsLength", {
+        get: function() {
           return this._fragments.length;
-        };
-        FountainEncoder2.prototype.mix = function(indexes) {
-          var _this = this;
-          return indexes.reduce(function(result, index) {
-            return bufferXOR(_this._fragments[index], result);
-          }, import_buffer6.Buffer.alloc(this.fragmentLength, 0));
-        };
-        FountainEncoder2.prototype.nextPart = function() {
-          this.seqNum = toUint32(this.seqNum + 1);
-          var indexes = chooseFragments(this.seqNum, this._fragments.length, this.checksum);
-          var mixed = this.mix(indexes);
-          return new FountainEncoderPart(this.seqNum, this._fragments.length, this._messageLength, this.checksum, mixed);
-        };
-        FountainEncoder2.findNominalFragmentLength = function(messageLength, minFragmentLength, maxFragmentLength) {
-          if (messageLength <= 0 || minFragmentLength <= 0 || maxFragmentLength < minFragmentLength) {
-            throw new Error("invalid fragment or message length");
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(FountainEncoder2.prototype, "fragments", {
+        get: function() {
+          return this._fragments;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(FountainEncoder2.prototype, "messageLength", {
+        get: function() {
+          return this._messageLength;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      FountainEncoder2.prototype.isComplete = function() {
+        return this.seqNum >= this._fragments.length;
+      };
+      FountainEncoder2.prototype.isSinglePart = function() {
+        return this._fragments.length === 1;
+      };
+      FountainEncoder2.prototype.seqLength = function() {
+        return this._fragments.length;
+      };
+      FountainEncoder2.prototype.mix = function(indexes) {
+        var _this = this;
+        return indexes.reduce(function(result, index) {
+          return bufferXOR(_this._fragments[index], result);
+        }, import_buffer6.Buffer.alloc(this.fragmentLength, 0));
+      };
+      FountainEncoder2.prototype.nextPart = function() {
+        this.seqNum = toUint32(this.seqNum + 1);
+        var indexes = chooseFragments(this.seqNum, this._fragments.length, this.checksum);
+        var mixed = this.mix(indexes);
+        return new FountainEncoderPart(this.seqNum, this._fragments.length, this._messageLength, this.checksum, mixed);
+      };
+      FountainEncoder2.findNominalFragmentLength = function(messageLength, minFragmentLength, maxFragmentLength) {
+        if (messageLength <= 0 || minFragmentLength <= 0 || maxFragmentLength < minFragmentLength) {
+          throw new Error("invalid fragment or message length");
+        }
+        var maxFragmentCount = Math.ceil(messageLength / minFragmentLength);
+        var fragmentLength = 0;
+        for (var fragmentCount = 1; fragmentCount <= maxFragmentCount; fragmentCount++) {
+          fragmentLength = Math.ceil(messageLength / fragmentCount);
+          if (fragmentLength <= maxFragmentLength) {
+            break;
           }
-          var maxFragmentCount = Math.ceil(messageLength / minFragmentLength);
-          var fragmentLength = 0;
-          for (var fragmentCount = 1; fragmentCount <= maxFragmentCount; fragmentCount++) {
-            fragmentLength = Math.ceil(messageLength / fragmentCount);
-            if (fragmentLength <= maxFragmentLength) {
-              break;
-            }
-          }
-          return fragmentLength;
-        };
-        FountainEncoder2.partitionMessage = function(message, fragmentLength) {
-          var _a;
-          var remaining = import_buffer6.Buffer.from(message);
-          var fragment;
-          var _fragments = [];
-          while (remaining.length > 0) {
-            _a = split(remaining, -fragmentLength), fragment = _a[0], remaining = _a[1];
-            fragment = import_buffer6.Buffer.alloc(fragmentLength, 0).fill(fragment, 0, fragment.length);
-            _fragments.push(fragment);
-          }
-          return _fragments;
-        };
-        return FountainEncoder2;
-      })();
-      fountainEncoder_default = FountainEncoder;
-    }
-  });
+        }
+        return fragmentLength;
+      };
+      FountainEncoder2.partitionMessage = function(message, fragmentLength) {
+        var _a;
+        var remaining = import_buffer6.Buffer.from(message);
+        var fragment;
+        var _fragments = [];
+        while (remaining.length > 0) {
+          _a = split(remaining, -fragmentLength), fragment = _a[0], remaining = _a[1];
+          fragment = import_buffer6.Buffer.alloc(fragmentLength, 0).fill(fragment, 0, fragment.length);
+          _fragments.push(fragment);
+        }
+        return _fragments;
+      };
+      return FountainEncoder2;
+    })()
+  );
+  var fountainEncoder_default = FountainEncoder;
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/bytewords.js
-  var import_buffer7, __spreadArrays3, bytewords, bytewordsLookUpTable, BYTEWORDS_NUM, BYTEWORD_LENGTH, MINIMAL_BYTEWORD_LENGTH, STYLES, getWord, getMinimalWord, addCRC, encodeWithSeparator, encodeMinimal, decodeWord, _decode, decode2, encode2, bytewords_default;
-  var init_bytewords = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/bytewords.js"() {
-      init_buffer_shim();
-      import_buffer7 = __toESM(require_buffer());
-      init_utils2();
-      __spreadArrays3 = function() {
-        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
-        for (var r = Array(s), k = 0, i = 0; i < il; i++)
-          for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
-            r[k] = a[j];
-        return r;
-      };
-      bytewords = "ableacidalsoapexaquaarchatomauntawayaxisbackbaldbarnbeltbetabiasbluebodybragbrewbulbbuzzcalmcashcatschefcityclawcodecolacookcostcruxcurlcuspcyandarkdatadaysdelidicedietdoordowndrawdropdrumdulldutyeacheasyechoedgeepicevenexamexiteyesfactfairfernfigsfilmfishfizzflapflewfluxfoxyfreefrogfuelfundgalagamegeargemsgiftgirlglowgoodgraygrimgurugushgyrohalfhanghardhawkheathelphighhillholyhopehornhutsicedideaidleinchinkyintoirisironitemjadejazzjoinjoltjowljudojugsjumpjunkjurykeepkenokeptkeyskickkilnkingkitekiwiknoblamblavalazyleaflegsliarlimplionlistlogoloudloveluaulucklungmainmanymathmazememomenumeowmildmintmissmonknailnavyneednewsnextnoonnotenumbobeyoboeomitonyxopenovalowlspaidpartpeckplaypluspoempoolposepuffpumapurrquadquizraceramprealredorichroadrockroofrubyruinrunsrustsafesagascarsetssilkskewslotsoapsolosongstubsurfswantacotasktaxitenttiedtimetinytoiltombtoystriptunatwinuglyundouniturgeuservastveryvetovialvibeviewvisavoidvowswallwandwarmwaspwavewaxywebswhatwhenwhizwolfworkyankyawnyellyogayurtzapszerozestzinczonezoom";
-      bytewordsLookUpTable = [];
-      BYTEWORDS_NUM = 256;
-      BYTEWORD_LENGTH = 4;
-      MINIMAL_BYTEWORD_LENGTH = 2;
-      (function(STYLES2) {
-        STYLES2["STANDARD"] = "standard";
-        STYLES2["URI"] = "uri";
-        STYLES2["MINIMAL"] = "minimal";
-      })(STYLES || (STYLES = {}));
-      getWord = function(index) {
-        return bytewords.slice(index * BYTEWORD_LENGTH, index * BYTEWORD_LENGTH + BYTEWORD_LENGTH);
-      };
-      getMinimalWord = function(index) {
-        var byteword = getWord(index);
-        return "" + byteword[0] + byteword[BYTEWORD_LENGTH - 1];
-      };
-      addCRC = function(string) {
-        var crc = getCRCHex(import_buffer7.Buffer.from(string, "hex"));
-        return "" + string + crc;
-      };
-      encodeWithSeparator = function(word, separator) {
-        var crcAppendedWord = addCRC(word);
-        var crcWordBuff = import_buffer7.Buffer.from(crcAppendedWord, "hex");
-        var result = crcWordBuff.reduce(function(result2, w) {
-          return __spreadArrays3(result2, [getWord(w)]);
-        }, []);
-        return result.join(separator);
-      };
-      encodeMinimal = function(word) {
-        var crcAppendedWord = addCRC(word);
-        var crcWordBuff = import_buffer7.Buffer.from(crcAppendedWord, "hex");
-        var result = crcWordBuff.reduce(function(result2, w) {
-          return result2 + getMinimalWord(w);
-        }, "");
-        return result;
-      };
-      decodeWord = function(word, wordLength) {
-        if (word.length !== wordLength) {
-          throw new Error("'Invalid Bytewords: word.length does not match wordLength provided'");
-        }
-        var dim = 26;
-        if (bytewordsLookUpTable.length === 0) {
-          var array_len = dim * dim;
-          bytewordsLookUpTable = __spreadArrays3(new Array(array_len)).map(function() {
-            return -1;
-          });
-          for (var i = 0; i < BYTEWORDS_NUM; i++) {
-            var byteword = getWord(i);
-            var x_1 = byteword[0].charCodeAt(0) - "a".charCodeAt(0);
-            var y_1 = byteword[3].charCodeAt(0) - "a".charCodeAt(0);
-            var offset_1 = y_1 * dim + x_1;
-            bytewordsLookUpTable[offset_1] = i;
-          }
-        }
-        var x = word[0].toLowerCase().charCodeAt(0) - "a".charCodeAt(0);
-        var y = word[wordLength == 4 ? 3 : 1].toLowerCase().charCodeAt(0) - "a".charCodeAt(0);
-        if (!(0 <= x && x < dim && 0 <= y && y < dim)) {
-          throw new Error("Invalid Bytewords: invalid word");
-        }
-        var offset = y * dim + x;
-        var value = bytewordsLookUpTable[offset];
-        if (value === -1) {
-          throw new Error("Invalid Bytewords: value not in lookup table");
-        }
-        if (wordLength == BYTEWORD_LENGTH) {
-          var byteword = getWord(value);
-          var c1 = word[1].toLowerCase();
-          var c2 = word[2].toLowerCase();
-          if (!(c1 === byteword[1] && c2 === byteword[2])) {
-            throw new Error("Invalid Bytewords: invalid middle letters of word");
-          }
-        }
-        return import_buffer7.Buffer.from([value]).toString("hex");
-      };
-      _decode = function(string, separator, wordLength) {
-        var words = wordLength == BYTEWORD_LENGTH ? string.split(separator) : partition(string, 2);
-        var decodedString = words.map(function(word) {
-          return decodeWord(word, wordLength);
-        }).join("");
-        if (decodedString.length < 5) {
-          throw new Error("Invalid Bytewords: invalid decoded string length");
-        }
-        var _a = split(import_buffer7.Buffer.from(decodedString, "hex"), 4), body = _a[0], bodyChecksum = _a[1];
-        var checksum = getCRCHex(body);
-        if (checksum !== bodyChecksum.toString("hex")) {
-          throw new Error("Invalid Checksum");
-        }
-        return body.toString("hex");
-      };
-      decode2 = function(string, style) {
-        if (style === void 0) {
-          style = STYLES.MINIMAL;
-        }
-        switch (style) {
-          case STYLES.STANDARD:
-            return _decode(string, " ", BYTEWORD_LENGTH);
-          case STYLES.URI:
-            return _decode(string, "-", BYTEWORD_LENGTH);
-          case STYLES.MINIMAL:
-            return _decode(string, "", MINIMAL_BYTEWORD_LENGTH);
-          default:
-            throw new Error("Invalid style " + style);
-        }
-      };
-      encode2 = function(string, style) {
-        if (style === void 0) {
-          style = STYLES.MINIMAL;
-        }
-        switch (style) {
-          case STYLES.STANDARD:
-            return encodeWithSeparator(string, " ");
-          case STYLES.URI:
-            return encodeWithSeparator(string, "-");
-          case STYLES.MINIMAL:
-            return encodeMinimal(string);
-          default:
-            throw new Error("Invalid style " + style);
-        }
-      };
-      bytewords_default = {
-        decode: decode2,
-        encode: encode2,
-        STYLES
-      };
+  init_buffer_shim();
+  var import_buffer7 = __toESM(require_buffer());
+  var __spreadArrays3 = function() {
+    for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
+    for (var r = Array(s), k = 0, i = 0; i < il; i++)
+      for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
+        r[k] = a[j];
+    return r;
+  };
+  var bytewords = "ableacidalsoapexaquaarchatomauntawayaxisbackbaldbarnbeltbetabiasbluebodybragbrewbulbbuzzcalmcashcatschefcityclawcodecolacookcostcruxcurlcuspcyandarkdatadaysdelidicedietdoordowndrawdropdrumdulldutyeacheasyechoedgeepicevenexamexiteyesfactfairfernfigsfilmfishfizzflapflewfluxfoxyfreefrogfuelfundgalagamegeargemsgiftgirlglowgoodgraygrimgurugushgyrohalfhanghardhawkheathelphighhillholyhopehornhutsicedideaidleinchinkyintoirisironitemjadejazzjoinjoltjowljudojugsjumpjunkjurykeepkenokeptkeyskickkilnkingkitekiwiknoblamblavalazyleaflegsliarlimplionlistlogoloudloveluaulucklungmainmanymathmazememomenumeowmildmintmissmonknailnavyneednewsnextnoonnotenumbobeyoboeomitonyxopenovalowlspaidpartpeckplaypluspoempoolposepuffpumapurrquadquizraceramprealredorichroadrockroofrubyruinrunsrustsafesagascarsetssilkskewslotsoapsolosongstubsurfswantacotasktaxitenttiedtimetinytoiltombtoystriptunatwinuglyundouniturgeuservastveryvetovialvibeviewvisavoidvowswallwandwarmwaspwavewaxywebswhatwhenwhizwolfworkyankyawnyellyogayurtzapszerozestzinczonezoom";
+  var bytewordsLookUpTable = [];
+  var BYTEWORDS_NUM = 256;
+  var BYTEWORD_LENGTH = 4;
+  var MINIMAL_BYTEWORD_LENGTH = 2;
+  var STYLES;
+  (function(STYLES2) {
+    STYLES2["STANDARD"] = "standard";
+    STYLES2["URI"] = "uri";
+    STYLES2["MINIMAL"] = "minimal";
+  })(STYLES || (STYLES = {}));
+  var getWord = function(index) {
+    return bytewords.slice(index * BYTEWORD_LENGTH, index * BYTEWORD_LENGTH + BYTEWORD_LENGTH);
+  };
+  var getMinimalWord = function(index) {
+    var byteword = getWord(index);
+    return "" + byteword[0] + byteword[BYTEWORD_LENGTH - 1];
+  };
+  var addCRC = function(string) {
+    var crc = getCRCHex(import_buffer7.Buffer.from(string, "hex"));
+    return "" + string + crc;
+  };
+  var encodeWithSeparator = function(word, separator) {
+    var crcAppendedWord = addCRC(word);
+    var crcWordBuff = import_buffer7.Buffer.from(crcAppendedWord, "hex");
+    var result = crcWordBuff.reduce(function(result2, w) {
+      return __spreadArrays3(result2, [getWord(w)]);
+    }, []);
+    return result.join(separator);
+  };
+  var encodeMinimal = function(word) {
+    var crcAppendedWord = addCRC(word);
+    var crcWordBuff = import_buffer7.Buffer.from(crcAppendedWord, "hex");
+    var result = crcWordBuff.reduce(function(result2, w) {
+      return result2 + getMinimalWord(w);
+    }, "");
+    return result;
+  };
+  var decodeWord = function(word, wordLength) {
+    if (word.length !== wordLength) {
+      throw new Error("'Invalid Bytewords: word.length does not match wordLength provided'");
     }
-  });
+    var dim = 26;
+    if (bytewordsLookUpTable.length === 0) {
+      var array_len = dim * dim;
+      bytewordsLookUpTable = __spreadArrays3(new Array(array_len)).map(function() {
+        return -1;
+      });
+      for (var i = 0; i < BYTEWORDS_NUM; i++) {
+        var byteword = getWord(i);
+        var x_1 = byteword[0].charCodeAt(0) - "a".charCodeAt(0);
+        var y_1 = byteword[3].charCodeAt(0) - "a".charCodeAt(0);
+        var offset_1 = y_1 * dim + x_1;
+        bytewordsLookUpTable[offset_1] = i;
+      }
+    }
+    var x = word[0].toLowerCase().charCodeAt(0) - "a".charCodeAt(0);
+    var y = word[wordLength == 4 ? 3 : 1].toLowerCase().charCodeAt(0) - "a".charCodeAt(0);
+    if (!(0 <= x && x < dim && 0 <= y && y < dim)) {
+      throw new Error("Invalid Bytewords: invalid word");
+    }
+    var offset = y * dim + x;
+    var value = bytewordsLookUpTable[offset];
+    if (value === -1) {
+      throw new Error("Invalid Bytewords: value not in lookup table");
+    }
+    if (wordLength == BYTEWORD_LENGTH) {
+      var byteword = getWord(value);
+      var c1 = word[1].toLowerCase();
+      var c2 = word[2].toLowerCase();
+      if (!(c1 === byteword[1] && c2 === byteword[2])) {
+        throw new Error("Invalid Bytewords: invalid middle letters of word");
+      }
+    }
+    return import_buffer7.Buffer.from([value]).toString("hex");
+  };
+  var _decode = function(string, separator, wordLength) {
+    var words = wordLength == BYTEWORD_LENGTH ? string.split(separator) : partition(string, 2);
+    var decodedString = words.map(function(word) {
+      return decodeWord(word, wordLength);
+    }).join("");
+    if (decodedString.length < 5) {
+      throw new Error("Invalid Bytewords: invalid decoded string length");
+    }
+    var _a = split(import_buffer7.Buffer.from(decodedString, "hex"), 4), body = _a[0], bodyChecksum = _a[1];
+    var checksum = getCRCHex(body);
+    if (checksum !== bodyChecksum.toString("hex")) {
+      throw new Error("Invalid Checksum");
+    }
+    return body.toString("hex");
+  };
+  var decode2 = function(string, style) {
+    if (style === void 0) {
+      style = STYLES.MINIMAL;
+    }
+    switch (style) {
+      case STYLES.STANDARD:
+        return _decode(string, " ", BYTEWORD_LENGTH);
+      case STYLES.URI:
+        return _decode(string, "-", BYTEWORD_LENGTH);
+      case STYLES.MINIMAL:
+        return _decode(string, "", MINIMAL_BYTEWORD_LENGTH);
+      default:
+        throw new Error("Invalid style " + style);
+    }
+  };
+  var encode2 = function(string, style) {
+    if (style === void 0) {
+      style = STYLES.MINIMAL;
+    }
+    switch (style) {
+      case STYLES.STANDARD:
+        return encodeWithSeparator(string, " ");
+      case STYLES.URI:
+        return encodeWithSeparator(string, "-");
+      case STYLES.MINIMAL:
+        return encodeMinimal(string);
+      default:
+        throw new Error("Invalid style " + style);
+    }
+  };
+  var bytewords_default = {
+    decode: decode2,
+    encode: encode2,
+    STYLES
+  };
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/urEncoder.js
-  var __spreadArrays4, UREncoder, urEncoder_default;
-  var init_urEncoder = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/urEncoder.js"() {
-      init_buffer_shim();
-      init_fountainEncoder();
-      init_bytewords();
-      __spreadArrays4 = function() {
-        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
-        for (var r = Array(s), k = 0, i = 0; i < il; i++)
-          for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
-            r[k] = a[j];
-        return r;
+  var __spreadArrays4 = function() {
+    for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
+    for (var r = Array(s), k = 0, i = 0; i < il; i++)
+      for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
+        r[k] = a[j];
+    return r;
+  };
+  var UREncoder = (
+    /** @class */
+    (function() {
+      function UREncoder2(_ur, maxFragmentLength, firstSeqNum, minFragmentLength) {
+        this.ur = _ur;
+        this.fountainEncoder = new fountainEncoder_default(_ur.cbor, maxFragmentLength, firstSeqNum, minFragmentLength);
+      }
+      Object.defineProperty(UREncoder2.prototype, "fragmentsLength", {
+        get: function() {
+          return this.fountainEncoder.fragmentsLength;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(UREncoder2.prototype, "fragments", {
+        get: function() {
+          return this.fountainEncoder.fragments;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(UREncoder2.prototype, "messageLength", {
+        get: function() {
+          return this.fountainEncoder.messageLength;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(UREncoder2.prototype, "cbor", {
+        get: function() {
+          return this.ur.cbor;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      UREncoder2.prototype.encodeWhole = function() {
+        var _this = this;
+        return __spreadArrays4(new Array(this.fragmentsLength)).map(function() {
+          return _this.nextPart();
+        });
       };
-      UREncoder = /** @class */
-      (function() {
-        function UREncoder2(_ur, maxFragmentLength, firstSeqNum, minFragmentLength) {
-          this.ur = _ur;
-          this.fountainEncoder = new fountainEncoder_default(_ur.cbor, maxFragmentLength, firstSeqNum, minFragmentLength);
+      UREncoder2.prototype.nextPart = function() {
+        var part = this.fountainEncoder.nextPart();
+        if (this.fountainEncoder.isSinglePart()) {
+          return UREncoder2.encodeSinglePart(this.ur);
+        } else {
+          return UREncoder2.encodePart(this.ur.type, part);
         }
-        Object.defineProperty(UREncoder2.prototype, "fragmentsLength", {
-          get: function() {
-            return this.fountainEncoder.fragmentsLength;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(UREncoder2.prototype, "fragments", {
-          get: function() {
-            return this.fountainEncoder.fragments;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(UREncoder2.prototype, "messageLength", {
-          get: function() {
-            return this.fountainEncoder.messageLength;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(UREncoder2.prototype, "cbor", {
-          get: function() {
-            return this.ur.cbor;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        UREncoder2.prototype.encodeWhole = function() {
-          var _this = this;
-          return __spreadArrays4(new Array(this.fragmentsLength)).map(function() {
-            return _this.nextPart();
-          });
-        };
-        UREncoder2.prototype.nextPart = function() {
-          var part = this.fountainEncoder.nextPart();
-          if (this.fountainEncoder.isSinglePart()) {
-            return UREncoder2.encodeSinglePart(this.ur);
-          } else {
-            return UREncoder2.encodePart(this.ur.type, part);
-          }
-        };
-        UREncoder2.encodeUri = function(scheme, pathComponents) {
-          var path = pathComponents.join("/");
-          return [scheme, path].join(":");
-        };
-        UREncoder2.encodeUR = function(pathComponents) {
-          return UREncoder2.encodeUri("ur", pathComponents);
-        };
-        UREncoder2.encodePart = function(type, part) {
-          var seq = part.seqNum + "-" + part.seqLength;
-          var body = bytewords_default.encode(part.cbor().toString("hex"), bytewords_default.STYLES.MINIMAL);
-          return UREncoder2.encodeUR([type, seq, body]);
-        };
-        UREncoder2.encodeSinglePart = function(ur) {
-          var body = bytewords_default.encode(ur.cbor.toString("hex"), bytewords_default.STYLES.MINIMAL);
-          return UREncoder2.encodeUR([ur.type, body]);
-        };
-        return UREncoder2;
-      })();
-      urEncoder_default = UREncoder;
-    }
-  });
-
-  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainDecoder.js
-  var import_buffer8, __spreadArrays5, FountainDecoderPart, FountainDecoder, fountainDecoder_default;
-  var init_fountainDecoder = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainDecoder.js"() {
-      init_buffer_shim();
-      init_utils2();
-      init_fountainUtils();
-      init_errors();
-      import_buffer8 = __toESM(require_buffer());
-      __spreadArrays5 = function() {
-        for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
-        for (var r = Array(s), k = 0, i = 0; i < il; i++)
-          for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
-            r[k] = a[j];
-        return r;
       };
-      FountainDecoderPart = /** @class */
-      (function() {
-        function FountainDecoderPart2(_indexes, _fragment) {
-          this._indexes = _indexes;
-          this._fragment = _fragment;
-        }
-        Object.defineProperty(FountainDecoderPart2.prototype, "indexes", {
-          get: function() {
-            return this._indexes;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        Object.defineProperty(FountainDecoderPart2.prototype, "fragment", {
-          get: function() {
-            return this._fragment;
-          },
-          enumerable: false,
-          configurable: true
-        });
-        FountainDecoderPart2.fromEncoderPart = function(encoderPart) {
-          var indexes = chooseFragments(encoderPart.seqNum, encoderPart.seqLength, encoderPart.checksum);
-          var fragment = encoderPart.fragment;
-          return new FountainDecoderPart2(indexes, fragment);
-        };
-        FountainDecoderPart2.prototype.isSimple = function() {
-          return this.indexes.length === 1;
-        };
-        return FountainDecoderPart2;
-      })();
-      FountainDecoder = /** @class */
-      (function() {
-        function FountainDecoder2() {
-          this.result = void 0;
-          this.expectedMessageLength = 0;
-          this.expectedChecksum = 0;
-          this.expectedFragmentLength = 0;
-          this.processedPartsCount = 0;
-          this.expectedPartIndexes = [];
-          this.lastPartIndexes = [];
-          this.queuedParts = [];
-          this.receivedPartIndexes = [];
-          this.mixedParts = [];
-          this.simpleParts = [];
-        }
-        FountainDecoder2.prototype.validatePart = function(part) {
-          var _this = this;
-          if (this.expectedPartIndexes.length === 0) {
-            __spreadArrays5(new Array(part.seqLength)).forEach(function(_, index) {
-              return _this.expectedPartIndexes.push(index);
-            });
-            this.expectedMessageLength = part.messageLength;
-            this.expectedChecksum = part.checksum;
-            this.expectedFragmentLength = part.fragment.length;
-          } else {
-            if (this.expectedPartIndexes.length !== part.seqLength) {
-              return false;
-            }
-            if (this.expectedMessageLength !== part.messageLength) {
-              return false;
-            }
-            if (this.expectedChecksum !== part.checksum) {
-              return false;
-            }
-            if (this.expectedFragmentLength !== part.fragment.length) {
-              return false;
-            }
-          }
-          return true;
-        };
-        FountainDecoder2.prototype.reducePartByPart = function(a, b) {
-          if (arrayContains(a.indexes, b.indexes)) {
-            var newIndexes = setDifference(a.indexes, b.indexes);
-            var newFragment = bufferXOR(a.fragment, b.fragment);
-            return new FountainDecoderPart(newIndexes, newFragment);
-          } else {
-            return a;
-          }
-        };
-        FountainDecoder2.prototype.reduceMixedBy = function(part) {
-          var _this = this;
-          var newMixed = [];
-          this.mixedParts.map(function(_a) {
-            var mixedPart = _a.value;
-            return _this.reducePartByPart(mixedPart, part);
-          }).forEach(function(reducedPart) {
-            if (reducedPart.isSimple()) {
-              _this.queuedParts.push(reducedPart);
-            } else {
-              newMixed.push({ key: reducedPart.indexes, value: reducedPart });
-            }
-          });
-          this.mixedParts = newMixed;
-        };
-        FountainDecoder2.prototype.processSimplePart = function(part) {
-          var fragmentIndex = part.indexes[0];
-          if (this.receivedPartIndexes.includes(fragmentIndex)) {
-            return;
-          }
-          this.simpleParts.push({ key: part.indexes, value: part });
-          this.receivedPartIndexes.push(fragmentIndex);
-          if (arraysEqual(this.receivedPartIndexes, this.expectedPartIndexes)) {
-            var sortedParts = this.simpleParts.map(function(_a) {
-              var value = _a.value;
-              return value;
-            }).sort(function(a, b) {
-              return a.indexes[0] - b.indexes[0];
-            });
-            var message = FountainDecoder2.joinFragments(sortedParts.map(function(part2) {
-              return part2.fragment;
-            }), this.expectedMessageLength);
-            var checksum = getCRC(message);
-            if (checksum === this.expectedChecksum) {
-              this.result = message;
-            } else {
-              this.error = new InvalidChecksumError();
-            }
-          } else {
-            this.reduceMixedBy(part);
-          }
-        };
-        FountainDecoder2.prototype.processMixedPart = function(part) {
-          var _this = this;
-          if (this.mixedParts.some(function(_a) {
-            var indexes = _a.key;
-            return arraysEqual(indexes, part.indexes);
-          })) {
-            return;
-          }
-          var p2 = this.simpleParts.reduce(function(acc, _a) {
-            var p = _a.value;
-            return _this.reducePartByPart(acc, p);
-          }, part);
-          p2 = this.mixedParts.reduce(function(acc, _a) {
-            var p = _a.value;
-            return _this.reducePartByPart(acc, p);
-          }, p2);
-          if (p2.isSimple()) {
-            this.queuedParts.push(p2);
-          } else {
-            this.reduceMixedBy(p2);
-            this.mixedParts.push({ key: p2.indexes, value: p2 });
-          }
-        };
-        FountainDecoder2.prototype.processQueuedItem = function() {
-          if (this.queuedParts.length === 0) {
-            return;
-          }
-          var part = this.queuedParts.shift();
-          if (part.isSimple()) {
-            this.processSimplePart(part);
-          } else {
-            this.processMixedPart(part);
-          }
-        };
-        FountainDecoder2.prototype.receivePart = function(encoderPart) {
-          if (this.isComplete()) {
-            return false;
-          }
-          if (!this.validatePart(encoderPart)) {
-            return false;
-          }
-          var decoderPart = FountainDecoderPart.fromEncoderPart(encoderPart);
-          this.lastPartIndexes = decoderPart.indexes;
-          this.queuedParts.push(decoderPart);
-          while (!this.isComplete() && this.queuedParts.length > 0) {
-            this.processQueuedItem();
-          }
-          ;
-          this.processedPartsCount += 1;
-          return true;
-        };
-        FountainDecoder2.prototype.isComplete = function() {
-          return Boolean(this.result !== void 0 && this.result.length > 0);
-        };
-        FountainDecoder2.prototype.isSuccess = function() {
-          return Boolean(this.error === void 0 && this.isComplete());
-        };
-        FountainDecoder2.prototype.resultMessage = function() {
-          return this.isSuccess() ? this.result : import_buffer8.Buffer.from([]);
-        };
-        FountainDecoder2.prototype.isFailure = function() {
-          return this.error !== void 0;
-        };
-        FountainDecoder2.prototype.resultError = function() {
-          return this.error ? this.error.message : "";
-        };
-        FountainDecoder2.prototype.expectedPartCount = function() {
-          return this.expectedPartIndexes.length;
-        };
-        FountainDecoder2.prototype.getExpectedPartIndexes = function() {
-          return __spreadArrays5(this.expectedPartIndexes);
-        };
-        FountainDecoder2.prototype.getReceivedPartIndexes = function() {
-          return __spreadArrays5(this.receivedPartIndexes);
-        };
-        FountainDecoder2.prototype.getLastPartIndexes = function() {
-          return __spreadArrays5(this.lastPartIndexes);
-        };
-        FountainDecoder2.prototype.estimatedPercentComplete = function() {
-          if (this.isComplete()) {
-            return 1;
-          }
-          var expectedPartCount = this.expectedPartCount();
-          if (expectedPartCount === 0) {
-            return 0;
-          }
-          return Math.min(0.99, this.processedPartsCount / (expectedPartCount * 1.75));
-        };
-        FountainDecoder2.prototype.getProgress = function() {
-          if (this.isComplete()) {
-            return 1;
-          }
-          var expectedPartCount = this.expectedPartCount();
-          if (expectedPartCount === 0) {
-            return 0;
-          }
-          return this.receivedPartIndexes.length / expectedPartCount;
-        };
-        FountainDecoder2.joinFragments = function(fragments, messageLength) {
-          return import_buffer8.Buffer.concat(fragments).slice(0, messageLength);
-        };
-        return FountainDecoder2;
-      })();
-      fountainDecoder_default = FountainDecoder;
-    }
-  });
+      UREncoder2.encodeUri = function(scheme, pathComponents) {
+        var path = pathComponents.join("/");
+        return [scheme, path].join(":");
+      };
+      UREncoder2.encodeUR = function(pathComponents) {
+        return UREncoder2.encodeUri("ur", pathComponents);
+      };
+      UREncoder2.encodePart = function(type, part) {
+        var seq = part.seqNum + "-" + part.seqLength;
+        var body = bytewords_default.encode(part.cbor().toString("hex"), bytewords_default.STYLES.MINIMAL);
+        return UREncoder2.encodeUR([type, seq, body]);
+      };
+      UREncoder2.encodeSinglePart = function(ur) {
+        var body = bytewords_default.encode(ur.cbor.toString("hex"), bytewords_default.STYLES.MINIMAL);
+        return UREncoder2.encodeUR([ur.type, body]);
+      };
+      return UREncoder2;
+    })()
+  );
+  var urEncoder_default = UREncoder;
 
   // node_modules/@gandlaf21/bc-ur/dist/lib/es6/urDecoder.js
-  var import_buffer9, URDecoder;
-  var init_urDecoder = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/urDecoder.js"() {
-      init_buffer_shim();
-      init_fountainDecoder();
-      init_bytewords();
-      init_utils2();
-      init_errors();
-      init_ur();
-      init_fountainEncoder();
-      import_buffer9 = __toESM(require_buffer());
-      URDecoder = /** @class */
-      (function() {
-        function URDecoder2(fountainDecoder, type) {
-          if (fountainDecoder === void 0) {
-            fountainDecoder = new fountainDecoder_default();
-          }
-          if (type === void 0) {
-            type = "bytes";
-          }
-          this.fountainDecoder = fountainDecoder;
-          this.type = type;
-          if (!isURType(type)) {
-            throw new Error("Invalid UR type");
-          }
-          this.expected_type = "";
-        }
-        URDecoder2.decodeBody = function(type, message) {
-          var cbor = bytewords_default.decode(message, bytewords_default.STYLES.MINIMAL);
-          return new ur_default(import_buffer9.Buffer.from(cbor, "hex"), type);
-        };
-        URDecoder2.prototype.validatePart = function(type) {
-          if (this.expected_type) {
-            return this.expected_type === type;
-          }
-          if (!isURType(type)) {
-            return false;
-          }
-          this.expected_type = type;
-          return true;
-        };
-        URDecoder2.decode = function(message) {
-          var _a = this.parse(message), type = _a[0], components = _a[1];
-          if (components.length === 0) {
-            throw new InvalidPathLengthError();
-          }
-          var body = components[0];
-          return URDecoder2.decodeBody(type, body);
-        };
-        URDecoder2.parse = function(message) {
-          var lowercase = message.toLowerCase();
-          var prefix = lowercase.slice(0, 3);
-          if (prefix !== "ur:") {
-            throw new InvalidSchemeError();
-          }
-          var components = lowercase.slice(3).split("/");
-          var type = components[0];
-          if (components.length < 2) {
-            throw new InvalidPathLengthError();
-          }
-          if (!isURType(type)) {
-            throw new InvalidTypeError();
-          }
-          return [type, components.slice(1)];
-        };
-        URDecoder2.parseSequenceComponent = function(s) {
-          var components = s.split("-");
-          if (components.length !== 2) {
-            throw new InvalidSequenceComponentError();
-          }
-          var seqNum = toUint32(Number(components[0]));
-          var seqLength = Number(components[1]);
-          if (seqNum < 1 || seqLength < 1) {
-            throw new InvalidSequenceComponentError();
-          }
-          return [seqNum, seqLength];
-        };
-        URDecoder2.prototype.receivePart = function(s) {
-          if (this.result !== void 0) {
-            return false;
-          }
-          var _a = URDecoder2.parse(s), type = _a[0], components = _a[1];
-          if (!this.validatePart(type)) {
-            return false;
-          }
-          if (components.length === 1) {
-            this.result = URDecoder2.decodeBody(type, components[0]);
-            return true;
-          }
-          if (components.length !== 2) {
-            throw new InvalidPathLengthError();
-          }
-          var seq = components[0], fragment = components[1];
-          var _b = URDecoder2.parseSequenceComponent(seq), seqNum = _b[0], seqLength = _b[1];
-          var cbor = bytewords_default.decode(fragment, bytewords_default.STYLES.MINIMAL);
-          var part = FountainEncoderPart.fromCBOR(cbor);
-          if (seqNum !== part.seqNum || seqLength !== part.seqLength) {
-            return false;
-          }
-          if (!this.fountainDecoder.receivePart(part)) {
-            return false;
-          }
-          if (this.fountainDecoder.isSuccess()) {
-            this.result = new ur_default(this.fountainDecoder.resultMessage(), type);
-          } else if (this.fountainDecoder.isFailure()) {
-            this.error = new InvalidSchemeError();
-          }
-          return true;
-        };
-        URDecoder2.prototype.resultUR = function() {
-          return this.result ? this.result : new ur_default(import_buffer9.Buffer.from([]));
-        };
-        URDecoder2.prototype.isComplete = function() {
-          return this.result && this.result.cbor.length > 0 ? true : false;
-        };
-        URDecoder2.prototype.isSuccess = function() {
-          return !this.error && this.isComplete();
-        };
-        URDecoder2.prototype.isError = function() {
-          return this.error !== void 0;
-        };
-        URDecoder2.prototype.resultError = function() {
-          return this.error ? this.error.message : "";
-        };
-        URDecoder2.prototype.expectedPartCount = function() {
-          return this.fountainDecoder.expectedPartCount();
-        };
-        URDecoder2.prototype.expectedPartIndexes = function() {
-          return this.fountainDecoder.getExpectedPartIndexes();
-        };
-        URDecoder2.prototype.receivedPartIndexes = function() {
-          return this.fountainDecoder.getReceivedPartIndexes();
-        };
-        URDecoder2.prototype.lastPartIndexes = function() {
-          return this.fountainDecoder.getLastPartIndexes();
-        };
-        URDecoder2.prototype.estimatedPercentComplete = function() {
-          return this.fountainDecoder.estimatedPercentComplete();
-        };
-        URDecoder2.prototype.getProgress = function() {
-          return this.fountainDecoder.getProgress();
-        };
-        return URDecoder2;
-      })();
-    }
-  });
+  init_buffer_shim();
 
-  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/index.js
-  var init_es6 = __esm({
-    "node_modules/@gandlaf21/bc-ur/dist/lib/es6/index.js"() {
-      init_buffer_shim();
-      init_ur();
-      init_urEncoder();
-      init_urDecoder();
-    }
-  });
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/fountainDecoder.js
+  init_buffer_shim();
+  var import_buffer8 = __toESM(require_buffer());
+  var __spreadArrays5 = function() {
+    for (var s = 0, i = 0, il = arguments.length; i < il; i++) s += arguments[i].length;
+    for (var r = Array(s), k = 0, i = 0; i < il; i++)
+      for (var a = arguments[i], j = 0, jl = a.length; j < jl; j++, k++)
+        r[k] = a[j];
+    return r;
+  };
+  var FountainDecoderPart = (
+    /** @class */
+    (function() {
+      function FountainDecoderPart2(_indexes, _fragment) {
+        this._indexes = _indexes;
+        this._fragment = _fragment;
+      }
+      Object.defineProperty(FountainDecoderPart2.prototype, "indexes", {
+        get: function() {
+          return this._indexes;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      Object.defineProperty(FountainDecoderPart2.prototype, "fragment", {
+        get: function() {
+          return this._fragment;
+        },
+        enumerable: false,
+        configurable: true
+      });
+      FountainDecoderPart2.fromEncoderPart = function(encoderPart) {
+        var indexes = chooseFragments(encoderPart.seqNum, encoderPart.seqLength, encoderPart.checksum);
+        var fragment = encoderPart.fragment;
+        return new FountainDecoderPart2(indexes, fragment);
+      };
+      FountainDecoderPart2.prototype.isSimple = function() {
+        return this.indexes.length === 1;
+      };
+      return FountainDecoderPart2;
+    })()
+  );
+  var FountainDecoder = (
+    /** @class */
+    (function() {
+      function FountainDecoder2() {
+        this.result = void 0;
+        this.expectedMessageLength = 0;
+        this.expectedChecksum = 0;
+        this.expectedFragmentLength = 0;
+        this.processedPartsCount = 0;
+        this.expectedPartIndexes = [];
+        this.lastPartIndexes = [];
+        this.queuedParts = [];
+        this.receivedPartIndexes = [];
+        this.mixedParts = [];
+        this.simpleParts = [];
+      }
+      FountainDecoder2.prototype.validatePart = function(part) {
+        var _this = this;
+        if (this.expectedPartIndexes.length === 0) {
+          __spreadArrays5(new Array(part.seqLength)).forEach(function(_, index) {
+            return _this.expectedPartIndexes.push(index);
+          });
+          this.expectedMessageLength = part.messageLength;
+          this.expectedChecksum = part.checksum;
+          this.expectedFragmentLength = part.fragment.length;
+        } else {
+          if (this.expectedPartIndexes.length !== part.seqLength) {
+            return false;
+          }
+          if (this.expectedMessageLength !== part.messageLength) {
+            return false;
+          }
+          if (this.expectedChecksum !== part.checksum) {
+            return false;
+          }
+          if (this.expectedFragmentLength !== part.fragment.length) {
+            return false;
+          }
+        }
+        return true;
+      };
+      FountainDecoder2.prototype.reducePartByPart = function(a, b) {
+        if (arrayContains(a.indexes, b.indexes)) {
+          var newIndexes = setDifference(a.indexes, b.indexes);
+          var newFragment = bufferXOR(a.fragment, b.fragment);
+          return new FountainDecoderPart(newIndexes, newFragment);
+        } else {
+          return a;
+        }
+      };
+      FountainDecoder2.prototype.reduceMixedBy = function(part) {
+        var _this = this;
+        var newMixed = [];
+        this.mixedParts.map(function(_a) {
+          var mixedPart = _a.value;
+          return _this.reducePartByPart(mixedPart, part);
+        }).forEach(function(reducedPart) {
+          if (reducedPart.isSimple()) {
+            _this.queuedParts.push(reducedPart);
+          } else {
+            newMixed.push({ key: reducedPart.indexes, value: reducedPart });
+          }
+        });
+        this.mixedParts = newMixed;
+      };
+      FountainDecoder2.prototype.processSimplePart = function(part) {
+        var fragmentIndex = part.indexes[0];
+        if (this.receivedPartIndexes.includes(fragmentIndex)) {
+          return;
+        }
+        this.simpleParts.push({ key: part.indexes, value: part });
+        this.receivedPartIndexes.push(fragmentIndex);
+        if (arraysEqual(this.receivedPartIndexes, this.expectedPartIndexes)) {
+          var sortedParts = this.simpleParts.map(function(_a) {
+            var value = _a.value;
+            return value;
+          }).sort(function(a, b) {
+            return a.indexes[0] - b.indexes[0];
+          });
+          var message = FountainDecoder2.joinFragments(sortedParts.map(function(part2) {
+            return part2.fragment;
+          }), this.expectedMessageLength);
+          var checksum = getCRC(message);
+          if (checksum === this.expectedChecksum) {
+            this.result = message;
+          } else {
+            this.error = new InvalidChecksumError();
+          }
+        } else {
+          this.reduceMixedBy(part);
+        }
+      };
+      FountainDecoder2.prototype.processMixedPart = function(part) {
+        var _this = this;
+        if (this.mixedParts.some(function(_a) {
+          var indexes = _a.key;
+          return arraysEqual(indexes, part.indexes);
+        })) {
+          return;
+        }
+        var p2 = this.simpleParts.reduce(function(acc, _a) {
+          var p = _a.value;
+          return _this.reducePartByPart(acc, p);
+        }, part);
+        p2 = this.mixedParts.reduce(function(acc, _a) {
+          var p = _a.value;
+          return _this.reducePartByPart(acc, p);
+        }, p2);
+        if (p2.isSimple()) {
+          this.queuedParts.push(p2);
+        } else {
+          this.reduceMixedBy(p2);
+          this.mixedParts.push({ key: p2.indexes, value: p2 });
+        }
+      };
+      FountainDecoder2.prototype.processQueuedItem = function() {
+        if (this.queuedParts.length === 0) {
+          return;
+        }
+        var part = this.queuedParts.shift();
+        if (part.isSimple()) {
+          this.processSimplePart(part);
+        } else {
+          this.processMixedPart(part);
+        }
+      };
+      FountainDecoder2.prototype.receivePart = function(encoderPart) {
+        if (this.isComplete()) {
+          return false;
+        }
+        if (!this.validatePart(encoderPart)) {
+          return false;
+        }
+        var decoderPart = FountainDecoderPart.fromEncoderPart(encoderPart);
+        this.lastPartIndexes = decoderPart.indexes;
+        this.queuedParts.push(decoderPart);
+        while (!this.isComplete() && this.queuedParts.length > 0) {
+          this.processQueuedItem();
+        }
+        ;
+        this.processedPartsCount += 1;
+        return true;
+      };
+      FountainDecoder2.prototype.isComplete = function() {
+        return Boolean(this.result !== void 0 && this.result.length > 0);
+      };
+      FountainDecoder2.prototype.isSuccess = function() {
+        return Boolean(this.error === void 0 && this.isComplete());
+      };
+      FountainDecoder2.prototype.resultMessage = function() {
+        return this.isSuccess() ? this.result : import_buffer8.Buffer.from([]);
+      };
+      FountainDecoder2.prototype.isFailure = function() {
+        return this.error !== void 0;
+      };
+      FountainDecoder2.prototype.resultError = function() {
+        return this.error ? this.error.message : "";
+      };
+      FountainDecoder2.prototype.expectedPartCount = function() {
+        return this.expectedPartIndexes.length;
+      };
+      FountainDecoder2.prototype.getExpectedPartIndexes = function() {
+        return __spreadArrays5(this.expectedPartIndexes);
+      };
+      FountainDecoder2.prototype.getReceivedPartIndexes = function() {
+        return __spreadArrays5(this.receivedPartIndexes);
+      };
+      FountainDecoder2.prototype.getLastPartIndexes = function() {
+        return __spreadArrays5(this.lastPartIndexes);
+      };
+      FountainDecoder2.prototype.estimatedPercentComplete = function() {
+        if (this.isComplete()) {
+          return 1;
+        }
+        var expectedPartCount = this.expectedPartCount();
+        if (expectedPartCount === 0) {
+          return 0;
+        }
+        return Math.min(0.99, this.processedPartsCount / (expectedPartCount * 1.75));
+      };
+      FountainDecoder2.prototype.getProgress = function() {
+        if (this.isComplete()) {
+          return 1;
+        }
+        var expectedPartCount = this.expectedPartCount();
+        if (expectedPartCount === 0) {
+          return 0;
+        }
+        return this.receivedPartIndexes.length / expectedPartCount;
+      };
+      FountainDecoder2.joinFragments = function(fragments, messageLength) {
+        return import_buffer8.Buffer.concat(fragments).slice(0, messageLength);
+      };
+      return FountainDecoder2;
+    })()
+  );
+  var fountainDecoder_default = FountainDecoder;
+
+  // node_modules/@gandlaf21/bc-ur/dist/lib/es6/urDecoder.js
+  var import_buffer9 = __toESM(require_buffer());
+  var URDecoder = (
+    /** @class */
+    (function() {
+      function URDecoder2(fountainDecoder, type) {
+        if (fountainDecoder === void 0) {
+          fountainDecoder = new fountainDecoder_default();
+        }
+        if (type === void 0) {
+          type = "bytes";
+        }
+        this.fountainDecoder = fountainDecoder;
+        this.type = type;
+        if (!isURType(type)) {
+          throw new Error("Invalid UR type");
+        }
+        this.expected_type = "";
+      }
+      URDecoder2.decodeBody = function(type, message) {
+        var cbor = bytewords_default.decode(message, bytewords_default.STYLES.MINIMAL);
+        return new ur_default(import_buffer9.Buffer.from(cbor, "hex"), type);
+      };
+      URDecoder2.prototype.validatePart = function(type) {
+        if (this.expected_type) {
+          return this.expected_type === type;
+        }
+        if (!isURType(type)) {
+          return false;
+        }
+        this.expected_type = type;
+        return true;
+      };
+      URDecoder2.decode = function(message) {
+        var _a = this.parse(message), type = _a[0], components = _a[1];
+        if (components.length === 0) {
+          throw new InvalidPathLengthError();
+        }
+        var body = components[0];
+        return URDecoder2.decodeBody(type, body);
+      };
+      URDecoder2.parse = function(message) {
+        var lowercase = message.toLowerCase();
+        var prefix = lowercase.slice(0, 3);
+        if (prefix !== "ur:") {
+          throw new InvalidSchemeError();
+        }
+        var components = lowercase.slice(3).split("/");
+        var type = components[0];
+        if (components.length < 2) {
+          throw new InvalidPathLengthError();
+        }
+        if (!isURType(type)) {
+          throw new InvalidTypeError();
+        }
+        return [type, components.slice(1)];
+      };
+      URDecoder2.parseSequenceComponent = function(s) {
+        var components = s.split("-");
+        if (components.length !== 2) {
+          throw new InvalidSequenceComponentError();
+        }
+        var seqNum = toUint32(Number(components[0]));
+        var seqLength = Number(components[1]);
+        if (seqNum < 1 || seqLength < 1) {
+          throw new InvalidSequenceComponentError();
+        }
+        return [seqNum, seqLength];
+      };
+      URDecoder2.prototype.receivePart = function(s) {
+        if (this.result !== void 0) {
+          return false;
+        }
+        var _a = URDecoder2.parse(s), type = _a[0], components = _a[1];
+        if (!this.validatePart(type)) {
+          return false;
+        }
+        if (components.length === 1) {
+          this.result = URDecoder2.decodeBody(type, components[0]);
+          return true;
+        }
+        if (components.length !== 2) {
+          throw new InvalidPathLengthError();
+        }
+        var seq = components[0], fragment = components[1];
+        var _b = URDecoder2.parseSequenceComponent(seq), seqNum = _b[0], seqLength = _b[1];
+        var cbor = bytewords_default.decode(fragment, bytewords_default.STYLES.MINIMAL);
+        var part = FountainEncoderPart.fromCBOR(cbor);
+        if (seqNum !== part.seqNum || seqLength !== part.seqLength) {
+          return false;
+        }
+        if (!this.fountainDecoder.receivePart(part)) {
+          return false;
+        }
+        if (this.fountainDecoder.isSuccess()) {
+          this.result = new ur_default(this.fountainDecoder.resultMessage(), type);
+        } else if (this.fountainDecoder.isFailure()) {
+          this.error = new InvalidSchemeError();
+        }
+        return true;
+      };
+      URDecoder2.prototype.resultUR = function() {
+        return this.result ? this.result : new ur_default(import_buffer9.Buffer.from([]));
+      };
+      URDecoder2.prototype.isComplete = function() {
+        return this.result && this.result.cbor.length > 0 ? true : false;
+      };
+      URDecoder2.prototype.isSuccess = function() {
+        return !this.error && this.isComplete();
+      };
+      URDecoder2.prototype.isError = function() {
+        return this.error !== void 0;
+      };
+      URDecoder2.prototype.resultError = function() {
+        return this.error ? this.error.message : "";
+      };
+      URDecoder2.prototype.expectedPartCount = function() {
+        return this.fountainDecoder.expectedPartCount();
+      };
+      URDecoder2.prototype.expectedPartIndexes = function() {
+        return this.fountainDecoder.getExpectedPartIndexes();
+      };
+      URDecoder2.prototype.receivedPartIndexes = function() {
+        return this.fountainDecoder.getReceivedPartIndexes();
+      };
+      URDecoder2.prototype.lastPartIndexes = function() {
+        return this.fountainDecoder.getLastPartIndexes();
+      };
+      URDecoder2.prototype.estimatedPercentComplete = function() {
+        return this.fountainDecoder.estimatedPercentComplete();
+      };
+      URDecoder2.prototype.getProgress = function() {
+        return this.fountainDecoder.getProgress();
+      };
+      return URDecoder2;
+    })()
+  );
 
   // entry.js
-  var require_entry = __commonJS({
-    "entry.js"() {
-      init_buffer_shim();
-      init_es6();
-      window.bcur = { UR: ur_default, UREncoder: urEncoder_default };
-    }
-  });
-  require_entry();
+  window.bcur = { UR: ur_default, UREncoder: urEncoder_default };
 })();

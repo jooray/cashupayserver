@@ -267,31 +267,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     try {
                         $wallet = Invoice::initializeWalletForStore($storeId, !$isGenerated);
                         if (!$isGenerated) {
-                            $restoreResult = $wallet->restore();
-
-                            // Persist restored counters to storage
-                            $storage = $wallet->getStorage();
-                            if ($storage && !empty($restoreResult['counters'])) {
-                                foreach ($restoreResult['counters'] as $keysetId => $counter) {
-                                    $storage->setCounter($keysetId, $counter);
-                                }
+                            // Bounded steps: without GMP the full scan outlasts any request.
+                            // Whatever is left finishes in the background, and the store hands
+                            // out no invoices it could not collect until it has.
+                            $recovery = Invoice::advanceStoreRecovery($storeId, 20.0);
+                            if ($recovery['error'] !== null) {
+                                throw new Exception($recovery['error']);
                             }
-
-                            // Count unspent vs spent proofs across all units
-                            $unspentCount = 0;
-                            $spentCount = 0;
-                            foreach ($restoreResult['byUnit'] ?? [] as $unitData) {
-                                $unspentCount += count($unitData['unspent'] ?? []);
-                                $spentCount += count($unitData['spent'] ?? []);
-                            }
-
-                            // Store result in session for display
                             $_SESSION['restore_result'] = [
                                 'success' => true,
-                                'proofs_found' => count($restoreResult['proofs'] ?? []),
-                                'proofs_unspent' => $unspentCount,
-                                'proofs_spent' => $spentCount,
-                                'counters' => $restoreResult['counters'] ?? [],
+                                'complete' => $recovery['ready'],
+                                'proofs_found' => $recovery['recovered']['proofs'],
+                                'proofs_unspent' => $recovery['recovered']['unspent'],
+                                'proofs_spent' => $recovery['recovered']['spent'],
                             ];
                         }
                     } catch (Throwable $e) {
@@ -1445,8 +1433,8 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         $proofsFound = $restoreResult['proofs_found'] ?? 0;
                         $proofsUnspent = $restoreResult['proofs_unspent'] ?? 0;
                         $proofsSpent = $restoreResult['proofs_spent'] ?? 0;
-                        $countersRestored = count($restoreResult['counters'] ?? []);
-                        if ($proofsFound > 0 || $countersRestored > 0): ?>
+                        $recoveryComplete = $restoreResult['complete'] ?? true;
+                        if ($proofsFound > 0 || !$recoveryComplete): ?>
                 <div style="background: rgba(72, 187, 120, 0.1); border: 1px solid rgba(72, 187, 120, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
                     <p style="margin-bottom: 0.25rem; font-weight: 500; color: #68d391;">Wallet Restored</p>
                     <p style="color: #a0aec0; font-size: 0.9rem;">
@@ -1457,8 +1445,11 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                     <?php echo $proofsUnspent; ?> unspent (available)<?php if ($proofsSpent > 0): ?>, <?php echo $proofsSpent; ?> already spent<?php endif; ?>
                                 </span>
                             <?php endif; ?>
-                        <?php else: ?>
-                            Counter position restored for <?php echo $countersRestored; ?> keyset(s).
+                        <?php endif; ?>
+                        <?php if (!$recoveryComplete): ?>
+                            <br>Still checking the mint for earlier payments to this recovery phrase. That
+                            finishes in the background, usually within a few minutes; payments start working
+                            once it is done.
                         <?php endif; ?>
                     </p>
                 </div>
@@ -1724,7 +1715,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
         </div>
     </div>
 
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/')); ?>mint-discovery.bundle.js"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/mint-discovery.bundle.js')); ?>"></script>
     <script>
     // Mint Discovery state
     var mintDiscoveryInstance = null;

@@ -29,6 +29,8 @@ cp -r assets/ "$BUILD_DIR/assets/"
 
 # Copy favicon and images
 cp favicon.ico "$BUILD_DIR/"
+# MIT licence text; the vendored JS libraries carry their own headers (assets/js/vendor/).
+cp LICENSE "$BUILD_DIR/"
 cp -r images/ "$BUILD_DIR/images/"
 
 # Copy cashu-wallet-php (excluding .git, tests, examples)

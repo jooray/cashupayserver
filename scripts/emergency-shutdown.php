@@ -367,6 +367,13 @@ if (SafeMode::verify($event) === null) {
 $event = ['id' => $event['id'], 'pubkey' => $event['pubkey'], 'created_at' => $event['created_at'],
           'kind' => $event['kind'], 'tags' => $event['tags'], 'content' => $event['content'], 'sig' => $event['sig']];
 out('Signature OK (key ' . $event['pubkey'] . ').');
+if ($fixed === '') {
+    out();
+    out('*** No fixed version: WRITE THIS DOWN. The release that fixes the problem must add');
+    out("***   '" . $event['id'] . "'");
+    out('*** to SafeMode::RETIRED_NOTICES in includes/safe_mode.php, or installs that shut');
+    out('*** down will stay down after upgrading. ***');
+}
 
 $live['safe_mode'] = $event;
 out();

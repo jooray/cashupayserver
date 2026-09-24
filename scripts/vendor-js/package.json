@@ -1,0 +1,13 @@
+{
+  "name": "cashupayserver-vendor-js",
+  "private": true,
+  "description": "Pinned sources for assets/js/vendor/, built by scripts/build-vendor-js.sh",
+  "license": "MIT",
+  "dependencies": {
+    "@gandlaf21/bc-ur": "1.1.12",
+    "buffer": "6.0.3",
+    "esbuild": "0.25.10",
+    "qrcode-generator": "2.0.4",
+    "jsqr": "1.4.0"
+  }
+}

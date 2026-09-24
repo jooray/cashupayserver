@@ -493,8 +493,8 @@ $baseUrl = Config::getBaseUrl();
 
     <div class="copy-toast" id="copy-toast">Copied to clipboard!</div>
 
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/vendor/qrcode-generator.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
-    <script src="<?php echo htmlspecialchars(Urls::assets('js/qr-canvas.js')); ?>?v=<?php echo urlencode(CASHUPAY_VERSION); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/vendor/qrcode-generator.js')); ?>"></script>
+    <script src="<?php echo htmlspecialchars(Urls::asset('js/qr-canvas.js')); ?>"></script>
     <script>
         const invoice = <?php echo json_encode($invoice['bolt11']); ?>;
         const invoiceId = <?php echo json_encode($invoiceId); ?>;

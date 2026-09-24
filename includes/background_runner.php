@@ -43,8 +43,12 @@ class BackgroundRunner {
      * never wait their turn: recovery of unresolved outgoing operations, readying an
      * account that cannot mint yet (after a mint change), the quote poll that marks an
      * invoice Settled, and the outbox that tells the shop about it.
+     *
+     * The update check goes first. It is a no-op except every few hours, and it carries
+     * the signed emergency notice: left in the rotation it could be starved for as long
+     * as payment work filled the budget, however urgent the notice.
      */
-    private const ALWAYS_RUN = ['recover_wallet_operations', 'ready_store_wallets', 'poll_quotes', 'webhook_outbox'];
+    private const ALWAYS_RUN = ['update_check', 'recover_wallet_operations', 'ready_store_wallets', 'poll_quotes', 'webhook_outbox'];
 
     /**
      * Tasks in a fixed order. Recovery of ambiguous outgoing operations always runs
@@ -149,8 +153,14 @@ class BackgroundRunner {
                 return;
             }
             try {
-                $results['tasks'][$name] = $tasks[$name]();
-                $health[$name] = ['last_ok' => time()];
+                $result = $tasks[$name]();
+                $results['tasks'][$name] = $result;
+                // A task that reports a failure without throwing is not healthy.
+                if (is_string($result) && preg_match('/^(error|unreachable)/i', $result)) {
+                    $health[$name] = ['last_error' => time(), 'message' => mb_substr($result, 0, 300)];
+                } else {
+                    $health[$name] = ['last_ok' => time()];
+                }
             } catch (Throwable $e) {
                 $results['tasks'][$name] = 'error: ' . $e->getMessage();
                 $health[$name] = [

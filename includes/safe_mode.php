@@ -12,8 +12,9 @@
  *
  * Getting out needs a person with file access, which the operator has and a web
  * attacker does not:
- * - upgrade to a version outside the notice's range (the normal way; the flag then no
- *   longer applies and is removed on the next request), or
+ * - upgrade to a version outside the notice's range, or to a release that lists the
+ *   notice in RETIRED_NOTICES (the normal way; the flag then no longer applies and is
+ *   removed on the next request), or
  * - delete the flag file from the data folder. While the notice is still published the
  *   next update check writes it again, so this is only for a maintainer-withdrawn
  *   notice or an operator who has fixed the hole another way.
@@ -27,9 +28,9 @@
  * - On unless the operator turned the update check off; it rides on that request.
  *
  * Fail-open everywhere else: no manifest, no notice, a bad signature or an unknown key
- * change nothing. Funds are untouched: ecash stays in the database and at the mint, the
- * seed phrase still recovers it, and invoices paid during the shutdown are credited by
- * the normal late-payment recovery after the upgrade.
+ * change nothing. Funds are untouched: ecash and payment records stay in the database,
+ * and invoices paid during the shutdown are credited by the normal late-payment recovery
+ * after the upgrade.
  *
  * Publishing a notice: docs/EMERGENCY-SHUTDOWN.md and scripts/emergency-shutdown.php.
  */
@@ -53,6 +54,14 @@ class SafeMode
     /** NIP-78 application-specific data, with this d-tag. */
     public const EVENT_KIND = 30078;
     public const EVENT_D_TAG = 'cashupayserver-safe-mode';
+
+    /**
+     * Notices this release has fixed. A notice published before a fix existed names no
+     * fixed version, so its range covers every later release too, and a shut-down
+     * install cannot fetch a revised notice. The release that fixes the problem lists
+     * the notice id here; uploading it is then all an operator has to do.
+     */
+    public const RETIRED_NOTICES = [];
 
     /** Lives in the data folder, next to the database. */
     public const FLAG_FILE = 'EMERGENCY-SHUTDOWN.json';
@@ -95,8 +104,9 @@ class SafeMode
             return ['id' => 'unreadable', 'reason' => '', 'url' => null, 'fixed' => null];
         }
         $range = self::matchingRange($flag['ranges'], CASHUPAY_VERSION);
-        if ($range === null) {
-            // Upgraded past the affected versions: the shutdown is over.
+        if ($range === null || in_array((string)($flag['id'] ?? ''), self::RETIRED_NOTICES, true)) {
+            // Upgraded past the affected versions, or to a release that fixes this
+            // notice's problem: the shutdown is over.
             @unlink($path);
             return null;
         }
@@ -141,13 +151,22 @@ class SafeMode
 
         header('Content-Type: text/html; charset=utf-8');
         $h = fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
-        $upgrade = $shutdown['fixed'] !== null ? 'version ' . $shutdown['fixed'] . ' or later' : 'the latest version';
         $link = $shutdown['url'] ?? 'https://github.com/jooray/cashupayserver/releases';
+        $flagName = self::FLAG_FILE;
+        $what = $shutdown['fixed'] !== null
+            ? '<p><strong>What to do:</strong> upload version ' . $h($shutdown['fixed']) . ' or later over this '
+              . 'installation, the same way you installed it, keeping the <code>data</code> folder. Everything '
+              . 'starts again by itself. <a href="' . $h($link) . '" rel="noopener">How to upgrade</a></p>'
+            : '<p><strong>What to do:</strong> there is no fixed version yet. Leave the server as it is; it is '
+              . 'safe while it is off. When the developers release the fix, upload it over this installation, '
+              . 'the same way you installed it, keeping the <code>data</code> folder, and everything starts '
+              . 'again by itself. <a href="' . $h($link) . '" rel="noopener">Where the fix will be published</a></p>';
         echo '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
             . '<meta name="viewport" content="width=device-width, initial-scale=1">'
             . '<title>Temporarily unavailable</title>'
             . '<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:3rem auto;padding:0 1rem;line-height:1.5;color:#222}'
-            . 'h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:2rem}code{background:#f2f2f2;padding:0 .25rem}</style>'
+            . 'h1{font-size:1.4rem}h2{font-size:1.1rem;margin-top:2rem}code{background:#f2f2f2;padding:0 .25rem}'
+            . 'small{color:#555}</style>'
             . '</head><body>'
             . '<h1>Payments here are temporarily unavailable</h1>'
             . '<p>Please try again later, or pay another way.</p>'
@@ -156,11 +175,12 @@ class SafeMode
             . 'the version it runs (' . $h(CASHUPAY_VERSION) . ') and sent a signed warning, so it stopped '
             . 'before anyone could use the problem to take your money.'
             . ($shutdown['reason'] !== '' ? ' ' . $h($shutdown['reason']) : '') . '</p>'
-            . '<p><strong>Your money is still there.</strong> Nothing was sent anywhere. Your seed phrase still '
-            . 'recovers everything, and customers who paid will be credited after the upgrade.</p>'
-            . '<p><strong>What to do:</strong> upload ' . $h($upgrade) . ' over this installation, the same way '
-            . 'you installed it, keeping the <code>data</code> folder. Everything starts again by itself. '
-            . '<a href="' . $h($link) . '" rel="noopener">How to upgrade</a></p>'
+            . '<p><strong>Your money is still there.</strong> Nothing was sent anywhere and nothing was deleted: '
+            . 'your ecash and your payment records stay in the <code>data</code> folder. Customers who paid '
+            . 'meanwhile are credited after the upgrade.</p>'
+            . $what
+            . '<p><small>If this page is still shown after you upgraded, delete the file <code>' . $h($flagName)
+            . '</code> from the <code>data</code> folder.</small></p>'
             . '</body></html>';
         exit;
     }
@@ -176,7 +196,8 @@ class SafeMode
         }
         try {
             $notice = self::verify($manifest['safe_mode']);
-            if ($notice === null || self::matchingRange($notice['ranges'], CASHUPAY_VERSION) === null) {
+            if ($notice === null || self::matchingRange($notice['ranges'], CASHUPAY_VERSION) === null
+                || in_array($notice['id'], self::RETIRED_NOTICES, true)) {
                 return;
             }
             if (defined('CASHUPAY_DISABLE_EMERGENCY_SHUTDOWN') && CASHUPAY_DISABLE_EMERGENCY_SHUTDOWN) {
@@ -305,12 +326,7 @@ class SafeMode
     /** Only links an operator can trust while being told to upgrade. */
     private static function acceptableLink(string $link): bool
     {
-        $parts = parse_url($link);
-        if (($parts['scheme'] ?? '') !== 'https' || empty($parts['host'])) {
-            return false;
-        }
-        $host = strtolower($parts['host']);
-        return $host === 'cashupayserver.org'
-            || ($host === 'github.com' && str_starts_with((string)($parts['path'] ?? ''), '/jooray/cashupayserver/'));
+        require_once __DIR__ . '/http.php';
+        return cashupay_is_trusted_release_link($link, 'cashupayserver.org');
     }
 }

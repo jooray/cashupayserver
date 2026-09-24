@@ -130,6 +130,14 @@ check(str_contains($body, 'Test problem.') && str_contains($body, 'version 9.0.0
 check($code === 503 && (json_decode($body, true)['code'] ?? null) === 'service-unavailable',
     'an API request gets Greenfield-shaped JSON, so the shop shows "unavailable"');
 
+echo "A release that retires the notice ends it, even without a fixed version\n";
+$openEnded = signedNotice(['affected' => [['from' => '0.5.0-alpha']], 'reason' => 'No fix yet.']);
+check(SafeMode::matchingRange(SafeMode::verify($openEnded)['ranges'], '99.0.0') !== null,
+    'an open-ended notice covers every later version');
+check(is_array(SafeMode::RETIRED_NOTICES), 'releases can list notices they fix (SafeMode::RETIRED_NOTICES)');
+[$code, $body] = get("http://127.0.0.1:$port/entry.php");
+check(str_contains($body, 'data</code> folder'), 'the page tells the operator where the flag file is');
+
 echo "Upgrading past the range ends it\n";
 // Rewrite the flag as if this install had been upgraded beyond the affected range.
 $flag = json_decode(file_get_contents($dataDir . '/' . SafeMode::FLAG_FILE), true);

@@ -152,9 +152,18 @@ class Invoice {
         $quote = null;
         $usedMintUrl = null;
 
+        $recovering = 0;
         foreach ($allMints as $tryMintUrl) {
             try {
                 $wallet = self::getWalletForStore($storeId, $tryMintUrl);
+                if ($wallet->requiresRecovery()) {
+                    // Still scanning this seed's history at that mint (after a mint
+                    // change or an imported seed). A quote there could be paid but not
+                    // collected until the scan finishes, so use another mint if one is
+                    // ready.
+                    $recovering++;
+                    continue;
+                }
                 $quote = $wallet->requestMintQuote($amountInMintUnit);
                 $usedMintUrl = $tryMintUrl;
                 break; // Success!
@@ -165,6 +174,12 @@ class Invoice {
             }
         }
 
+        if ($quote === null && $recovering > 0 && $lastError === null) {
+            throw new Exception(
+                'Payments are being set up with this store\'s mint and will work in a few '
+                . 'minutes. Please try again shortly.'
+            );
+        }
         if ($quote === null) {
             throw new Exception(
                 'Failed to get mint quote from all configured mints. ' .
@@ -586,119 +601,134 @@ class Invoice {
     }
 
     /**
-     * Bind the store's seed to its primary mint and finish recovery there, so the
-     * account can mint and spend.
+     * Advance recovery of a store's account at a mint, for at most $seconds.
      *
-     * A mint change opens a new wallet namespace. Binding it in restore mode is right
-     * (the seed may already have ecash at that mint), but restore mode refuses to mint
-     * until restore() has run — and v0.5.4 never ran it, so every payment after a mint
-     * switch stayed Processing. On a mint this seed has never used, restore is a few
-     * empty batches.
+     * An account bound in restore mode (an imported seed, a mint change, a backup mint)
+     * cannot mint until the library has scanned the seed's history at that mint:
+     * minting from counter zero on a seed that was used there before would reuse
+     * secrets the mint already signed. The library records that provenance and only
+     * readies the account when its scan completes; nothing here may shortcut it.
      *
-     * @return bool True when the account is ready; false when recovery did not finish
-     *              (mint unreachable or incomplete scan) and must be retried.
+     * The scan is resumable, so this does bounded steps and returns. Without GMP a full
+     * scan takes minutes, far longer than one request may run; the background runner
+     * keeps calling this until it completes.
+     *
+     * @return array{ready: bool, status: string, recovered: array, error: ?string}
      */
-    public static function readyStoreWallet(string $storeId): bool {
-        $wallet = self::initializeWalletForStore($storeId, true);
+    public static function advanceStoreRecovery(
+        string $storeId,
+        float $seconds = 8.0,
+        ?string $mintUrl = null,
+        ?string $mintUnit = null
+    ): array {
+        $total = ['outputs' => 0, 'proofs' => 0, 'unspent' => 0, 'spent' => 0, 'amount' => 0];
+        $wallet = self::initializeWalletForStore($storeId, true, $mintUrl, $mintUnit);
         if (!$wallet->requiresRecovery()) {
-            return true;
+            return ['ready' => true, 'status' => 'complete', 'recovered' => $total, 'error' => null];
         }
 
-        // An account this store has never spent from or received into at this mint
-        // needs no scan: the account is keyed on (mint, unit, store), so nothing this
-        // install made can collide with counter 0, and each store's seed is its own.
-        // The scan is not free either — without GMP it runs for minutes, longer than
-        // any request may, so on such hosts it never finished and payments stayed
-        // stuck. Restore still runs whenever the account holds anything.
+        // Step sizes from the library's measured per-output cost (REFERENCE.md): a few
+        // milliseconds with GMP, around a hundred without.
+        $step = extension_loaded('gmp') ? 500 : 20;
+        $deadline = microtime(true) + $seconds;
+        $result = ['status' => 'pending', 'error' => null];
+        do {
+            $result = $wallet->restoreStep($step, $deadline);
+            foreach ($total as $key => $_) {
+                $total[$key] += (int)($result['recovered'][$key] ?? 0);
+            }
+        } while ($result['status'] === 'pending' && microtime(true) < $deadline);
+
         $store = Config::getStore($storeId);
-        $walletId = WalletStorage::deriveWalletId(
-            $store['mint_url'], $store['mint_unit'] ?? 'sat', $store['wallet_account_id']
-        );
-        if (!self::accountHasHistory($walletId)) {
-            $wallet->getStorage()->markSeedReady();
-            unset(self::$walletCache[$storeId . '|' . $store['mint_url'] . '|' . ($store['mint_unit'] ?? 'sat')]);
-            return !self::initializeWalletForStore($storeId, true)->requiresRecovery();
+        $cacheKey = $storeId . '|' . ($mintUrl ?? $store['mint_url']) . '|' . ($mintUnit ?? ($store['mint_unit'] ?? 'sat'));
+        unset(self::$walletCache[$cacheKey]);
+        $ready = $result['status'] === 'complete' && !empty($result['ready']);
+
+        return [
+            'ready' => $ready,
+            'status' => (string)$result['status'],
+            'recovered' => $total,
+            'error' => $result['status'] === 'error' ? (string)($result['error'] ?? 'recovery failed') : null,
+        ];
+    }
+
+    /** advanceStoreRecovery() for the store's primary mint, as a yes/no. */
+    public static function readyStoreWallet(string $storeId, float $seconds = 8.0): bool {
+        return self::advanceStoreRecovery($storeId, $seconds)['ready'];
+    }
+
+    /** The account at this mint can mint and spend right now. */
+    public static function isAccountReady(string $storeId, string $mintUrl, string $mintUnit): bool {
+        try {
+            return !self::getWalletForStore($storeId, $mintUrl, $mintUnit)->requiresRecovery();
+        } catch (Throwable $e) {
+            return false;
         }
-
-        $result = $wallet->restore();
-        return empty($result['incomplete']) && !$wallet->requiresRecovery();
     }
 
     /**
-     * The account has proofs, an unfinished operation, or has issued blinded outputs.
-     *
-     * The NUT-20 quote-key counter does not count: creating an invoice advances it
-     * without touching ecash, and invoices are created on an account before it is
-     * ready (that is how a stuck payment first shows up).
+     * Keep recovering every store account that is not ready yet — primary and enabled
+     * backup mints — a bounded step at a time. Runs before quote polling, so payments
+     * that arrived while an account was recovering are credited as soon as it is ready.
+     * An account whose last step failed waits a minute before the next try, so an
+     * unreachable mint is not hammered.
      */
-    private static function accountHasHistory(string $walletId): bool {
-        return Database::fetchOne(
-            "SELECT 1 AS x FROM cashu_proofs WHERE wallet_id = ?
-             UNION ALL SELECT 1 FROM cashu_pending_operations WHERE wallet_id = ?
-             UNION ALL SELECT 1 FROM cashu_counters
-                 WHERE wallet_id = ? AND keyset_id <> '_nut20_quote_keys' AND counter > 0
-             LIMIT 1",
-            [$walletId, $walletId, $walletId]
-        ) !== null;
-    }
-
-    /**
-     * Repair stores whose primary account is bound but not ready (see readyStoreWallet).
-     *
-     * Runs before quote polling: a paid invoice on such an account cannot be minted,
-     * so the order would never be marked paid. Cheap when nothing needs doing — one
-     * metadata lookup per store — and retried at most every RETRY seconds per store so
-     * an unreachable mint is not hammered.
-     */
-    public static function ensurePrimaryWalletsReady(): string {
-        $retry = 600;
-        $stores = Database::fetchAll(
+    public static function ensurePrimaryWalletsReady(float $budgetSeconds = 15.0): string {
+        $accounts = [];
+        foreach (Database::fetchAll(
             "SELECT id, mint_url, mint_unit, wallet_account_id FROM stores
              WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL AND wallet_account_id IS NOT NULL"
-        );
+        ) as $store) {
+            $accounts[] = [$store['id'], $store['mint_url'], $store['mint_unit'] ?? 'sat', $store['wallet_account_id']];
+            foreach (Database::fetchAll(
+                'SELECT mint_url, unit FROM store_mints WHERE store_id = ? AND enabled = 1',
+                [$store['id']]
+            ) as $backup) {
+                $accounts[] = [$store['id'], $backup['mint_url'], $backup['unit'] ?? 'sat', $store['wallet_account_id']];
+            }
+        }
+
+        $deadline = microtime(true) + $budgetSeconds;
         $readied = 0;
         $pending = 0;
-        foreach ($stores as $store) {
-            $walletId = WalletStorage::deriveWalletId(
-                $store['mint_url'],
-                $store['mint_unit'] ?? 'sat',
-                $store['wallet_account_id']
-            );
+        foreach ($accounts as [$storeId, $mintUrl, $unit, $accountId]) {
+            $walletId = WalletStorage::deriveWalletId($mintUrl, $unit, $accountId);
             try {
-                $ready = Database::fetchOne(
-                    'SELECT ready FROM cashu_wallet_metadata WHERE wallet_id = ?',
-                    [$walletId]
-                );
+                $row = Database::fetchOne('SELECT ready FROM cashu_wallet_metadata WHERE wallet_id = ?', [$walletId]);
             } catch (Throwable $e) {
-                // Table not created yet: no wallet has ever been opened, nothing to repair.
-                return 'none';
+                return 'none'; // no wallet table yet: nothing has ever been opened
             }
-            if ($ready && (int)$ready['ready'] === 1) {
+            if ($row && (int)$row['ready'] === 1) {
                 continue;
             }
-
-            $attemptKey = 'wallet_ready_attempt_' . $store['id'];
-            if (time() - (int)Config::get($attemptKey, 0) < $retry) {
+            $errorKey = 'wallet_recovery_error_' . $walletId;
+            if (time() - (int)Config::get($errorKey, 0) < 60 || microtime(true) >= $deadline) {
                 $pending++;
                 continue;
             }
-            Config::set($attemptKey, time());
             try {
-                if (self::readyStoreWallet($store['id'])) {
+                $step = self::advanceStoreRecovery($storeId, max(1.0, $deadline - microtime(true)), $mintUrl, $unit);
+                if ($step['ready']) {
                     $readied++;
-                    error_log("CashuPayServer: store {$store['id']} account at {$store['mint_url']} is now ready");
-                } else {
-                    $pending++;
+                    Config::delete($errorKey);
+                    error_log("CashuPayServer: store {$storeId} account at {$mintUrl} ({$unit}) is ready");
+                    continue;
+                }
+                $pending++;
+                if ($step['error'] !== null) {
+                    Config::set($errorKey, time());
+                    error_log("CashuPayServer: recovery for store {$storeId} at {$mintUrl} failed: {$step['error']}");
                 }
             } catch (Throwable $e) {
                 $pending++;
-                error_log("CashuPayServer: could not ready store {$store['id']} at {$store['mint_url']}: " . $e->getMessage());
+                Config::set($errorKey, time());
+                error_log("CashuPayServer: recovery for store {$storeId} at {$mintUrl} failed: " . $e->getMessage());
             }
         }
         if ($readied === 0 && $pending === 0) {
             return 'none';
         }
-        return "readied {$readied}, still pending {$pending}";
+        return "readied {$readied}, still recovering {$pending}";
     }
 
     /**

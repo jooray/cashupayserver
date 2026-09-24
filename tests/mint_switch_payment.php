@@ -67,6 +67,12 @@ function payAndPoll(string $mintUrl, array $invoice): array {
     return Database::fetchOne('SELECT status, last_poll_error FROM invoices WHERE id = ?', [$invoice['id']]);
 }
 
+/** Each web request starts with fresh wallet objects; the tests must too. */
+function freshRequest(): void {
+    $cache = new ReflectionProperty(Invoice::class, 'walletCache');
+    $cache->setValue(null, []);
+}
+
 function newStore(string $id, string $mintUrl, string $seed): void {
     Database::insert('stores', [
         'id' => $id, 'name' => $id, 'wallet_account_id' => Database::generateWalletAccountId(),
@@ -89,29 +95,62 @@ check(Invoice::readyStoreWallet('s1'), 'the new mint account is ready right afte
 $row = payAndPoll($mintB, Invoice::create('s1', ['amount' => 21, 'currency' => 'sat']));
 check($row['status'] === 'Settled', 'a payment after the switch settles (got ' . $row['status'] . ')');
 
-echo "Background repair of a store left unready by v0.5.4\n";
-// A different seed: two stores never share one (the admin refuses duplicates).
+echo "A store switched by v0.5.4 (bound, never scanned) is recovered in the background\n";
 newStore('s2', $mintA, 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about');
 Config::updateStore('s2', ['mint_url' => $mintB], true);
-// Exactly what v0.5.4's update_store did: bind in restore mode, never restore.
 $w = Invoice::initializeWalletForStore('s2', true);
-check($w->requiresRecovery(), 'reproduces the broken state: account bound but not ready');
-
-// What the demo instance hit: a customer pays while the account is still unready.
-$stuck = Invoice::create('s2', ['amount' => 20, 'currency' => 'sat']);
-$row = payAndPoll($mintB, $stuck);
-check($row['status'] !== 'Settled', 'reproduces the stuck payment (' . $row['status'] . ')');
+check($w->requiresRecovery(), 'reproduces the state v0.5.4 left: bound but not ready');
+$refused = null;
+try { Invoice::create('s2', ['amount' => 20, 'currency' => 'sat']); } catch (Throwable $e) { $refused = $e->getMessage(); }
+check($refused !== null && str_contains($refused, 'being set up'),
+    'no invoice is handed out on an account that could not collect it yet');
 
 $result = Invoice::ensurePrimaryWalletsReady();
-check(str_contains($result, 'readied 1'), "the runner task readies it without a slow scan ($result)");
+check(str_contains($result, 'readied 1'), "the background task finishes the scan ($result)");
 check(Invoice::ensurePrimaryWalletsReady() === 'none', 'a second run finds nothing to do');
+$row = payAndPoll($mintB, Invoice::create('s2', ['amount' => 34, 'currency' => 'sat']));
+check($row['status'] === 'Settled', 'a payment after recovery settles (got ' . $row['status'] . ')');
 
+echo "What the demo instance hit: a quote paid while its account was not ready\n";
+$stuck = Invoice::create('s2', ['amount' => 20, 'currency' => 'sat']);
+$walletIdS2 = Cashu\WalletStorage::deriveWalletId($mintB, 'sat', Config::getStore('s2')['wallet_account_id']);
+Database::query("UPDATE cashu_wallet_metadata SET ready = 0 WHERE wallet_id = ?", [$walletIdS2]);
+freshRequest();
+$row = payAndPoll($mintB, $stuck);
+check($row['status'] !== 'Settled', 'the payment waits while the account is not ready (' . $row['status'] . ')');
+Database::query("UPDATE cashu_wallet_metadata SET ready = 1 WHERE wallet_id = ?", [$walletIdS2]);
+freshRequest();
 Database::update('invoices', ['last_polled_at' => null, 'processing_since' => 0], 'id = ?', [$stuck['id']]);
 Invoice::pollSingleQuote($stuck['id'], true);
-$row = Database::fetchOne('SELECT status FROM invoices WHERE id = ?', [$stuck['id']]);
-check($row['status'] === 'Settled', 'the payment that was stuck is credited (got ' . $row['status'] . ')');
+check(Database::fetchOne('SELECT status FROM invoices WHERE id = ?', [$stuck['id']])['status'] === 'Settled',
+    'and is credited once the account is ready');
 
-$row = payAndPoll($mintB, Invoice::create('s2', ['amount' => 34, 'currency' => 'sat']));
-check($row['status'] === 'Settled', 'a payment after the repair settles (got ' . $row['status'] . ')');
+echo "An imported seed with history at the mint is scanned, never readied at counter zero\n";
+$usedSeed = 'legal winner thank year wave sausage worth useful legal winner thank yellow';
+newStore('s3', $mintB, $usedSeed);
+$row = payAndPoll($mintB, Invoice::create('s3', ['amount' => 55, 'currency' => 'sat']));
+check($row['status'] === 'Settled', 'the seed has real history at the mint (55 sat minted)');
+$historyCounter = (int)Database::fetchOne(
+    "SELECT MAX(counter) AS c FROM cashu_counters WHERE wallet_id = ? AND keyset_id <> '_nut20_quote_keys'",
+    [Cashu\WalletStorage::deriveWalletId($mintB, 'sat', Config::getStore('s3')['wallet_account_id'])]
+)['c'];
+
+// The same seed imported as a new store (another install, a lost database): no local
+// rows at all, which is exactly what the removed shortcut mistook for "never used".
+Database::insert('stores', [
+    'id' => 's4', 'name' => 's4', 'wallet_account_id' => Database::generateWalletAccountId(),
+    'mint_url' => $mintB, 'mint_unit' => 'sat', 'seed_phrase' => $usedSeed,
+    'exchange_fee_percent' => 0, 'created_at' => Database::timestamp(),
+]);
+Invoice::initializeWalletForStore('s4', true);
+Invoice::ensurePrimaryWalletsReady();
+$walletIdS4 = Cashu\WalletStorage::deriveWalletId($mintB, 'sat', Config::getStore('s4')['wallet_account_id']);
+$importedCounter = (int)Database::fetchOne(
+    "SELECT MAX(counter) AS c FROM cashu_counters WHERE wallet_id = ? AND keyset_id <> '_nut20_quote_keys'",
+    [$walletIdS4]
+)['c'];
+check($historyCounter > 0 && $importedCounter >= $historyCounter,
+    "counters continue after the seed's history ($importedCounter >= $historyCounter), not from zero");
+check(Invoice::getBalance('s4') === 55, 'the ecash the seed already had is recovered (' . Invoice::getBalance('s4') . ' sat)');
 
 echo "All mint-switch payment checks passed.\n";

@@ -60,6 +60,9 @@ file_put_contents("$dir/not-json.json", 'not json at all');
 file_put_contents("$dir/huge.json", json_encode(['version' => '1.0.0', 'notes' => str_repeat('x', 20000)]));
 file_put_contents("$dir/plain-link.json", '{"version":"1.0.0","url":"http://github.com/jooray/cashupayserver"}');
 file_put_contents("$dir/other-host.json", '{"version":"1.0.0","url":"https://evil.example.com/download"}');
+file_put_contents("$dir/escape-repo.json", '{"version":"1.0.0","url":"https://github.com/jooray/cashupayserver/../../untrusted/fake/releases"}');
+file_put_contents("$dir/escape-encoded.json", '{"version":"1.0.0","url":"https://github.com/jooray/cashupayserver/releases/%2e%2e/%2e%2e/%2e%2e/x"}');
+file_put_contents("$dir/other-repo.json", '{"version":"1.0.0","url":"https://github.com/someone/cashupayserver/releases"}');
 file_put_contents("$dir/odd-fields.json", json_encode([
     'version' => '1.0.0', 'severity' => 'APOCALYPSE', 'notes' => str_repeat('y', 900),
     'min_supported' => 'not-a-version',
@@ -99,6 +102,11 @@ check(is_array($plain) && !isset($plain['url']),
 $other = $read('other-host.json');
 check(is_array($other) && !isset($other['url']),
     'so is an https link to a host that is neither the manifest host nor github');
+foreach (['escape-repo.json' => 'dot segments', 'escape-encoded.json' => 'encoded dot segments',
+          'other-repo.json' => 'another GitHub repository'] as $file => $what) {
+    $m = $read($file);
+    check(is_array($m) && !isset($m['url']), "a link that leads to {$what} is dropped");
+}
 
 $odd = $read('odd-fields.json');
 check($odd['severity'] === 'normal', 'an unknown severity is treated as normal, not as an alarm');
@@ -138,6 +146,9 @@ Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time()]);
 check(UpdateCheck::run() === 'skipped', 'a fresh answer is not re-fetched');
 Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time() - 21601]);
 check(UpdateCheck::run() === 'update available', 'a six-hour-old answer is asked again');
+// A failed attempt after a success is retried within the hour, not after six.
+Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time() - 3601, 'failed' => true]);
+check(UpdateCheck::run() === 'update available', 'a failure is retried after an hour even with an older answer cached');
 
 echo "\n$passed passed, $failed failed\n";
 exit($failed === 0 ? 0 : 1);

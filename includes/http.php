@@ -28,3 +28,28 @@ if (!function_exists('cashupay_curl_protocol_options')) {
         ];
     }
 }
+
+if (!function_exists('cashupay_is_trusted_release_link')) {
+    /**
+     * A link the operator can safely be sent to "to upgrade": this project's GitHub
+     * releases, or a plain path on the manifest's own host.
+     *
+     * Matched on the raw string, never after parsing: a prefix check on the parsed path
+     * accepted /jooray/cashupayserver/../../someone/fork, which a browser normalises to
+     * another repository. No dot segments, no percent-encoding, no backslashes, no
+     * query or fragment tricks.
+     */
+    function cashupay_is_trusted_release_link(string $link, ?string $ownHost = null): bool {
+        if (preg_match('#^https://github\.com/jooray/cashupayserver/releases(/tag/v[0-9A-Za-z][0-9A-Za-z.\-]{0,40})?/?$#', $link)) {
+            return !str_contains($link, '..');
+        }
+        if ($ownHost === null || $ownHost === '') {
+            return false;
+        }
+        if (!preg_match('#^https://([a-z0-9.\-]+)(/[A-Za-z0-9_\-./]*)?$#', $link, $m) || strtolower($m[1]) !== strtolower($ownHost)) {
+            return false;
+        }
+        $path = $m[2] ?? '/';
+        return !preg_match('#(^|/)\.{1,2}(/|$)#', $path) && !str_contains($path, '//');
+    }
+}

@@ -43,9 +43,12 @@ function cashupay_admin_redirect(): void {
     $shutdown = SafeMode::shutdown();
     if ($shutdown !== null) {
         echo '<div class="notice notice-error"><p><strong>CashuPay has shut itself down for safety.</strong> ';
-        echo esc_html__('The CashuPayServer developers found a serious security problem in this version and sent a signed warning. Your money is still there. Update the CashuPay plugin to', 'cashupay') . ' ';
-        echo esc_html($shutdown['fixed'] !== null ? 'version ' . $shutdown['fixed'] . ' or later' : 'the latest version');
-        echo esc_html__('; payments start again by themselves.', 'cashupay');
+        echo esc_html__('The CashuPayServer developers found a serious security problem in this version and sent a signed warning. Your money is still there.', 'cashupay') . ' ';
+        if ($shutdown['fixed'] !== null) {
+            echo esc_html(sprintf(__('Update the CashuPay plugin to version %s or later; payments start again by themselves.', 'cashupay'), $shutdown['fixed']));
+        } else {
+            echo esc_html__('There is no fixed version yet; it is safe while it is off. When the fix is released, update the plugin and payments start again by themselves.', 'cashupay');
+        }
         if ($shutdown['reason'] !== '') {
             echo ' ' . esc_html($shutdown['reason']);
         }

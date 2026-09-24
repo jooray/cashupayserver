@@ -37,8 +37,9 @@ familiar.
 ## The real run
 
 0. Have the fix ready if at all possible. A notice with a *fixed* version lets operators
-   recover by upgrading; a notice without one shuts down every version from the first
-   affected one on, including releases published later, until a new notice names the fix.
+   recover by upgrading. A notice without one shuts down every version from the first
+   affected one on, including releases published later; the release with the fix must
+   then list the notice id in `SafeMode::RETIRED_NOTICES` (see below).
 1. From a checkout of the current `main`:
 
    ```bash
@@ -68,11 +69,12 @@ familiar.
 
 ## Updating or withdrawing a notice
 
-- **Fix released after a no-fix notice:** run the tool again with the fixed version. A new
-  notice replaces the old one in the manifest. Installs already shut down keep their old
-  flag until they upgrade to a version outside *its* range; if that old range had no fixed
-  version, their operators must also delete `data/EMERGENCY-SHUTDOWN.json` after upgrading
-  (say so in the advisory).
+- **Fix released after a no-fix notice:** installs already shut down cannot fetch a
+  revised notice, and the old range covers every later version. So the fixing release
+  must add the old notice's id (printed by the tool and by `--check`) to
+  `SafeMode::RETIRED_NOTICES` in `includes/safe_mode.php`; uploading it then restarts
+  those installs. Then run the tool again with the fixed version, so installs that have
+  not shut down yet get a bounded notice.
 - **Withdraw:** `php scripts/emergency-shutdown.php --lift`. This stops *new* shutdowns
   only. Installs already shut down stay down until upgraded, or until their operator
   deletes `EMERGENCY-SHUTDOWN.json` from the data folder.
@@ -84,11 +86,12 @@ familiar.
 - WordPress: a red notice in wp-admin; the rest of the WordPress site keeps working.
 - Shop plugins get Greenfield JSON `503 service-unavailable` and show the payment method
   as unavailable.
-- To recover: upload the fixed version. Experts who have mitigated the hole otherwise can
+- To recover: upload the fixed version (the page says when none exists yet). Experts who have mitigated the hole otherwise can
   delete the flag file, or set `define('CASHUPAY_DISABLE_EMERGENCY_SHUTDOWN', true);` in
   `includes/config.local.php`.
-- Funds: untouched. Invoices paid during the shutdown are credited by the normal
-  late-payment recovery after the upgrade.
+- Funds: untouched; ecash and payment records stay in the data folder (the seed phrase
+  alone does not cover unpaid or unminted invoice records). Invoices paid during the
+  shutdown are credited by the normal late-payment recovery after the upgrade.
 
 ## Key custody
 

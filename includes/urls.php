@@ -93,6 +93,17 @@ class Urls {
     }
 
     /**
+     * URL of a file under assets/ with a cache-busting version that changes whenever the
+     * file does. Static files are cached for a week, and a fix shipped under the same
+     * release number would otherwise not reach browsers that already have the old copy.
+     */
+    public static function asset(string $path): string {
+        $file = dirname(__DIR__) . '/assets/' . $path;
+        $stamp = is_file($file) ? (string)filemtime($file) : '';
+        return self::assets($path) . '?v=' . rawurlencode(CASHUPAY_VERSION . ($stamp !== '' ? '.' . $stamp : ''));
+    }
+
+    /**
      * Get the API base URL (same as server URL for API calls)
      */
     public static function api(): string {
