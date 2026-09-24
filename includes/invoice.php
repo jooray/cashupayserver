@@ -670,8 +670,8 @@ class Invoice {
      * Keep recovering every store account that is not ready yet — primary and enabled
      * backup mints — a bounded step at a time. Runs before quote polling, so payments
      * that arrived while an account was recovering are credited as soon as it is ready.
-     * An account whose last step failed waits a minute before the next try, so an
-     * unreachable mint is not hammered.
+     * An account whose steps keep failing backs off exponentially (a minute, doubling
+     * to an hour), so an unreachable or rate-limiting mint is not hammered.
      */
     public static function ensurePrimaryWalletsReady(float $budgetSeconds = 15.0): string {
         $accounts = [];
@@ -702,7 +702,10 @@ class Invoice {
                 continue;
             }
             $errorKey = 'wallet_recovery_error_' . $walletId;
-            if (time() - (int)Config::get($errorKey, 0) < 60 || microtime(true) >= $deadline) {
+            $failure = Config::get($errorKey);
+            $failure = is_array($failure) ? $failure : ['at' => (int)$failure, 'n' => $failure ? 1 : 0];
+            $backoff = $failure['n'] > 0 ? min(3600, 60 * 2 ** min(6, $failure['n'] - 1)) : 0;
+            if (time() - (int)$failure['at'] < $backoff || microtime(true) >= $deadline) {
                 $pending++;
                 continue;
             }
@@ -716,12 +719,12 @@ class Invoice {
                 }
                 $pending++;
                 if ($step['error'] !== null) {
-                    Config::set($errorKey, time());
+                    Config::set($errorKey, ['at' => time(), 'n' => $failure['n'] + 1]);
                     error_log("CashuPayServer: recovery for store {$storeId} at {$mintUrl} failed: {$step['error']}");
                 }
             } catch (Throwable $e) {
                 $pending++;
-                Config::set($errorKey, time());
+                Config::set($errorKey, ['at' => time(), 'n' => $failure['n'] + 1]);
                 error_log("CashuPayServer: recovery for store {$storeId} at {$mintUrl} failed: " . $e->getMessage());
             }
         }
