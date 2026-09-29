@@ -2,6 +2,21 @@
 
 > **A BTCPay-compatible payment gateway that runs on any PHP hosting.**
 
+<!-- jooray-links:start -->
+### More from me
+
+**Related projects**
+
+- [cashu-wallet-php](https://github.com/jooray/cashu-wallet-php): a Cashu wallet library in PHP
+- [mint-discovery](https://github.com/jooray/mint-discovery): Cashu mint discovery library
+- [donation-sink](https://github.com/jooray/donation-sink): accept donations as Cashu tokens
+- [btcpay-greenfield-test](https://github.com/jooray/btcpay-greenfield-test): a minimal page for testing BTCPay Greenfield API integrations
+
+**Full project showcase:** [CashuPayServer in my project showcase](https://juraj.bednar.io/showcase/#PAY-01), or [all my projects](https://juraj.bednar.io/showcase/).
+
+I write about building things on [my blog](https://juraj.bednar.io/en/blog-en/). I also wrote a cypherpunk novel, [Tamers of Entropy](https://tamersofentropy.net/), and there is a [trailer](https://tamersofentropy.net/#trailer).
+<!-- jooray-links:end -->
+
 Accept Bitcoin Lightning payments without running a full BTCPay Server instance. No Docker, no VPS, no command line. Just upload and go.
 
 **[cashupayserver.org](https://cashupayserver.org/)**
