@@ -19,20 +19,17 @@ function handleCreateWebhook(array $auth, array $params, array $body): void {
     }
 
     $url = $body['url'] ?? '';
-    $events = $body['authorizedEvents']['specificEvents'] ?? $body['authorizedEvents']['specific'] ?? $body['events'] ?? [];
-    $enabled = $body['enabled'] ?? true;
-
-    if (empty($url)) {
+    if (!is_string($url) || $url === '') {
         errorResponse('validation-error', 'Webhook URL is required');
     }
+    validateWebhookUrl($url);
+    $events = parseWebhookEvents($body, true);
+    $enabled = parseWebhookEnabled($body) ?? true;
 
-    // Anti-SSRF: only allow public http(s) targets (blocks file://, internal IPs, metadata).
-    if (!WebhookSender::isAllowedTarget($url)) {
-        errorResponse('validation-error', 'Webhook URL must be a public http(s) URL');
-    }
-
-    // Generate secret for HMAC signing
-    $secret = bin2hex(random_bytes(32));
+    // BTCPay uses the client's secret when it sends one and only generates one
+    // otherwise. Ignoring it made every signature check on the shop side fail
+    // (OPUS-022).
+    $secret = parseWebhookSecret($body) ?? bin2hex(random_bytes(32));
     $webhookId = Database::generateId('wh');
 
     Database::insert('webhooks', [
@@ -105,20 +102,28 @@ function handleUpdateWebhook(array $auth, array $params, array $body): void {
 
     $updates = [];
 
-    if (isset($body['url'])) {
-        if (!WebhookSender::isAllowedTarget($body['url'])) {
-            errorResponse('validation-error', 'Webhook URL must be a public http(s) URL');
+    if (array_key_exists('url', $body)) {
+        if (!is_string($body['url']) || $body['url'] === '') {
+            errorResponse('validation-error', 'Webhook URL must be a string');
         }
+        validateWebhookUrl($body['url']);
         $updates['url'] = $body['url'];
     }
 
-    if (isset($body['authorizedEvents']['specificEvents']) || isset($body['authorizedEvents']['specific']) || isset($body['events'])) {
-        $events = $body['authorizedEvents']['specificEvents'] ?? $body['authorizedEvents']['specific'] ?? $body['events'];
+    $events = parseWebhookEvents($body, false);
+    if ($events !== null) {
         $updates['events'] = json_encode($events);
     }
 
-    if (isset($body['enabled'])) {
-        $updates['enabled'] = $body['enabled'] ? 1 : 0;
+    $enabled = parseWebhookEnabled($body);
+    if ($enabled !== null) {
+        $updates['enabled'] = $enabled ? 1 : 0;
+    }
+
+    // BTCPay lets PUT rotate the secret.
+    $secret = parseWebhookSecret($body);
+    if ($secret !== null) {
+        $updates['secret'] = $secret;
     }
 
     if (!empty($updates)) {
@@ -160,10 +165,105 @@ function handleDeleteWebhook(array $auth, array $params, array $body): void {
 }
 
 /**
+ * Refuse a webhook URL the server will not deliver to (anti-SSRF).
+ */
+function validateWebhookUrl(string $url): void {
+    if (strlen($url) > 2048) {
+        errorResponse('validation-error', 'Webhook URL is too long');
+    }
+    // Only public http(s) targets on the standard ports, or this installation's own
+    // origin (blocks file://, internal IPs, cloud metadata, other services' ports).
+    if (!WebhookSender::isAllowedTarget($url)) {
+        errorResponse('validation-error', 'Webhook URL must be a public http(s) URL on the standard port (80 or 443)');
+    }
+}
+
+/**
+ * The event list a create/update body asks for, validated (DS41-05).
+ *
+ * Returns [] for "every event", a list of known event names, or null when an update
+ * leaves the events alone. A value that is not a list of known names is a 400: stored
+ * as-is it used to break settlement for the whole store.
+ *
+ * @return string[]|null
+ */
+function parseWebhookEvents(array $body, bool $creating): ?array {
+    $authorized = $body['authorizedEvents'] ?? null;
+    if ($authorized !== null && !is_array($authorized)) {
+        errorResponse('validation-error', 'authorizedEvents must be an object');
+    }
+    $authorized = $authorized ?? [];
+
+    $everything = $authorized['everything'] ?? null;
+    if ($everything !== null && !is_bool($everything)) {
+        errorResponse('validation-error', 'authorizedEvents.everything must be true or false');
+    }
+    if ($everything === true) {
+        return [];
+    }
+
+    $specific = $authorized['specificEvents'] ?? $authorized['specific'] ?? $body['events'] ?? null;
+    if ($specific === null) {
+        if ($everything === false) {
+            errorResponse('validation-error', 'Choose at least one event in authorizedEvents.specificEvents');
+        }
+        return $creating ? [] : null;
+    }
+
+    if (!is_array($specific) || !array_is_list($specific)) {
+        errorResponse('validation-error', 'specificEvents must be a list of event names');
+    }
+    foreach ($specific as $event) {
+        if (!is_string($event) || !in_array($event, WebhookSender::KNOWN_EVENTS, true)) {
+            errorResponse('validation-error', 'Unknown webhook event: '
+                . (is_string($event) ? $event : gettype($event))
+                . '. Known events: ' . implode(', ', WebhookSender::KNOWN_EVENTS));
+        }
+    }
+    if (empty($specific) && $everything === false) {
+        // Stored as [] this would mean "everything", the opposite of what was asked.
+        errorResponse('validation-error', 'Choose at least one event in authorizedEvents.specificEvents');
+    }
+    return array_values(array_unique($specific));
+}
+
+/** `enabled` from a body as a bool, or null when absent. */
+function parseWebhookEnabled(array $body): ?bool {
+    if (!array_key_exists('enabled', $body) || $body['enabled'] === null) {
+        return null;
+    }
+    $enabled = $body['enabled'];
+    if (is_bool($enabled)) {
+        return $enabled;
+    }
+    if ($enabled === 0 || $enabled === 1) {
+        return (bool)$enabled;
+    }
+    errorResponse('validation-error', 'enabled must be true or false');
+    return null;
+}
+
+/** A client-supplied signing secret, or null when none was sent. */
+function parseWebhookSecret(array $body): ?string {
+    if (!array_key_exists('secret', $body) || $body['secret'] === null || $body['secret'] === '') {
+        return null;
+    }
+    $secret = $body['secret'];
+    if (!is_string($secret) || strlen($secret) > 256 || preg_match('/[\x00-\x1F\x7F]/', $secret)) {
+        errorResponse('validation-error', 'secret must be text of at most 256 characters');
+    }
+    return $secret;
+}
+
+/**
  * Format webhook for API response
  */
 function formatWebhookForApi(array $webhook, bool $includeSecret = false): array {
-    $events = json_decode($webhook['events'], true) ?? [];
+    $events = json_decode((string)$webhook['events'], true);
+    if (!is_array($events)) {
+        $events = []; // a malformed legacy row receives every event; say so
+    }
+    $events = array_values(array_filter($events, 'is_string'));
 
     $result = [
         'id' => $webhook['id'],

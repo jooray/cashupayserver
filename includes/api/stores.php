@@ -53,16 +53,23 @@ function handleGetStore(array $auth, array $params, array $body): void {
 /**
  * Create a new store (Greenfield: POST /stores).
  *
- * Kept for BTCPay compatibility but gated behind store-settings-modify permission, which
- * a normal e-commerce pairing key (invoice/webhook perms only) does not hold. This
- * prevents a low-privilege plugin key from creating stores while keeping the endpoint.
+ * Kept for BTCPay compatibility but only for a key that is not tied to a store: an
+ * admin-created `*` key or one holding server-settings permission. Every key issued by
+ * pairing belongs to one store, and a key for one store has no business adding others
+ * (SPB-SEC-012) — store-settings permission alone is not enough.
  */
 function handleCreateStore(array $auth, array $params, array $body): void {
-    requirePermission($auth, 'btcpay.store.canmodifystoresettings');
+    if (!apiKeyIsUnscoped($auth)) {
+        errorResponse('unauthorized', 'Only an admin API key can create stores; this key belongs to one store', 403);
+    }
 
     $name = $body['name'] ?? '';
-    if (empty($name)) {
+    if (!is_string($name) || trim($name) === '') {
         errorResponse('validation-error', 'Store name is required');
+    }
+    $name = trim($name);
+    if (mb_strlen($name) > 100 || preg_match('/[\x00-\x1F\x7F]/', $name)) {
+        errorResponse('validation-error', 'Store name must be plain text of at most 100 characters');
     }
 
     $storeId = Database::generateId('store');
@@ -83,14 +90,31 @@ function handleCreateStore(array $auth, array $params, array $body): void {
 }
 
 /**
+ * Whether a key may act beyond its own store: the admin wildcard, or BTCPay's
+ * server-settings permission (which pairing never grants).
+ */
+function apiKeyIsUnscoped(array $auth): bool {
+    $perms = $auth['permissions'] ?? [];
+    if (!is_array($perms)) {
+        return false;
+    }
+    return in_array('*', $perms, true) || in_array('btcpay.server.canmodifyserversettings', $perms, true);
+}
+
+/**
  * Delete a store (Greenfield: DELETE /stores/{storeId}).
  *
  * Kept for BTCPay compatibility but: (a) requires the key to be scoped to this store,
- * (b) requires store-settings-modify permission, and (c) refuses to delete a store that
- * still holds ecash (deleting removes the seed = irrecoverable funds).
- * See FABLE-SECURITY-AUDIT (CRIT-2) and FABLE-CASHUPAYSERVER-AUDIT (A3).
+ * (b) requires store-settings-modify permission, and (c) refuses, with the reasons, to
+ * delete a store that still holds ecash or has unresolved payments, transfers, exports
+ * or old-mint funds — deleting removes the seed, so they would be lost for good. The
+ * same blockers as the dashboard (StoreSafety), not just the spendable balance
+ * (OPUS-007, DS41-17, SPB-CORE-008). `{"confirmFundLoss": true}` overrides, like the
+ * dashboard's explicit confirmation. See FABLE-SECURITY-AUDIT (CRIT-2).
  */
 function handleDeleteStore(array $auth, array $params, array $body): void {
+    require_once __DIR__ . '/../store_safety.php';
+
     $storeId = requireStore($auth, $params);
     requirePermission($auth, 'btcpay.store.canmodifystoresettings');
 
@@ -99,16 +123,32 @@ function handleDeleteStore(array $auth, array $params, array $body): void {
         errorResponse('not-found', 'Store not found', 404);
     }
 
-    // Fund-safety guard: never destroy the seed of a funded store via the API.
-    $balance = 0;
+    $confirmFundLoss = ($body['confirmFundLoss'] ?? false) === true;
+
+    $blockers = [];
     try {
         $balance = Invoice::getBalance($storeId);
+        if ($balance > 0) {
+            $blockers[] = "{$balance} of spendable ecash; withdraw it first";
+        }
+        $blockers = array_merge($blockers, StoreSafety::deletionBlockers($storeId));
     } catch (Throwable $e) {
-        // If balance can't be determined, err on the safe side and refuse.
-        errorResponse('conflict', 'Cannot verify store balance; refusing to delete', 409);
+        // If the state can't be determined, err on the safe side and refuse.
+        error_log("CashuPayServer: store {$storeId} deletion check failed: " . $e->getMessage());
+        $blockers[] = 'the store\'s funds could not be checked';
     }
-    if ($balance > 0) {
-        errorResponse('conflict', 'Store still holds funds; withdraw before deleting', 409);
+
+    if (!empty($blockers) && !$confirmFundLoss) {
+        jsonResponse([
+            'code' => 'conflict',
+            'message' => 'This store still has funds or unfinished payments, which deleting it would lose: '
+                . implode('; ', $blockers)
+                . '. Resolve them first, or send {"confirmFundLoss": true} to delete anyway.',
+            'blockers' => $blockers,
+        ], 409);
+    }
+    if (!empty($blockers)) {
+        error_log("CashuPayServer: store {$storeId} deleted over the API despite: " . implode('; ', $blockers));
     }
 
     // Cascade removes api_keys, invoices, webhooks.

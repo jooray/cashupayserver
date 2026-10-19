@@ -73,15 +73,22 @@ if ! su -s /bin/bash www-data -c "wp --path=/var/www/html core is-installed" 2>/
         --skip-email"
 fi
 
-# Install and activate WooCommerce
-if ! su -s /bin/bash www-data -c "wp --path=/var/www/html plugin is-installed woocommerce" 2>/dev/null; then
-    su -s /bin/bash www-data -c "wp --path=/var/www/html plugin install woocommerce --activate"
-fi
-
-# Install and activate BTCPay Greenfield for WooCommerce
-if ! su -s /bin/bash www-data -c "wp --path=/var/www/html plugin is-installed btcpay-greenfield-for-woocommerce" 2>/dev/null; then
-    su -s /bin/bash www-data -c "wp --path=/var/www/html plugin install btcpay-greenfield-for-woocommerce --activate"
-fi
+# Install and activate WooCommerce and BTCPay Greenfield for WooCommerce. Both come from
+# wordpress.org at first start; a network hiccup must not stop the container (set -e would
+# otherwise exit before Apache starts, every start, until the network is back). The
+# is-installed guard retries the download on the next start.
+install_plugin_from_wordpress_org() {
+    local slug="$1"
+    if su -s /bin/bash www-data -c "wp --path=/var/www/html plugin is-installed $slug" 2>/dev/null; then
+        return 0
+    fi
+    if ! su -s /bin/bash www-data -c "wp --path=/var/www/html plugin install $slug --activate"; then
+        echo "WARNING: could not download the $slug plugin from wordpress.org (network problem?)." >&2
+        echo "         The container keeps running without it; restart it later to try again." >&2
+    fi
+}
+install_plugin_from_wordpress_org woocommerce
+install_plugin_from_wordpress_org btcpay-greenfield-for-woocommerce
 
 # Install CashuPay plugin (copy from staging area)
 if [ ! -d /var/www/html/wp-content/plugins/cashupay ]; then
@@ -89,8 +96,20 @@ if [ ! -d /var/www/html/wp-content/plugins/cashupay ]; then
     chown -R www-data:www-data /var/www/html/wp-content/plugins/cashupay
 fi
 
-# Activate CashuPay plugin
-su -s /bin/bash www-data -c "wp --path=/var/www/html plugin activate cashupay" 2>/dev/null || true
+# Activate CashuPay plugin. Activation creates the data folder and database and registers
+# /cashupay-setup/, so a failure here must be visible in `docker logs`.
+CASHUPAY_ACTIVE=yes
+if ! su -s /bin/bash www-data -c "wp --path=/var/www/html plugin activate cashupay"; then
+    CASHUPAY_ACTIVE=no
+fi
+# The plugin turns its own startup errors into an admin notice instead of a fatal error;
+# surface that too.
+ACTIVATION_ERROR="$(su -s /bin/bash www-data -c "wp --path=/var/www/html option get cashupay_activation_error" 2>/dev/null || true)"
+if [ "$CASHUPAY_ACTIVE" = no ] || [ -n "$ACTIVATION_ERROR" ]; then
+    echo "ERROR: CashuPay plugin activation failed; /cashupay-setup/ will not work until it succeeds." >&2
+    [ -n "$ACTIVATION_ERROR" ] && echo "       Reason: $ACTIVATION_ERROR" >&2
+    echo "       See the message in WP Admin, fix it, then restart the container." >&2
+fi
 
 # Enable pretty permalinks (required for CashuPay rewrite rules)
 su -s /bin/bash www-data -c "wp --path=/var/www/html rewrite structure '/%postname%/' --hard" 2>/dev/null || true

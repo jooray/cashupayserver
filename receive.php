@@ -17,10 +17,89 @@ require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
 
+// Do NOT import Cashu\PaymentRequest here: it would shadow the application's own global
+// PaymentRequest (includes/payment_request.php) for the whole file, and every
+// PaymentRequest::getById()/create() would hit the library DTO, which has neither.
 use Cashu\Wallet;
-use Cashu\PaymentRequest;
 use Cashu\Transport;
 use Cashu\TokenSerializer;
+
+/**
+ * Read a scalar request parameter. PHP turns `?x[]=1` into an array, which must not reach
+ * a string-typed function (a TypeError there is an uncaught fatal on a public page), so an
+ * array-shaped value is answered with a 400 here, at the boundary.
+ */
+function receiveParam(array $source, string $name, bool $json = true): ?string {
+    if (!array_key_exists($name, $source) || $source[$name] === null) {
+        return null;
+    }
+    $value = $source[$name];
+    if (is_int($value) || is_float($value)) {
+        $value = (string)$value;
+    }
+    if (!is_string($value)) {
+        http_response_code(400);
+        if ($json) {
+            header('Content-Type: application/json');
+            echo json_encode(['error' => "Invalid {$name} parameter"]);
+        } else {
+            echo 'Error: this link is not valid.';
+        }
+        exit;
+    }
+    return $value;
+}
+
+/**
+ * Serialize a NUT-18 PaymentRequestPayload ({mint, unit, proofs}) as a token, so it can
+ * go through the same checks and swap as a pasted token. Malformed input is a 400.
+ */
+function receivePayloadToken(array $payload): string {
+    $mint = $payload['mint'] ?? null;
+    $unit = $payload['unit'] ?? null;
+    $rawProofs = $payload['proofs'] ?? null;
+    if (!is_string($mint) || !is_string($unit) || !is_array($rawProofs) || $rawProofs === []
+        || count($rawProofs) > 1000) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid payment: mint, unit and proofs are required']);
+        exit;
+    }
+    $proofs = [];
+    foreach ($rawProofs as $p) {
+        if (!is_array($p) || !is_string($p['id'] ?? null) || !is_int($p['amount'] ?? null)
+            || !is_string($p['secret'] ?? null) || !is_string($p['C'] ?? null)) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Invalid payment: malformed proof']);
+            exit;
+        }
+        $dleq = null;
+        if (is_array($p['dleq'] ?? null) && is_string($p['dleq']['e'] ?? null) && is_string($p['dleq']['s'] ?? null)) {
+            $dleq = new \Cashu\DLEQWallet($p['dleq']['e'], $p['dleq']['s'], is_string($p['dleq']['r'] ?? null) ? $p['dleq']['r'] : null);
+        }
+        $proofs[] = new \Cashu\Proof($p['id'], $p['amount'], $p['secret'], $p['C'], $dleq,
+            is_string($p['witness'] ?? null) ? $p['witness'] : null);
+    }
+    try {
+        // Keep the DLEQ proofs: receive() verifies them.
+        return \Cashu\TokenSerializer::serializeV4($mint, $proofs, $unit, null, true);
+    } catch (Throwable $e) {
+        // Keyset ids that do not fit V4 (old base64 ids) still have a V3 token.
+        return \Cashu\TokenSerializer::serializeV3($mint, $proofs, $unit);
+    }
+}
+
+// Last line of defence for a public endpoint: anything uncaught becomes a plain error
+// answer, never PHP's fatal-error page (which, with display_errors on, prints the
+// absolute server path and a stack trace to a stranger).
+set_exception_handler(function (Throwable $e) {
+    error_log('CashuPayServer: receive.php uncaught ' . get_class($e) . ': ' . $e->getMessage()
+        . ' at ' . $e->getFile() . ':' . $e->getLine());
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: application/json');
+    }
+    echo json_encode(['error' => 'Something went wrong. Please try again.']);
+});
 
 // Initialize database
 if (!Database::isInitialized()) {
@@ -52,50 +131,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
-    // Get JSON body
-    $input = file_get_contents('php://input');
+    // Get JSON body. A JSON scalar ("x", 123) decodes to a non-array, and indexing it
+    // used to throw outside any catch: refuse it. Non-JSON falls back to form fields.
+    $input = (string)file_get_contents('php://input');
     $data = json_decode($input, true);
+    if (json_last_error() === JSON_ERROR_NONE && $data !== null && !is_array($data)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Invalid request body']);
+        exit;
+    }
+    if (!is_array($data) || $data === []) {
+        $data = null;
+    }
 
-    if (!$data) {
-        // Try form data
+    if ($data === null) {
+        // Form data
         $data = [
-            'id' => $_POST['id'] ?? null,
-            'token' => $_POST['token'] ?? null,
-            'store_id' => $_POST['store_id'] ?? null
+            'id' => receiveParam($_POST, 'id'),
+            'token' => receiveParam($_POST, 'token'),
+            'store_id' => receiveParam($_POST, 'store_id'),
         ];
     }
 
-    $requestId = $data['id'] ?? ($_GET['request_id'] ?? null);
-    $tokenString = $data['token'] ?? null;
+    $requestId = receiveParam($data, 'id') ?? receiveParam($_GET, 'request_id');
+    $tokenString = receiveParam($data, 'token');
     // NUT-18 senders POST the payload to the transport target verbatim, so the store and
     // the request id arrive in the query string of the URL we published, not in the body.
-    $storeId = $data['store_id'] ?? ($_GET['store_id'] ?? null);
+    $storeId = receiveParam($data, 'store_id') ?? receiveParam($_GET, 'store_id');
 
     // A request id makes this a payment *for something*: it fixes the store, amount and
     // unit at publication time, and a retry after a lost response replays the original
     // result instead of crediting the same payment twice.
     $paymentRequest = null;
-    if ($requestId !== null && is_string($requestId)) {
-        $paymentRequest = PaymentRequest::getById($requestId);
+    if ($requestId !== null) {
+        try {
+            $paymentRequest = PaymentRequest::getById($requestId);
+            $replay = $paymentRequest !== null ? PaymentRequest::storedResult($paymentRequest) : null;
+            $expired = $paymentRequest !== null && PaymentRequest::isExpired($paymentRequest);
+        } catch (Throwable $e) {
+            // Public endpoint: never let a lookup failure become a PHP fatal (stack trace).
+            error_log('CashuPayServer: payment request lookup failed: ' . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['error' => 'Could not look up this payment request. Please try again.']);
+            exit;
+        }
         if ($paymentRequest === null) {
             http_response_code(404);
             echo json_encode(['error' => 'Unknown payment request']);
             exit;
         }
 
-        $replay = PaymentRequest::storedResult($paymentRequest);
         if ($replay !== null) {
             echo json_encode($replay);
             exit;
         }
 
-        if (PaymentRequest::isExpired($paymentRequest)) {
+        if ($expired) {
             http_response_code(410);
             echo json_encode(['error' => 'This payment request has expired']);
             exit;
         }
 
-        $storeId = $paymentRequest['store_id'];
+        $storeId = (string)$paymentRequest['store_id'];
     }
 
     if (!$storeId) {
@@ -104,6 +201,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // NUT-18 senders POST a PaymentRequestPayload ({id, memo, mint, unit, proofs}), not a
+    // serialized token. Rebuild the token from it so both shapes take one path.
+    if (!$tokenString && is_array($data['proofs'] ?? null)) {
+        $tokenString = receivePayloadToken($data);
+    }
     if (!$tokenString) {
         http_response_code(400);
         echo json_encode(['error' => 'Missing token']);
@@ -132,15 +234,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    $secrets = array_map(fn($p) => $p->secret, $parsed->proofs);
+    $claim = null;
+    $wallet = null;
+    $unit = Config::getStoreMintUnit($storeId);
+
     try {
         // Initialize wallet with store's configuration
         $mintUrl = Config::getStoreMintUrl($storeId);
-        $unit = Config::getStoreMintUnit($storeId);
         $seed = Config::getStoreSeedPhrase($storeId);
         $dbPath = Database::getDbPath();
 
         // Reject a token for the wrong mint or unit before loading keysets from it.
-        if (rtrim($parsed->mint, '/') !== rtrim($mintUrl, '/')) {
+        if (\Cashu\MintClient::canonicalizeMintUrl($parsed->mint) !== \Cashu\MintClient::canonicalizeMintUrl($mintUrl)) {
             throw new Exception('Token is from a different mint');
         }
         if (strtolower($parsed->unit) !== strtolower($unit)) {
@@ -151,19 +257,74 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $wallet = new Wallet($mintUrl, $unit, $dbPath, $accountId);
         $wallet->loadMint();
         $wallet->initFromMnemonic($seed);
+        $wallet->resolveShortKeysetIds($parsed->proofs);
+        $secrets = array_map(fn($p) => $p->secret, $parsed->proofs);
 
-        // Check the payment against what was actually requested, before swapping. The
-        // token's own amount is net of nothing yet, so compare on what the sender sent;
-        // underpayment is refused rather than silently credited as a partial payment.
         if ($paymentRequest !== null) {
             if (strtolower($paymentRequest['unit']) !== strtolower($unit)) {
                 throw new Exception('This payment request is for a different currency');
             }
-            if ($parsed->getAmount() < (int)$paymentRequest['amount']) {
+
+            // Bind the request to these proofs before anything moves, so a second token
+            // cannot pay it too and a retry is answered from what happened to these.
+            $claim = PaymentRequest::claim($paymentRequest, $secrets);
+            if ($claim === 'paid') {
+                echo json_encode(PaymentRequest::storedResult(PaymentRequest::getById($paymentRequest['id'])) ?? ['success' => true]);
+                exit;
+            }
+            if ($claim === 'busy') {
+                $claim = null;
+                http_response_code(409);
+                echo json_encode(['error' => 'This payment request is already being paid with another token. Do not pay again; if that payment fails, the request can be paid then.']);
+                exit;
+            }
+            if ($claim === 'same') {
+                // A retry of the token we are already handling. Answer from the wallet:
+                // the swap may have finished (or failed) after the first answer was lost.
+                // A claim this fresh may still be mid-swap in another request; recovering
+                // that journal under it would race it, so only older claims are driven.
+                $current = PaymentRequest::getById($paymentRequest['id']);
+                if (time() - (int)($current['receiving_since'] ?? 0) >= 120) {
+                    $wallet->recoverPendingSwaps();
+                }
+                $state = PaymentRequest::receiptState($wallet, $secrets);
+                if ($state['state'] === 'paid') {
+                    $response = ['success' => true, 'id' => $paymentRequest['id'], 'amount' => $state['amount'], 'unit' => $unit];
+                    PaymentRequest::markPaid($paymentRequest, $state['amount'], $response);
+                    echo json_encode($response);
+                    exit;
+                }
+                if ($state['state'] === 'pending') {
+                    http_response_code(503);
+                    header('Retry-After: 30');
+                    echo json_encode(['error' => 'This payment is still being confirmed with the mint. Do not pay again; send this same token again in a minute to check.']);
+                    exit;
+                }
+                // Released: the earlier attempt never took the money. Try again now.
+                PaymentRequest::release($paymentRequest, $secrets);
+                $claim = PaymentRequest::claim($paymentRequest, $secrets);
+                if ($claim !== 'claimed') {
+                    http_response_code(409);
+                    echo json_encode(['error' => 'This payment request is already being paid. Do not pay again.']);
+                    exit;
+                }
+            }
+
+            // NUT-18: the requested amount is net of the mint's input fee (the payer adds
+            // it). Wallets written before that rule send exactly the amount; accept those
+            // too rather than refuse a customer, and note the few units the fee costs.
+            $gross = $parsed->getAmount();
+            $net = $gross - $wallet->calculateFee($parsed->proofs);
+            $requested = (int)$paymentRequest['amount'];
+            if ($gross < $requested) {
                 throw new Exception(
-                    'This token is for ' . $parsed->getAmount() . ' ' . $unit
-                    . ', but the request asks for ' . $paymentRequest['amount'] . ' ' . $unit
+                    'This token is for ' . $gross . ' ' . $unit
+                    . ', but the request asks for ' . $requested . ' ' . $unit
                 );
+            }
+            if ($net < $requested) {
+                error_log("CashuPayServer: payment request {$paymentRequest['id']}: sender did not add the mint fee "
+                    . "({$net} of {$requested} {$unit} after fees); accepted");
             }
         }
 
@@ -181,8 +342,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($paymentRequest !== null) {
             $response['id'] = $paymentRequest['id'];
             // Store the result before returning it: if this write fails the proofs are
-            // already ours, and a retry replaying the stored response is the only way the
-            // sender can tell the difference between "lost response" and "not paid".
+            // already ours, and the background check finishes the request from the
+            // wallet's state instead.
             PaymentRequest::markPaid($paymentRequest, $amount, $response);
             error_log("CashuPayServer: payment request {$paymentRequest['id']} paid: $amount $unit");
         }
@@ -191,9 +352,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     } catch (Throwable $e) {
         // This endpoint is public and its input is a stranger's token. Anything the
-        // parser or the mint throws must become a 400, never a PHP fatal (which, with
-        // display_errors on, prints a stack trace to that stranger).
+        // parser or the mint throws must become an answer, never a PHP fatal (which,
+        // with display_errors on, prints a stack trace to that stranger).
         error_log('CashuPayServer: receive failed: ' . $e->getMessage());
+        if ($paymentRequest !== null && $claim !== null && $wallet !== null) {
+            // Did the money move? Only a refused token frees the request; a swap left
+            // in flight keeps it bound so the payer is told not to pay again.
+            try {
+                $state = PaymentRequest::receiptState($wallet, $secrets);
+            } catch (Throwable $stateError) {
+                $state = ['state' => 'pending', 'amount' => 0];
+            }
+            if ($state['state'] === 'pending') {
+                http_response_code(503);
+                header('Retry-After: 30');
+                echo json_encode(['error' => 'The mint did not confirm this payment yet. Do not pay again; send this same token again in a minute to check.']);
+                exit;
+            }
+            if ($state['state'] === 'released') {
+                PaymentRequest::release($paymentRequest, $secrets);
+            }
+        }
         http_response_code(400);
         echo json_encode(['error' => $e->getMessage()]);
     }
@@ -204,10 +383,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
  * Handle GET - Generate payment request
  */
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-    $storeId = $_GET['store_id'] ?? null;
-    $rawAmount = trim((string)($_GET['amount'] ?? ''));
-    $memo = $_GET['memo'] ?? null;
-    $format = $_GET['format'] ?? 'html';
+    // Status of a published request, for the request page to show "Paid". The id is
+    // 16 random bytes, so knowing it is what entitles one to ask.
+    if (is_string($_GET['status'] ?? null) && is_string($_GET['request_id'] ?? null)) {
+        header('Content-Type: application/json');
+        header('Cache-Control: no-store');
+        try {
+            $row = PaymentRequest::getById($_GET['request_id']);
+        } catch (Throwable $e) {
+            $row = null;
+        }
+        if ($row === null) {
+            http_response_code(404);
+            echo json_encode(['error' => 'Unknown payment request']);
+            exit;
+        }
+        echo json_encode([
+            'status' => PaymentRequest::isExpired($row) ? 'expired' : $row['status'],
+            'receivedAmount' => $row['received_amount'] !== null ? (int)$row['received_amount'] : null,
+            'unit' => $row['unit'],
+        ]);
+        exit;
+    }
+
+    $format = is_string($_GET['format'] ?? null) ? $_GET['format'] : 'html';
+    $wantJson = $format === 'json';
+    $storeId = receiveParam($_GET, 'store_id', $wantJson);
+    $rawAmount = trim((string)receiveParam($_GET, 'amount', $wantJson));
+    $memo = receiveParam($_GET, 'memo', $wantJson);
     // Resolved once the store's unit is known: the form asks fiat stores for major units
     // ("1.23"), and an integer cast turned that into 1 cent.
     $amount = 0;
@@ -219,6 +422,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $stores = $showStoreList
         ? Database::fetchAll("SELECT id, name, mint_unit FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL ORDER BY created_at DESC")
         : [];
+
+    /**
+     * The amount field must agree with the parser that reads it (Unit::parse), and both
+     * use Config::unitDecimals — the same rule the invoice pricing uses.
+     */
+    $amountField = function (string $unit): array {
+        $u = Config::unitFor($unit);
+        $d = $u->decimals;
+        $step = $d > 0 ? '0.' . str_repeat('0', $d - 1) . '1' : '1';
+        $label = 'Amount (' . strtoupper($u->code) . ')';
+        if ($d === 0 && !in_array($u->code, ['sat', 'msat'], true)) {
+            $label = 'Amount (in the smallest ' . strtoupper($u->code) . ' unit)';
+        }
+        return [
+            'decimals' => $d,
+            'step' => $step,
+            'min' => $step,
+            'placeholder' => $d > 0 ? '1.' . str_repeat('0', min($d, 2)) : '100',
+            'label' => $label,
+        ];
+    };
 
     if (!$storeId && !$showStoreList) {
         http_response_code(400);
@@ -309,7 +533,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 <select name="store_id" id="store-select" required onchange="updateAmountLabel()">
                     <option value="">Select a store...</option>
                     <?php foreach ($stores as $store): ?>
-                        <option value="<?php echo htmlspecialchars($store['id']); ?>" data-unit="<?php echo htmlspecialchars($store['mint_unit'] ?? 'sat'); ?>">
+                        <?php $f = $amountField((string)($store['mint_unit'] ?? 'sat')); ?>
+                        <option value="<?php echo htmlspecialchars($store['id']); ?>" data-label="<?php echo htmlspecialchars($f['label']); ?>" data-step="<?php echo htmlspecialchars($f['step']); ?>" data-placeholder="<?php echo htmlspecialchars($f['placeholder']); ?>">
                             <?php echo htmlspecialchars($store['name']); ?>
                         </option>
                     <?php endforeach; ?>
@@ -329,19 +554,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             function updateAmountLabel() {
                 const select = document.getElementById('store-select');
                 const selectedOption = select.options[select.selectedIndex];
-                const unit = selectedOption?.dataset?.unit || 'sat';
-                document.getElementById('amount-label').textContent = 'Amount (' + unit.toUpperCase() + ')';
+                const data = selectedOption?.dataset || {};
+                document.getElementById('amount-label').textContent = data.label || 'Amount';
 
                 const amountInput = document.getElementById('amount-input');
-                if (unit === 'sat' || unit === 'msat') {
-                    amountInput.placeholder = '100';
-                    amountInput.min = '1';
-                    amountInput.step = '1';
-                } else {
-                    amountInput.placeholder = '1.00';
-                    amountInput.min = '0.01';
-                    amountInput.step = '0.01';
-                }
+                amountInput.placeholder = data.placeholder || '100';
+                amountInput.min = data.step || '1';
+                amountInput.step = data.step || '1';
             }
         </script>
         <?php endif; ?>
@@ -373,7 +592,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     // ("1.23"), which must become 123 cents, not 1.
     if ($rawAmount !== '') {
         try {
-            $amount = \Cashu\Unit::fromCode($unit)->parse($rawAmount);
+            $amount = Config::unitFor($unit)->parse($rawAmount);
         } catch (Throwable $e) {
             $amount = 0;
         }
@@ -449,12 +668,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         <h1>Request Payment</h1>
         <form method="GET">
             <input type="hidden" name="store_id" value="<?php echo htmlspecialchars($storeId); ?>">
+            <?php $f = $amountField($unit); ?>
             <div class="form-group">
-                <label>Amount (<?php echo htmlspecialchars(strtoupper($unit)); ?>)</label>
+                <label><?php echo htmlspecialchars($f['label']); ?></label>
                 <input type="number" name="amount"
-                       placeholder="<?php echo $unit === 'sat' || $unit === 'msat' ? '100' : '1.00'; ?>"
-                       min="<?php echo $unit === 'sat' || $unit === 'msat' ? '1' : '0.01'; ?>"
-                       step="<?php echo $unit === 'sat' || $unit === 'msat' ? '1' : '0.01'; ?>"
+                       placeholder="<?php echo htmlspecialchars($f['placeholder']); ?>"
+                       min="<?php echo htmlspecialchars($f['min']); ?>"
+                       step="<?php echo htmlspecialchars($f['step']); ?>"
                        required>
             </div>
             <div class="form-group">
@@ -467,6 +687,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 </body>
 </html>
         <?php
+        exit;
+    }
+
+    // Generating a request writes a row and makes mint round-trips, and this page is
+    // public: throttle it per client IP like the POST side.
+    if (!Security::checkRateLimit('receive_request', Security::getClientIp(), 30)) {
+        http_response_code(429);
+        if ($format === 'json') {
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Too many requests. Please wait.']);
+        } else {
+            echo 'Too many payment requests from your network. Please wait a minute and try again.';
+        }
         exit;
     }
 
@@ -491,6 +724,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         // the QR is the id this server can resolve.
         $pr->id = $stored['id'];
         $prString = $pr->serialize();
+        // NUT-26 encoding of the same request: shorter, and an all-uppercase string
+        // makes a smaller QR code. Offered as an alternative; every wallet reads creqA.
+        $prStringB = $pr->serializeB();
+        $statusUrl = Urls::receive() . (str_contains(Urls::receive(), '?') ? '&' : '?')
+            . 'status=1&request_id=' . urlencode($stored['id']);
 
         // Return based on format
         if ($format === 'json') {
@@ -503,7 +741,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 'mint' => $mintUrl,
                 'store_id' => $storeId,
                 'expiresAt' => (int)$stored['expires_at'],
-                'request' => $prString
+                'request' => $prString,
+                'requestB' => $prStringB,
+                'statusUrl' => $statusUrl,
             ]);
             exit;
         }
@@ -585,55 +825,104 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
         <div class="qr-container" id="qr-container"></div>
 
-        <div class="request-string"><?php echo htmlspecialchars($prString); ?></div>
+        <div class="request-string" id="request-string"><?php echo htmlspecialchars($prString); ?></div>
 
         <button class="btn" onclick="copyRequest()">Copy Request</button>
+        <button class="btn" id="toggle-format" onclick="toggleFormat()" style="margin-top: 0.5rem;">Wallet can't read it? Show the compact code</button>
 
         <div class="status" id="status">Scan with a Cashu wallet to pay</div>
     </div>
 
     <script>
-        const prString = <?php echo json_encode($prString); ?>;
+        const requests = { a: <?php echo json_encode($prString); ?>, b: <?php echo json_encode($prStringB); ?> };
+        const statusUrl = <?php echo json_encode($statusUrl); ?>;
+        let shown = 'a';
+        const idleText = 'Scan with a Cashu wallet to pay';
 
-        // Generate QR code
-        if (typeof QRious !== 'undefined') {
+        function drawQr() {
+            const box = document.getElementById('qr-container');
+            box.innerHTML = '';
+            if (typeof QRious === 'undefined') {
+                box.innerHTML = '<p style="color:#666;padding:2rem;">QR code failed to load</p>';
+                return;
+            }
             const canvas = document.createElement('canvas');
-            document.getElementById('qr-container').appendChild(canvas);
+            box.appendChild(canvas);
             new QRious({
                 element: canvas,
-                value: prString,
+                value: requests[shown],
                 size: 200,
                 backgroundAlpha: 1,
                 foreground: '#000000',
                 background: '#ffffff',
                 level: 'L'
             });
-        } else {
-            document.getElementById('qr-container').innerHTML = '<p style="color:#666;padding:2rem;">QR code failed to load</p>';
+            document.getElementById('request-string').textContent = requests[shown];
+        }
+        drawQr();
+
+        // creqA is what every NUT-18 wallet reads; creqB (NUT-26) is shorter and some
+        // newer wallets prefer it. Both describe the same request.
+        function toggleFormat() {
+            shown = shown === 'a' ? 'b' : 'a';
+            document.getElementById('toggle-format').textContent = shown === 'a'
+                ? "Wallet can't read it? Show the compact code"
+                : 'Show the standard code';
+            drawQr();
         }
 
         // Copy to clipboard
         function copyRequest() {
-            navigator.clipboard.writeText(prString).then(() => {
-                document.getElementById('status').textContent = 'Copied to clipboard!';
-                setTimeout(() => {
-                    document.getElementById('status').textContent = 'Scan with a Cashu wallet to pay';
-                }, 2000);
+            navigator.clipboard.writeText(requests[shown]).then(() => {
+                const status = document.getElementById('status');
+                if (status.dataset.final) return;
+                status.textContent = 'Copied to clipboard!';
+                setTimeout(() => { if (!status.dataset.final) status.textContent = idleText; }, 2000);
             });
         }
+
+        // Tell the person holding this screen when the money has arrived.
+        async function pollStatus() {
+            try {
+                const response = await fetch(statusUrl, { cache: 'no-store' });
+                const data = await response.json();
+                const status = document.getElementById('status');
+                if (data.status === 'paid') {
+                    status.dataset.final = '1';
+                    status.textContent = 'Paid ✓' + (data.receivedAmount !== null ? ` (${data.receivedAmount} ${String(data.unit).toUpperCase()} received)` : '');
+                    status.style.color = '#48bb78';
+                    status.style.fontWeight = '600';
+                    return;
+                }
+                if (data.status === 'expired') {
+                    status.dataset.final = '1';
+                    status.textContent = 'This request has expired. Create a new one to get paid.';
+                    return;
+                }
+                if (data.status === 'receiving' && !status.dataset.final) {
+                    status.textContent = 'Payment arriving — confirming with the mint…';
+                }
+            } catch (e) {
+                // Network hiccup: keep polling.
+            }
+            setTimeout(pollStatus, 3000);
+        }
+        setTimeout(pollStatus, 3000);
     </script>
 </body>
 </html>
         <?php
     } catch (Throwable $e) {
         error_log('CashuPayServer: payment request generation failed: ' . $e->getMessage());
+        // A PHP Error (not an Exception) is a bug, and its message names internals.
+        $message = $e instanceof Exception ? $e->getMessage() : 'Could not create the payment request. Please try again.';
         if ($format === 'json') {
             http_response_code(500);
             header('Content-Type: application/json');
-            echo json_encode(['error' => $e->getMessage()]);
+            echo json_encode(['error' => $message]);
         } else {
             http_response_code(500);
-            echo "Error: " . htmlspecialchars($e->getMessage());
+            echo "Error: " . htmlspecialchars($message);
         }
     }
     exit;

@@ -37,8 +37,11 @@ class Background {
         }
 
         // Fire-and-forget curl (100ms timeout - enough for localhost self-request)
-        $ch = curl_init($url . '?internal=1&key=' . urlencode(self::getInternalKey()));
+        // The key travels in a header, not the query string: URLs end up in web server
+        // access logs, and anyone who can read those could then trigger runs at will.
+        $ch = curl_init($url . '?internal=1');
         curl_setopt_array($ch, [
+            CURLOPT_HTTPHEADER => ['X-Cron-Key: ' . self::getInternalKey()],
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT_MS => 100,
             CURLOPT_NOSIGNAL => 1,

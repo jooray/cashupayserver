@@ -25,7 +25,12 @@
  *   verified here. Whoever controls the manifest host can withhold or replay a notice,
  *   but not forge one, and a replay only names versions that really were affected.
  * - Overridable by the operator (above), never by the maintainers' choice alone.
- * - On unless the operator turned the update check off; it rides on that request.
+ * - On unless the operator turned the update check off; it rides on that request. The
+ *   manifest is fetched by the background runner and, opportunistically, by
+ *   UpdateCheck::runIfDue() on admin dashboard loads (SPB-OPS-005) — an install where
+ *   neither runs never learns of a notice.
+ * - The flag keeps the signed event and is re-verified on every read, so a flag file
+ *   written by anything but ingest() is ignored (SPB-OPS-010).
  *
  * Fail-open everywhere else: no manifest, no notice, a bad signature or an unknown key
  * change nothing. Funds are untouched: ecash and payment records stay in the database,
@@ -98,24 +103,59 @@ class SafeMode
         if (!is_file($path)) {
             return null;
         }
-        $flag = json_decode((string)@file_get_contents($path), true);
-        if (!is_array($flag) || !is_array($flag['ranges'] ?? null)) {
-            // A flag we cannot read still means someone meant to stop this server.
-            return ['id' => 'unreadable', 'reason' => '', 'url' => null, 'fixed' => null];
+        $notice = self::readFlag($path);
+        if ($notice === null) {
+            // The flag is a signed artefact: one whose signature does not verify (written
+            // by someone other than ingest(), e.g. a co-tenant on shared hosting, or by a
+            // pre-0.5.6 release that did not keep the signature) is ignored (SPB-OPS-010).
+            return null;
         }
-        $range = self::matchingRange($flag['ranges'], CASHUPAY_VERSION);
-        if ($range === null || in_array((string)($flag['id'] ?? ''), self::RETIRED_NOTICES, true)) {
+        $range = self::matchingRange($notice['ranges'], CASHUPAY_VERSION);
+        if ($range === null || in_array($notice['id'], self::RETIRED_NOTICES, true)) {
             // Upgraded past the affected versions, or to a release that fixes this
             // notice's problem: the shutdown is over.
             @unlink($path);
+            self::$flagCache = null;
             return null;
         }
         return [
-            'id' => (string)($flag['id'] ?? ''),
-            'reason' => (string)($flag['reason'] ?? ''),
-            'url' => isset($flag['url']) ? (string)$flag['url'] : null,
+            'id' => $notice['id'],
+            'reason' => $notice['reason'],
+            // Re-checked here as well as at ingest: the page must never link anywhere else.
+            'url' => $notice['url'] !== null && self::acceptableLink($notice['url']) ? $notice['url'] : null,
             'fixed' => $range['fixed'] ?? null,
         ];
+    }
+
+    /** @var array{key: string, notice: ?array}|null Per-request cache of the verified flag. */
+    private static ?array $flagCache = null;
+
+    /**
+     * Read the flag and re-verify the signed event it carries. Cached per request (keyed
+     * by file identity), since this runs at the top of every request and a Schnorr
+     * verification is not free without GMP.
+     */
+    private static function readFlag(string $path): ?array
+    {
+        clearstatcache(true, $path);
+        $raw = (string)@file_get_contents($path);
+        $key = hash('sha256', $raw);
+        if (self::$flagCache !== null && self::$flagCache['key'] === $key) {
+            return self::$flagCache['notice'];
+        }
+        $flag = json_decode($raw, true);
+        $notice = null;
+        try {
+            $notice = is_array($flag) && is_array($flag['event'] ?? null) ? self::verify($flag['event']) : null;
+        } catch (Throwable $e) {
+            $notice = null;
+        }
+        if ($notice === null) {
+            error_log('CashuPayServer: ignoring ' . self::FLAG_FILE . ' in the data folder: it does not carry'
+                . ' a valid signed emergency notice (tampered, or written by an older version)');
+        }
+        self::$flagCache = ['key' => $key, 'notice' => $notice];
+        return $notice;
     }
 
     /**
@@ -151,7 +191,9 @@ class SafeMode
 
         header('Content-Type: text/html; charset=utf-8');
         $h = fn(string $s): string => htmlspecialchars($s, ENT_QUOTES, 'UTF-8');
-        $link = $shutdown['url'] ?? 'https://github.com/jooray/cashupayserver/releases';
+        $link = ($shutdown['url'] !== null && self::acceptableLink($shutdown['url']))
+            ? $shutdown['url']
+            : 'https://github.com/jooray/cashupayserver/releases';
         $flagName = self::FLAG_FILE;
         $what = $shutdown['fixed'] !== null
             ? '<p><strong>What to do:</strong> upload version ' . $h($shutdown['fixed']) . ' or later over this '
@@ -204,23 +246,30 @@ class SafeMode
                 error_log("CashuPayServer: IGNORING emergency shutdown {$notice['id']} (disabled in config.local.php): {$notice['reason']}");
                 return;
             }
-            self::writeFlag($notice);
+            self::writeFlag($notice, $manifest['safe_mode']);
             error_log("CashuPayServer: EMERGENCY SHUTDOWN by signed notice {$notice['id']}: {$notice['reason']}");
         } catch (Throwable $e) {
             error_log('CashuPayServer: ignoring emergency-shutdown notice: ' . $e->getMessage());
         }
     }
 
-    /** Write the flag atomically, so a half-written file never exists. */
-    private static function writeFlag(array $notice): void
+    /**
+     * Write the flag atomically, so a half-written file never exists. The signed event
+     * itself is kept (pubkey, sig, raw content) so every read can re-verify it; the
+     * parsed fields beside it are for a human opening the file.
+     */
+    private static function writeFlag(array $notice, array $event): void
     {
         $path = self::flagPath();
         $tmp = $path . '.' . bin2hex(random_bytes(4)) . '.tmp';
-        $body = json_encode($notice + ['received_at' => time()], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        $signed = array_intersect_key($event, array_flip(['id', 'pubkey', 'created_at', 'kind', 'tags', 'content', 'sig']));
+        $body = json_encode($notice + ['received_at' => time(), 'event' => $signed],
+            JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
         if (@file_put_contents($tmp, $body) === false || !@rename($tmp, $path)) {
             @unlink($tmp);
             throw new RuntimeException("could not write {$path}");
         }
+        self::$flagCache = null;
     }
 
     /**
@@ -304,18 +353,36 @@ class SafeMode
         ));
     }
 
-    /** First range that contains $version: from <= version < fixed (either end open). */
+    /**
+     * First range that contains $version: from <= version < fixed (either end open).
+     *
+     * Every release carries a pre-release suffix (0.5.6-alpha), and PHP orders a
+     * pre-release *below* its bare version, so a notice naming `fixed: 0.5.6` kept the
+     * very release with the fix shut down, and `from: 0.5.5` missed 0.5.5-alpha
+     * (SPB-OPS-006). A bound written without a suffix therefore names the whole release
+     * line: it is compared with the numeric core of this version (0.5.6-alpha counts as
+     * 0.5.6). A bound with a suffix is compared exactly.
+     */
     public static function matchingRange(array $ranges, string $version): ?array
     {
+        $against = static function (string $bound) use ($version): string {
+            return str_contains($bound, '-') ? $version : self::versionCore($version);
+        };
         foreach ($ranges as $range) {
             $from = $range['from'] ?? null;
             $fixed = $range['fixed'] ?? null;
-            if (($from === null || version_compare($version, $from, '>='))
-                && ($fixed === null || version_compare($version, $fixed, '<'))) {
+            if (($from === null || version_compare($against((string)$from), (string)$from, '>='))
+                && ($fixed === null || version_compare($against((string)$fixed), (string)$fixed, '<'))) {
                 return $range;
             }
         }
         return null;
+    }
+
+    /** "0.5.6-alpha" -> "0.5.6". */
+    public static function versionCore(string $version): string
+    {
+        return explode('-', $version, 2)[0];
     }
 
     private static function isVersion(string $v): bool

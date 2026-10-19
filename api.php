@@ -251,15 +251,29 @@ if ($match['handler'] === 'handleServerInfo') {
     handleServerInfo();
 }
 
-// All other endpoints require authentication
-$auth = Auth::requireApiAuth();
+// One exception boundary for every handler (DS41-30). Handlers answer through
+// jsonResponse()/errorResponse(), which exit; anything that escapes them — a TypeError
+// from an unexpected body shape, a PDOException — must still be a JSON error with a
+// stable code, never an HTML fatal or a stack trace. A shop must be able to tell "not
+// created" from "the response was lost".
+try {
+    // All other endpoints require authentication
+    $auth = Auth::requireApiAuth();
 
-// Call handler
-$handler = $match['handler'];
-$params = $match['params'];
+    // Call handler
+    $handler = $match['handler'];
+    $params = $match['params'];
 
-if (function_exists($handler)) {
-    $handler($auth, $params, getRequestBody());
-} else {
-    errorResponse('not-implemented', 'Endpoint not implemented', 501);
+    if (function_exists($handler)) {
+        $handler($auth, $params, getRequestBody());
+    } else {
+        errorResponse('not-implemented', 'Endpoint not implemented', 501);
+    }
+} catch (Throwable $e) {
+    error_log('CashuPayServer: API ' . $method . ' ' . $route . ' failed: '
+        . get_class($e) . ': ' . $e->getMessage() . ' at ' . $e->getFile() . ':' . $e->getLine());
+    if (!headers_sent()) {
+        header('Content-Type: application/json');
+    }
+    errorResponse('internal-error', 'The server could not complete this request. Details are in the server log.', 500);
 }

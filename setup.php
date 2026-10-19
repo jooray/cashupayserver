@@ -31,6 +31,7 @@ $isWordPressSetup = Urls::isWordPress();
 
 // Get mode parameter
 $mode = $_GET['mode'] ?? $_POST['mode'] ?? '';
+$mode = is_string($mode) ? $mode : '';
 
 // A completed installation is administration, not setup: it needs a real session.
 // The step the request claims must not change that — `step=7` used to skip this gate
@@ -52,57 +53,124 @@ if (!Database::isInitialized()) {
 
 // Until setup completes, this page is reachable by anyone who can reach the server, and
 // CSRF only proves the visitor owns the session they were just handed. The first browser
-// to arrive claims the installation automatically (no extra step for the merchant); any
-// other browser has to present the recovery code from the data directory.
+// to *start* setup (the step-1 POST) claims the installation; a plain GET claims nothing,
+// so a link-preview bot or crawler cannot lock the merchant out. Any other browser has to
+// present the recovery code from the data directory — in a POST body only, never the URL.
 $setupTokenRequired = !$setupComplete && !$isWordPressSetup && !Setup::ownershipVerified();
-if ($setupTokenRequired
-    && Setup::verifyOwnershipToken((string)($_POST['setup_token'] ?? $_GET['setup_token'] ?? ''))) {
-    $setupTokenRequired = false;
+$recoveryError = null;
+$isPost = $_SERVER['REQUEST_METHOD'] === 'POST';
+$postCsrfValid = $isPost && Auth::validateCsrfToken(is_string($_POST['csrf_token'] ?? null) ? $_POST['csrf_token'] : '');
+if ($setupTokenRequired && $postCsrfValid && is_string($_POST['setup_token'] ?? null)
+    && trim($_POST['setup_token']) !== '') {
+    if (Setup::verifyOwnershipToken($_POST['setup_token'])) {
+        $setupTokenRequired = false;
+    } else {
+        $recoveryError = Setup::$lastRecoveryError === 'rate_limited'
+            ? 'Too many attempts. Wait a minute, then type the recovery code again.'
+            : 'That recovery code is not right. Check the file again and type the code exactly as it appears.';
+    }
+}
+if ($setupTokenRequired && $postCsrfValid && ($_POST['step'] ?? '') === '1' && !Setup::isClaimed()) {
+    // The visitor pressed "Continue" on the first step: that is the deliberate act that
+    // claims an unclaimed installation.
+    $setupTokenRequired = !Setup::claim();
+}
+// Shown only when another browser actually holds the claim; an unclaimed install shows
+// the normal first step.
+$claimedElsewhere = $setupTokenRequired && Setup::isClaimed();
+
+/** Read a scalar POST/GET field; an array-shaped value (`x[]=`) counts as absent. */
+function setupField(string $name, string $default = ''): string {
+    $value = $_POST[$name] ?? $_GET[$name] ?? $default;
+    return is_string($value) ? $value : $default;
 }
 
-// Handle form submissions
-$step = (int)($_POST['step'] ?? $_GET['step'] ?? 1);
-
-// For add_store mode, start at step 4 (store creation)
-if ($mode === 'add_store' && !isset($_POST['step']) && !isset($_GET['step'])) {
-    $step = 4;
+// Handle form submissions. The wizard remembers where it is, so a reload, bookmark or new
+// tab resumes instead of restarting at step 1 (SPB-UI-005).
+$stepKey = $mode === 'add_store' ? 'setup_step_add_store' : 'setup_step';
+$requestedStep = $_POST['step'] ?? $_GET['step'] ?? null;
+if (is_string($requestedStep) && ctype_digit($requestedStep)) {
+    $step = (int)$requestedStep;
+} elseif (isset($_SESSION[$stepKey]) && is_int($_SESSION[$stepKey])) {
+    $step = $_SESSION[$stepKey];
+} else {
+    // For add_store mode, start at step 4 (store creation)
+    $step = $mode === 'add_store' ? 4 : 1;
+}
+if (!in_array($step, [1, 2, 4, 5, 6, 7], true)) {
+    $step = $mode === 'add_store' ? 4 : 1;
+}
+// A visitor who does not hold the installation only ever sees the first step.
+if ($setupTokenRequired) {
+    $step = 1;
 }
 
 $error = null;
 $success = null;
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if (!Auth::validateCsrfToken((string)($_POST['csrf_token'] ?? ''))) {
+// "Move my data to a safe place": the fix for a downloadable database that needs no
+// server knowledge. Anyone but a browser another visitor's claim locks out may use it
+// on a fresh install; it only ever makes the data less reachable.
+if ($isPost && $postCsrfValid && !$claimedElsewhere && setupField('action') === 'relocate_data') {
+    if (Security::checkRateLimit('setup_relocate', Security::getClientIp(), 5)) {
+        session_write_close(); // the session file moves too; write it before copying
+        $moved = Database::relocateOutsideWebroot();
+        if (!$moved['ok']) {
+            Auth::initSession();
+            $_SESSION['setup_relocate_error'] = $moved['error'];
+        }
+    }
+    header('Location: ' . Urls::setup());
+    exit;
+}
+$relocateError = $_SESSION['setup_relocate_error'] ?? null;
+unset($_SESSION['setup_relocate_error']);
+
+if ($isPost) {
+    if (!$postCsrfValid) {
         http_response_code(403);
         $error = 'Your setup session expired. Reload this page and try again.';
     }
 
     if ($error === null && $setupTokenRequired) {
         http_response_code(403);
-        $error = 'Enter the recovery code to continue setting up this server.';
+        $error = $recoveryError ?? ($claimedElsewhere
+            ? 'Enter the recovery code to continue setting up this server.'
+            : 'Please start from the first step.');
     }
 
     if ($error !== null) {
         // Render the current setup step with the validation error.
     // Handle AJAX action for expiry testing
-    } elseif (isset($_POST['action']) && $_POST['action'] === 'test_mint_expiry') {
+    } elseif (setupField('action') === 'test_mint_expiry') {
         header('Content-Type: application/json');
         require_once __DIR__ . '/includes/mint_helpers.php';
-        $mintUrl = $_POST['mint_url'] ?? '';
-        $unit = $_POST['unit'] ?? 'sat';
+        $mintUrl = trim(setupField('mint_url'));
+        $unit = setupField('unit', 'sat');
 
-        if (empty($mintUrl)) {
+        // This makes the server fetch an address the visitor typed: throttle it and
+        // refuse addresses inside the server's own network (SPB-SSRF-001).
+        if (!Security::checkRateLimit('setup_mint_test', Security::getClientIp(), 10)) {
+            http_response_code(429);
+            echo json_encode(['success' => false, 'error' => 'Too many tests in a row. Wait a minute and try again.']);
+        } elseif ($mintUrl === '') {
             echo json_encode(['success' => false, 'error' => 'Mint URL required']);
         } else {
-            echo json_encode(MintHelpers::testExpiry($mintUrl, $unit));
+            try {
+                $mintUrl = setupCheckMintUrl($mintUrl);
+                $unit = Config::validUnit($unit);
+                echo json_encode(MintHelpers::testExpiry($mintUrl, $unit));
+            } catch (Throwable $e) {
+                echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            }
         }
         exit;
     }
 
     // Handle AJAX action for saving URL mode
-    if ($error === null && isset($_POST['action']) && $_POST['action'] === 'save_url_mode') {
+    if ($error === null && setupField('action') === 'save_url_mode') {
         header('Content-Type: application/json');
-        $mode = $_POST['mode'] ?? 'router';
+        $mode = setupField('mode', 'router');
         if (in_array($mode, ['direct', 'router'])) {
             Config::set('url_mode', $mode);
             echo json_encode(['success' => true, 'mode' => $mode]);
@@ -115,11 +183,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($error === null) try {
         switch ($step) {
             case 1: // Welcome + Security (merged step)
+                // The server checks for itself whether the database can be downloaded.
+                // A proven exposure blocks setup; an inconclusive check (the server cannot
+                // reach its own address, e.g. behind some proxies) falls back to the
+                // operator's confirmation.
+                $probe = setupProbeDataExposure();
+                if ($probe['status'] === 'exposed') {
+                    throw new Exception('Your database can be downloaded from the internet ('
+                        . implode(', ', $probe['exposed'])
+                        . '). Anyone could take the money it holds. Fix this before continuing; the steps are below.');
+                }
                 $securityPassed = $_POST['security_acknowledged'] ?? false;
-                if (!$securityPassed) {
+                if (!$securityPassed && !in_array($probe['status'], ['protected', 'outside'], true)) {
                     throw new Exception('Please verify that your database is protected');
                 }
-                $detectedUrlMode = $_POST['detected_url_mode'] ?? '';
+                $detectedUrlMode = setupField('detected_url_mode');
                 if (in_array($detectedUrlMode, ['direct', 'router'], true)) {
                     Config::set('url_mode', $detectedUrlMode);
                 }
@@ -127,7 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // it the base URL is derived from HTTP_HOST, and background self-requests
                 // that carry the internal key have no trusted destination.
                 if (!Config::get('base_url')) {
-                    $detectedBaseUrl = trim((string)($_POST['detected_base_url'] ?? ''));
+                    $detectedBaseUrl = trim(setupField('detected_base_url'));
                     if ($detectedBaseUrl !== '' && Security::isSafeAppBaseUrl($detectedBaseUrl)) {
                         Config::set('base_url', rtrim($detectedBaseUrl, '/'));
                     }
@@ -137,8 +215,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
 
             case 2: // Password setup
-                $password = $_POST['password'] ?? '';
-                $confirm = $_POST['confirm_password'] ?? '';
+                $password = setupField('password');
+                $confirm = setupField('confirm_password');
 
                 if (strlen($password) < 8) {
                     throw new Exception('Password must be at least 8 characters');
@@ -153,15 +231,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
 
             case 4: // Create store
-                $storeName = trim($_POST['store_name'] ?? 'My Store');
+                $storeName = trim(setupField('store_name', 'My Store'));
+                if ($storeName === '') {
+                    throw new Exception('Please give your store a name.');
+                }
 
                 // Check for duplicate store name
                 $existingStore = Database::fetchOne(
-                    "SELECT id FROM stores WHERE LOWER(name) = LOWER(?)",
+                    "SELECT id, mint_url, seed_phrase FROM stores WHERE LOWER(name) = LOWER(?)",
                     [$storeName]
                 );
                 if ($existingStore) {
-                    throw new Exception('A store with this name already exists.');
+                    // The operator's own half-finished store (a reload, a new tab, or a
+                    // browser that took over with the recovery code): continue it rather
+                    // than dead-ending on "already exists" (SPB-UI-005). A store with a
+                    // wallet seed is finished and is never taken over from here.
+                    $createdHere = in_array($existingStore['id'], $_SESSION['setup_created_stores'] ?? [], true)
+                        || ($_SESSION['setup_store_id'] ?? null) === $existingStore['id'];
+                    $unfinished = empty($existingStore['seed_phrase']);
+                    if ($unfinished && ($createdHere || !$setupComplete)) {
+                        $_SESSION['setup_store_id'] = $existingStore['id'];
+                        $step = empty($existingStore['mint_url']) ? 5 : 6;
+                        break;
+                    }
+                    throw new Exception('A store with this name already exists. Please choose a different name.');
                 }
 
                 // Create store with just a name (mint and seed will be added in later steps)
@@ -174,6 +267,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
 
                 $_SESSION['setup_store_id'] = $storeId;
+                $_SESSION['setup_created_stores'][] = $storeId;
                 $step = 5;
                 break;
 
@@ -183,35 +277,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Store not found. Please go back and create a store first.');
                 }
 
-                $mintUrl = rtrim($_POST['mint_url'] ?? '', '/');
-                $mintUnit = $_POST['mint_unit'] ?? null;
+                $mintUrl = rtrim(trim(setupField('mint_url')), '/');
+                $mintUnit = setupField('mint_unit');
 
                 if (empty($mintUrl)) {
                     throw new Exception('Mint URL is required');
                 }
-                // Reject non-http(s) schemes (file://, etc.). See FABLE-SECURITY-AUDIT (MED-2).
-                if (Security::sanitizeUrl($mintUrl) === null) {
-                    throw new Exception('Mint URL must be a valid http(s) URL');
+                // Reject non-http(s) schemes (file://, etc.) and addresses inside this
+                // server's own network: the server is about to fetch it (SPB-SSRF-001).
+                if (!Security::checkRateLimit('setup_mint_connect', Security::getClientIp(), 10)) {
+                    throw new Exception('Too many attempts in a row. Wait a minute and try again.');
                 }
+                $mintUrl = setupCheckMintUrl($mintUrl);
 
                 // Fetch available units from mint
                 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
                 try {
                     $units = \Cashu\Wallet::getSupportedUnits($mintUrl);
-                    if (empty($units)) {
-                        throw new Exception('Could not connect to mint or no keysets found');
-                    }
                 } catch (Exception $e) {
                     throw new Exception('Failed to connect to mint: ' . $e->getMessage());
                 }
+                // A unit name comes from the mint (a stranger) and ends up in admin pages:
+                // only plain short codes are listed or stored (SPB-UI-001).
+                $units = array_filter($units, fn($u) => is_string($u) && preg_match('/^[a-z0-9]{1,16}$/i', $u),
+                    ARRAY_FILTER_USE_KEY);
+                $units = array_combine(array_map('strtolower', array_keys($units)), array_values($units));
+                if (empty($units)) {
+                    throw new Exception('Could not connect to mint or no usable currency units found');
+                }
 
                 // If no unit selected yet, show selection
-                if ($mintUnit === null || $mintUnit === '') {
+                if ($mintUnit === '') {
                     $_SESSION['mint_url_temp'] = $mintUrl;
                     $_SESSION['mint_units'] = array_keys($units);
                     // Stay on step 5 but show unit selector
                 } else {
                     // Validate selected unit
+                    $mintUnit = Config::validUnit($mintUnit);
                     if (!isset($units[$mintUnit])) {
                         throw new Exception("Mint does not support unit: {$mintUnit}");
                     }
@@ -233,7 +335,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Store not found. Please restart setup.');
                 }
 
-                $action = $_POST['action'] ?? '';
+                $action = setupField('action');
 
                 if ($action === 'generate') {
                     require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
@@ -246,7 +348,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                     // Determine if seed was generated or manually entered
                     $isGenerated = isset($_SESSION['temp_seed']);
-                    $seed = $_SESSION['temp_seed'] ?? $_POST['existing_seed'] ?? '';
+                    $seed = $_SESSION['temp_seed'] ?? setupField('existing_seed');
+                    $seed = trim((string)$seed);
 
                     if (empty($seed)) {
                         throw new Exception('No seed phrase provided');
@@ -256,6 +359,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
                     if (!\Cashu\Mnemonic::validate($seed)) {
                         throw new Exception('Invalid seed phrase');
+                    }
+
+                    // Two stores on one recovery phrase hand out the same payment secrets
+                    // and lose money (OPUS-018 / DS41-13). Refuse before anything is written.
+                    $seedOwner = Config::storeUsingSeed($seed, $storeId);
+                    if ($seedOwner !== null) {
+                        throw new Exception('This recovery phrase is already used by your store "'
+                            . $seedOwner['name'] . '". Each store needs its own phrase, because two stores'
+                            . ' sharing one lose payments. Generate a new phrase for this store instead.');
                     }
 
                     // Save seed to THIS store (not global config)
@@ -302,7 +414,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // For add_store mode, redirect back to admin with success
                     if ($mode === 'add_store') {
                         $createdStoreId = $storeId;
-                        unset($_SESSION['setup_store_id']);
+                        unset($_SESSION['setup_store_id'], $_SESSION[$stepKey]);
                         header('Location: ' . Urls::admin() . '?store_created=' . urlencode($createdStoreId));
                         exit;
                     }
@@ -321,10 +433,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } catch (Exception $e) {
         $error = $e->getMessage();
     }
+
+    // Remember how far the wizard got, so a reload resumes here.
+    if ($error === null && !$setupTokenRequired) {
+        if ($step === 7) {
+            unset($_SESSION[$stepKey]);
+        } else {
+            $_SESSION[$stepKey] = $step;
+        }
+    }
 }
 
 // Clear mint session data when navigating to step 5 via GET (e.g. "Change Mint" button)
-if ($step === 5 && $_SERVER['REQUEST_METHOD'] === 'GET') {
+if ($step === 5 && $_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['step'])) {
     unset($_SESSION['mint_url_temp'], $_SESSION['mint_units']);
 }
 
@@ -360,8 +481,108 @@ function getDataDirHttpPath(): ?string {
     return str_replace('\\', '/', $relativePath); // Normalize for Windows
 }
 
-// Security tests are done client-side via JavaScript for better compatibility
-// (PHP's built-in server can't make HTTP requests to itself)
+/**
+ * Check a mint address before the server fetches it (SPB-SSRF-001).
+ *
+ * Normalizes it like every other mint-URL writer and refuses addresses inside the
+ * server's own network (loopback, private, link-local, cloud metadata), which a visitor
+ * could otherwise use to make this server probe its neighbours.
+ */
+function setupCheckMintUrl(string $mintUrl): string {
+    require_once __DIR__ . '/includes/mint_helpers.php';
+    try {
+        // Shared gate (includes/mint_helpers.php); CASHUPAY_ALLOW_PRIVATE_MINTS or the
+        // allow_private_mints setting opt in to a mint on the same machine or LAN.
+        $mintUrl = MintHelpers::assertSafeMintUrl($mintUrl);
+    } catch (InvalidArgumentException $e) {
+        throw new Exception($e->getMessage());
+    }
+    return Config::normalizeMintUrl($mintUrl);
+}
+
+/**
+ * Ask this web server, from the server itself, whether the database files can be
+ * downloaded: a ranged GET (some servers answer HEAD from a rule a real GET would not
+ * hit) for the database and its -wal/-shm sidecars, the same probe as the dashboard's.
+ *
+ * The connection is pinned to this server's own address (SERVER_ADDR), so the Host
+ * header a visitor sends only names the virtual host, never a destination.
+ *
+ * @return array{status: string, exposed: string[]} status is 'outside' (data not under
+ *         the web root), 'protected', 'exposed' or 'inconclusive' (could not check).
+ */
+function setupProbeDataExposure(): array {
+    static $result = null;
+    if ($result !== null) {
+        return $result;
+    }
+    if (Database::isDataDirOutsideWebroot()) {
+        return $result = ['status' => 'outside', 'exposed' => []];
+    }
+    $inconclusive = ['status' => 'inconclusive', 'exposed' => []];
+    $dataPath = getDataDirHttpPath();
+    $host = (string)($_SERVER['HTTP_HOST'] ?? '');
+    $serverAddr = (string)($_SERVER['SERVER_ADDR'] ?? '');
+    $serverPort = (int)($_SERVER['SERVER_PORT'] ?? 0);
+    // PHP's built-in server handles one request at a time and cannot answer itself.
+    if ($dataPath === null || PHP_SAPI === 'cli-server' || !function_exists('curl_init')
+        || !preg_match('/^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?$/', $host, $hm)
+        || !filter_var($serverAddr, FILTER_VALIDATE_IP) || $serverPort <= 0
+        || !Security::checkRateLimit('setup_exposure_probe', Security::getClientIp(), 10)) {
+        return $result = $inconclusive;
+    }
+    $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
+    $scheme = $https ? 'https' : 'http';
+    $hostName = $hm[1];
+    $hostPort = isset($hm[2]) ? (int)$hm[2] : ($https ? 443 : 80);
+    $connectTo = $hostName . ':' . $hostPort . ':'
+        . (str_contains($serverAddr, ':') ? '[' . $serverAddr . ']' : $serverAddr) . ':' . $serverPort;
+    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $dataPath)));
+
+    require_once __DIR__ . '/includes/http.php';
+    $exposed = [];
+    $answered = 0;
+    foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $name) {
+        $body = '';
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $scheme . '://' . $host . $encodedPath . '/' . $name,
+            CURLOPT_CONNECT_TO => [$connectTo],
+            CURLOPT_RANGE => '0-15',
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => 0,
+            // Read a few bytes and hang up, even if the server ignores the Range header.
+            CURLOPT_WRITEFUNCTION => function ($ch, string $chunk) use (&$body): int {
+                $body .= $chunk;
+                return strlen($body) >= 16 ? -1 : strlen($chunk);
+            },
+        ] + cashupay_curl_protocol_options());
+        curl_exec($ch);
+        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $type = strtolower((string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+        if ($code === 0) {
+            continue; // no answer at all: this file was not checked
+        }
+        $answered++;
+        if ($code >= 200 && $code < 300) {
+            // A host that answers every path with a 200 page is not serving the database;
+            // only the real file content counts as proof of exposure.
+            $isFile = $name === 'cashupay.sqlite'
+                ? str_starts_with($body, 'SQLite format 3')
+                : (!str_contains($type, 'text/html') && !str_starts_with(ltrim($body), '<'));
+            if ($isFile) {
+                $exposed[] = $name;
+            }
+        }
+    }
+    if ($exposed) {
+        return $result = ['status' => 'exposed', 'exposed' => $exposed];
+    }
+    return $result = $answered === 3 ? ['status' => 'protected', 'exposed' => []] : $inconclusive;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -827,23 +1048,62 @@ function getDataDirHttpPath(): ?string {
                     $dataPath = getDataDirHttpPath();
                     $baseOrigin = getHttpOrigin();
 
-                    // Build list of URL paths to test (same logic as PHP version, but for JS)
+                    // Build list of URL paths to test (same logic as PHP version, but for JS).
+                    // The -wal/-shm sidecars hold the newest secrets; a rule that only blocks
+                    // *.sqlite leaves them downloadable. (The recovery-code file has a random
+                    // name now, so there is no fixed URL to probe for it.)
                     $testPaths = [];
+                    $candidateDirs = [];
                     if ($dataPath !== null) {
-                        $testPaths[] = $dataPath . '/cashupay.sqlite';
+                        $candidateDirs[] = $dataPath;
                     }
-                    $testPaths[] = '/data/cashupay.sqlite';
+                    $candidateDirs[] = '/data';
                     $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '';
                     $appDir = dirname($scriptPath);
                     if ($appDir && $appDir !== '/' && $appDir !== '.') {
-                        $testPaths[] = $appDir . '/data/cashupay.sqlite';
+                        $candidateDirs[] = $appDir . '/data';
+                    }
+                    foreach ($candidateDirs as $dir) {
+                        foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $file) {
+                            $testPaths[] = $dir . '/' . $file;
+                        }
                     }
                     // Normalize and deduplicate
                     $testPaths = array_unique(array_map(function($p) {
                         return '/' . ltrim($p, '/');
                     }, $testPaths));
+
+                    // The server's own check decides; the browser test below is a second opinion.
+                    $serverProbe = (!$setupTokenRequired || !$claimedElsewhere)
+                        ? setupProbeDataExposure()
+                        : ['status' => 'inconclusive', 'exposed' => []];
+                    $probeSettled = in_array($serverProbe['status'], ['protected', 'outside'], true);
                     ?>
 
+                    <?php if ($isWordPressSetup): ?>
+                    <!-- WordPress: the plugin reads CASHUPAY_DATA_DIR only from wp-config.php (SPB-DEP-008) -->
+                    <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
+                        <p style="margin-bottom: 0.5rem; font-size: 0.9rem;">
+                            Your CashuPay data is stored in:
+                            <code><?php echo htmlspecialchars(Setup::relativeDataDirForDisplay()); ?></code>
+                            <?php if ($isOutsideWebroot): ?>
+                                <span style="color: #48bb78;">(outside your website folder &mdash; the safest place)</span>
+                            <?php endif; ?>
+                        </p>
+                        <?php if (!$isOutsideWebroot): ?>
+                        <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 0.5rem;">
+                            This folder is inside your website. If the test below says it can be downloaded,
+                            ask your hosting provider to block it, or move it: add this line to your
+                            <code>wp-config.php</code> file, above the line that says
+                            <em>&ldquo;That's all, stop editing!&rdquo;</em>, with a folder outside your website:
+                        </p>
+                        <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.5rem;">define('CASHUPAY_DATA_DIR', '<?php echo htmlspecialchars(dirname(rtrim(ABSPATH, '/'))); ?>/cashupay-data');</pre>
+                        <p style="color: #a0aec0; font-size: 0.85rem; margin-bottom: 0;">
+                            Then reload this page. Do not put this line in the plugin's own files: plugin updates replace them.
+                        </p>
+                        <?php endif; ?>
+                    </div>
+                    <?php else: ?>
                     <!-- Recommended: Outside webroot (shown prominently, not collapsed) -->
                     <div style="background: rgba(72, 187, 120, 0.1); border: 1px solid rgba(72, 187, 120, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
                         <p style="margin-bottom: 0.75rem; font-weight: 500; color: #68d391;">
@@ -866,11 +1126,55 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     </div>
 
                     <p style="color: #a0aec0; font-size: 0.85rem; margin-bottom: 1rem;">
-                        Current data location: <code><?php echo htmlspecialchars(Database::getDataDir()); ?></code>
+                        Current data location: <code><?php echo htmlspecialchars(Setup::relativeDataDirForDisplay()); ?></code>
                         <?php if ($isOutsideWebroot): ?>
                             <span style="color: #48bb78;">(outside web root)</span>
                         <?php endif; ?>
                     </p>
+                    <?php endif; ?>
+
+                    <!-- Server-side check (authoritative) -->
+                    <div class="security-check">
+                        <div class="status <?php echo $serverProbe['status'] === 'exposed' ? 'FAIL' : ($probeSettled ? 'OK' : 'WARN'); ?>"></div>
+                        <div style="flex: 1;">
+                            <?php if ($serverProbe['status'] === 'exposed'): ?>
+                                <span>The server checked: your database CAN be downloaded</span>
+                                <p style="font-size: 0.85rem; color: #fc8181; margin-top: 0.25rem;">
+                                    Readable from the internet: <?php echo htmlspecialchars(implode(', ', $serverProbe['exposed'])); ?>.
+                                    Setup cannot continue until this is fixed &mdash; anyone could take the money stored in it.
+                                </p>
+                                <?php if (!Urls::isWordPress()): ?>
+                                <form method="post" style="margin-top: 0.75rem;">
+                                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(Auth::generateCsrfToken()); ?>">
+                                    <input type="hidden" name="action" value="relocate_data">
+                                    <button type="submit" class="btn" style="width: 100%;">Move my data to a safe place</button>
+                                </form>
+                                <p style="font-size: 0.85rem; color: #a0aec0; margin-top: 0.5rem;">
+                                    This moves the data folder next to your website folder, where the internet cannot reach it.
+                                    Nothing is set up yet, so nothing can be lost.
+                                </p>
+                                <?php endif; ?>
+                                <?php if ($relocateError !== null): ?>
+                                <p style="font-size: 0.85rem; color: #fc8181; margin-top: 0.5rem;">
+                                    <?php echo htmlspecialchars($relocateError); ?>
+                                    Please send this to your hosting provider's support:
+                                </p>
+                                <textarea readonly rows="4" style="width: 100%; font-size: 0.8rem;">Hello, I installed a payment application in <?php echo htmlspecialchars((string)(realpath(dirname(Database::getDataDir())) ?: '')); ?>. Its folder "<?php echo htmlspecialchars(basename(Database::getDataDir())); ?>" must not be downloadable from the web. Could you please block web access to that folder (for nginx: a "deny all" location for it), or allow PHP to create a folder next to my website folder? Thank you.</textarea>
+                                <?php endif; ?>
+                            <?php elseif ($serverProbe['status'] === 'outside'): ?>
+                                <span>The database is outside your website folder</span>
+                                <p style="font-size: 0.85rem; color: #a0aec0; margin-top: 0.25rem;">It cannot be downloaded from the internet.</p>
+                            <?php elseif ($serverProbe['status'] === 'protected'): ?>
+                                <span>The server checked: your database cannot be downloaded</span>
+                                <p style="font-size: 0.85rem; color: #a0aec0; margin-top: 0.25rem;">The database and its two helper files were all refused.</p>
+                            <?php else: ?>
+                                <span>The server could not check this by itself</span>
+                                <p style="font-size: 0.85rem; color: #a0aec0; margin-top: 0.25rem;">
+                                    Look at the browser test below and check it yourself (see &ldquo;Manual verification&rdquo;), then tick the box.
+                                </p>
+                            <?php endif; ?>
+                        </div>
+                    </div>
 
                     <!-- HTTP accessibility test results (populated by JavaScript) -->
                     <h4 style="margin-bottom: 0.5rem;">Security Test Results</h4>
@@ -961,7 +1265,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     </div>
                     <?php endif; ?>
 
-                    <?php if ($setupTokenRequired): ?>
+                    <?php if ($claimedElsewhere): ?>
                     <div class="error" style="margin: 1.5rem 0;">
                         <strong>Someone has already started setting up this server</strong>
                         <p style="margin-top: 0.5rem;">
@@ -979,9 +1283,9 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <h3 style="margin: 1.5rem 0 0.5rem;">Where to find your recovery code</h3>
                     <p style="margin-bottom: 0.75rem; color: #a0aec0; font-size: 0.9rem;">
                         It is in a small text file on your server. Open your hosting file manager
-                        (or the FTP program you used to upload CashuPayServer) and open this file:
+                        (or the FTP program you used to upload CashuPayServer).
+                        <?php echo htmlspecialchars(Setup::tokenLocationHint()); ?>
                     </p>
-                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.85rem; margin-bottom: 0.75rem;"><?php echo htmlspecialchars(Setup::tokenPathForDisplay()); ?></code>
                     <p style="color: #718096; font-size: 0.8rem; margin-bottom: 1rem;">
                         It contains one short line, like <code>A1B2C3D4E5</code>. Copy it in below.
                         The code stops working as soon as setup is finished.
@@ -993,7 +1297,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                         <input type="hidden" name="detected_base_url" id="detected_base_url" value="">
 
-                        <?php if ($setupTokenRequired): ?>
+                        <?php if ($claimedElsewhere): ?>
                         <div class="form-group" style="margin: 1.5rem 0;">
                             <label for="setup_token">Recovery code</label>
                             <input type="text" id="setup_token" name="setup_token" required
@@ -1003,7 +1307,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         <?php endif; ?>
 
                         <div class="checkbox-group" style="margin: 1.5rem 0;">
-                            <input type="checkbox" id="security_acknowledged" name="security_acknowledged" required>
+                            <input type="checkbox" id="security_acknowledged" name="security_acknowledged"<?php echo $probeSettled ? ' checked' : ' required'; ?>>
                             <label for="security_acknowledged">
                                 I have verified that the database is not accessible from the web
                             </label>
@@ -1021,7 +1325,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             })();
                         </script>
 
-                        <button type="submit" class="btn" style="width: 100%;">Continue</button>
+                        <button type="submit" class="btn" style="width: 100%;"<?php echo $serverProbe['status'] === 'exposed' ? ' disabled' : ''; ?>><?php echo $claimedElsewhere ? 'Take back control' : 'Start setup'; ?></button>
                     </form>
 
                     <script>
@@ -1048,26 +1352,57 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             let worstStatus = 'OK';
                             const exposedPaths = [];
 
-                            // Test each path
+                            const blockedPaths = [];
+                            const unknownPaths = [];
+
+                            // Test each path with a ranged GET (some servers answer HEAD
+                            // from a rule a real GET would not hit). Any 2xx carrying the
+                            // file is exposure; a failed request proves nothing either way.
                             for (const path of testPaths) {
                                 const url = baseOrigin + path;
                                 try {
                                     const response = await fetch(url, {
-                                        method: 'HEAD',
+                                        method: 'GET',
+                                        headers: { 'Range': 'bytes=0-15' },
                                         mode: 'same-origin',
-                                        cache: 'no-store'
+                                        cache: 'no-store',
+                                        redirect: 'manual'
                                     });
-                                    results[path] = response.status;
-
-                                    if (response.status === 200) {
-                                        worstStatus = 'FAIL';
-                                        exposedPaths.push(path);
+                                    let status = response.status;
+                                    if (response.ok) {
+                                        // A host that answers every path with a 200 page is not
+                                        // serving the file: only the real content counts.
+                                        const type = (response.headers.get('content-type') || '').toLowerCase();
+                                        const head = new Uint8Array((await response.arrayBuffer()).slice(0, 16));
+                                        const text = String.fromCharCode.apply(null, head);
+                                        const isFile = path.endsWith('.sqlite')
+                                            ? text.startsWith('SQLite format 3')
+                                            : !type.includes('text/html') && !text.trimStart().startsWith('<');
+                                        if (isFile) {
+                                            worstStatus = 'FAIL';
+                                            exposedPaths.push(path);
+                                            status = 'exposed';
+                                        }
+                                    } else if (response.type === 'opaqueredirect') {
+                                        status = 'redirect'; // sent elsewhere, not the file
+                                    } else if (status === 0) {
+                                        status = 'error';
+                                    }
+                                    results[path] = status;
+                                    if (status === 'error') {
+                                        unknownPaths.push(path);
+                                    } else if (status !== 'exposed') {
+                                        blockedPaths.push(path);
                                     }
                                 } catch (e) {
-                                    // Network error - could be CORS, blocked, etc.
-                                    // This is actually good - means it's not accessible
-                                    results[path] = 'blocked';
+                                    // Network error (reset, WAF, redirect elsewhere): the test
+                                    // did not run, which is not the same as "protected".
+                                    results[path] = 'error';
+                                    unknownPaths.push(path);
                                 }
+                            }
+                            if (worstStatus !== 'FAIL' && unknownPaths.length > 0) {
+                                worstStatus = 'WARN';
                             }
 
                             // Hide loading, show results
@@ -1080,12 +1415,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             // Build results HTML
                             let urlsHtml = '';
                             for (const [path, status] of Object.entries(results)) {
-                                if (status === 200) {
-                                    urlsHtml += '<div>' + escapeHtml(path) + ': <span style="color: #fc8181;">HTTP 200 (EXPOSED!)</span></div>';
-                                } else if (status === 'blocked') {
-                                    urlsHtml += '<div>' + escapeHtml(path) + ': <span style="color: #48bb78;">Blocked</span></div>';
+                                if (status === 'exposed') {
+                                    urlsHtml += '<div>' + escapeHtml(path) + ': <span style="color: #fc8181;">DOWNLOADABLE!</span></div>';
+                                } else if (status === 'error') {
+                                    urlsHtml += '<div>' + escapeHtml(path) + ': <span style="color: #ed8936;">could not check</span></div>';
                                 } else {
-                                    urlsHtml += '<div>' + escapeHtml(path) + ': HTTP ' + status + '</div>';
+                                    urlsHtml += '<div>' + escapeHtml(path) + ': HTTP ' + escapeHtml(String(status)) + '</div>';
                                 }
                             }
                             urlsEl.innerHTML = urlsHtml;
@@ -1097,9 +1432,12 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             } else if (isOutsideWebroot) {
                                 messageEl.textContent = 'Data directory is outside document root';
                                 detailsEl.textContent = 'Most secure configuration - data is not accessible via HTTP.';
+                            } else if (worstStatus === 'WARN') {
+                                messageEl.textContent = 'Could not verify - some test requests failed';
+                                detailsEl.textContent = 'This does not mean the database is protected. Check it yourself with the link under "Manual verification".';
                             } else {
                                 messageEl.textContent = 'Data directory is protected';
-                                detailsEl.textContent = 'All tested URL paths correctly return 403/404 or are blocked.';
+                                detailsEl.textContent = 'All tested addresses refused to send the database files.';
                             }
                         }
 
@@ -1313,7 +1651,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <div style="display: flex; gap: 0.5rem;">
                                 <input type="url" id="mint_url" name="mint_url"
                                        placeholder="https://..."
-                                       value="<?php echo htmlspecialchars($_POST['mint_url'] ?? ''); ?>"
+                                       value="<?php echo htmlspecialchars(setupField('mint_url')); ?>"
                                        required style="flex: 1;">
                                 <button type="button" class="btn btn-secondary" onclick="openMintDiscovery()" style="white-space: nowrap;">Discover</button>
                             </div>

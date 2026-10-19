@@ -45,11 +45,15 @@ class Invoice {
      */
     private static function claimForMinting(string $invoiceId): bool {
         $now = time();
-        // Claim a fresh (New) or recovered (Expired-but-paid) invoice.
+        // Claim a fresh (New) or recovered (Expired-but-paid) invoice. An Invalid
+        // (merchant-cancelled) one is claimable too: cancelling the order does not
+        // revoke the Lightning invoice, and a customer who pays it anyway has paid the
+        // mint. Only the mint saying PAID/ISSUED leads here, so this collects money that
+        // already arrived; it never re-opens an unpaid invoice.
         $claimed = Database::update(
             'invoices',
             ['status' => 'Processing', 'processing_since' => $now],
-            "id = ? AND status IN ('New', 'Expired')",
+            "id = ? AND status IN ('New', 'Expired', 'Invalid')",
             [$invoiceId]
         );
         if ($claimed === 1) {
@@ -167,7 +171,9 @@ class Invoice {
                 $quote = $wallet->requestMintQuote($amountInMintUnit);
                 $usedMintUrl = $tryMintUrl;
                 break; // Success!
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
+                // Throwable, not Exception: a malformed mint reply must fail over to the
+                // next mint, not take the checkout down with a TypeError.
                 $lastError = $e;
                 error_log("Mint quote failed for $tryMintUrl: " . $e->getMessage());
                 continue; // Try next mint
@@ -208,6 +214,9 @@ class Invoice {
                 'quote_id' => $quote->quote,
                 'bolt11' => $quote->request,
                 'mint_url' => $usedMintUrl,
+                // The quote is denominated in this unit; collecting it with any other
+                // (after the store's unit changes) can never succeed.
+                'mint_unit' => $mintUnit,
                 'metadata' => $metadata ? json_encode($metadata) : null,
                 'checkout_config' => $checkout ? json_encode($checkout) : null,
                 'created_at' => $now,
@@ -329,8 +338,9 @@ class Invoice {
         $now = time();
         // Capture which invoices are transitioning so we can fire InvoiceExpired for each
         // (the bulk UPDATE alone emitted no webhook, so shops never learned of expiry).
-        // See FABLE-CASHUPAYSERVER-AUDIT (C-WH-1).
-        Database::beginTransaction();
+        // See FABLE-CASHUPAYSERVER-AUDIT (C-WH-1). It reads before it writes, so it
+        // must hold the write lock from the start (see beginWriteTransaction).
+        Database::beginWriteTransaction();
         try {
             // Select and update inside the transaction, and update exactly the ids
             // selected: reading first and then updating a broader predicate expired
@@ -408,7 +418,7 @@ class Invoice {
                 Database::update('invoices', ['last_polled_at' => $now], 'id = ?', [$invoice['id']]);
 
                 // Get wallet for the exact mint that issued this invoice's quote
-                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null);
+                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null, $invoice['mint_unit'] ?? null);
 
                 // Check quote status
                 $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
@@ -465,8 +475,8 @@ class Invoice {
      * Format invoice for API response
      */
     public static function formatForApi(array $invoice): array {
-        // Get store's mint unit for proper display
-        $mintUnit = Config::getStoreMintUnit($invoice['store_id']);
+        // The unit the invoice was quoted in, not the store's current one.
+        $mintUnit = $invoice['mint_unit'] ?? null ?: Config::getStoreMintUnit($invoice['store_id']);
 
         $result = [
             'id' => $invoice['id'],
@@ -814,7 +824,7 @@ class Invoice {
         }
 
         try {
-            $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null);
+            $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null, $invoice['mint_unit'] ?? null);
             $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
 
             self::recordPollOutcome($invoice['id'], $quoteStatus->state, null);
@@ -873,6 +883,17 @@ class Invoice {
     // ISSUED QUOTE HANDLING
     // =========================================================================
 
+    /**
+     * Whether the mint has said, in so many words, that nothing was paid on this quote.
+     * The NUT-04 accounting fields win when present; otherwise only an explicit UNPAID.
+     */
+    private static function quoteIsDefinitelyUnpaid(\Cashu\MintQuote $quote): bool {
+        if ($quote->amountPaid !== null && $quote->amountIssued !== null) {
+            return $quote->amountPaid === 0 && $quote->amountIssued === 0;
+        }
+        return strtoupper($quote->state) === 'UNPAID';
+    }
+
     private static function completeIssuedInvoice(array $invoice, Wallet $wallet): void {
         if ($wallet->hasStorage()) {
             $proofs = $wallet->getStorage()->getProofsByQuoteId($invoice['quote_id']);
@@ -890,7 +911,7 @@ class Invoice {
         error_log("CashuPayServer: ISSUED quote {$invoice['quote_id']} has no proofs - retrying mint for invoice {$invoice['id']}");
         try {
             self::mintAndStoreTokens($invoice, $wallet);
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             error_log("CashuPayServer: mint retry for ISSUED quote {$invoice['quote_id']} failed: " . $e->getMessage());
         }
     }
@@ -919,7 +940,7 @@ class Invoice {
                 if (!$invoice['quote_id']) {
                     continue;
                 }
-                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null);
+                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null, $invoice['mint_unit'] ?? null);
                 if (!$wallet->hasStorage()) {
                     continue;
                 }
@@ -990,15 +1011,17 @@ class Invoice {
             try {
                 Database::update('invoices', ['last_polled_at' => $now], 'id = ?', [$invoice['id']]);
 
-                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null);
+                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null, $invoice['mint_unit'] ?? null);
                 $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
 
                 if ($quoteStatus->isPaid() || $quoteStatus->isIssued()) {
                     error_log("CashuPayServer: Late payment on expired invoice {$invoice['id']} - recovering");
                     if ($quoteStatus->isIssued()) {
-                        // Un-expire so completeIssuedInvoice/mint can settle it.
-                        self::claimForMinting($invoice['id']);
-                        self::completeIssuedInvoice(self::getById($invoice['id']), $wallet);
+                        // No claim here: completeIssuedInvoice either settles proofs we
+                        // already hold, or calls mintAndStoreTokens, which claims for
+                        // itself. Claiming first made that second claim fail (cooldown),
+                        // so the retry announced in the log never happened.
+                        self::completeIssuedInvoice($invoice, $wallet);
                     } else {
                         self::mintAndStoreTokens($invoice, $wallet);
                     }
@@ -1006,9 +1029,12 @@ class Invoice {
                         $recovered[] = $invoice['id'];
                     }
                 } elseif ($quoteStatus->expiry !== null && $quoteStatus->expiry < $now
-                          && !$quoteStatus->isPaid()) {
-                    // The mint's own quote has expired unpaid: this claim is finally
-                    // resolved and the row may be cleaned up by age from now on.
+                          && self::quoteIsDefinitelyUnpaid($quoteStatus)) {
+                    // The mint's own quote has expired and the mint says plainly that
+                    // nothing was paid: this claim is resolved and the row may be cleaned
+                    // up by age from now on. Anything less than that plain answer (no
+                    // state, PENDING, an unknown word) keeps the quote: dropping the only
+                    // link to a payment is a one-way door.
                     Database::update('invoices', ['quote_id' => null], 'id = ?', [$invoice['id']]);
                 }
             } catch (Throwable $e) {
@@ -1033,12 +1059,33 @@ class Invoice {
      * and any operation that doesn't require mint verification.
      */
     public static function getBalance(string $storeId): int {
+        $total = 0;
+        foreach (self::getAccountBalances($storeId) as $account) {
+            if ($account['same_unit']) {
+                $total += $account['balance'];
+            }
+        }
+        return $total;
+    }
+
+    /**
+     * Spendable balance per wallet account (primary and every backup mint).
+     *
+     * A failover payment is minted at whichever mint issued its quote, so money can sit
+     * at a backup. Each account is listed with its own unit; only accounts in the
+     * primary's unit are added up into the headline balance — a EUR backup is not sats.
+     *
+     * @return list<array{mint_url: string, unit: string, balance: int, primary: bool, same_unit: bool}>
+     */
+    public static function getAccountBalances(string $storeId): array {
         $store = Config::getStore($storeId);
         if (!$store || empty($store['mint_url'])) {
-            return 0;
+            return [];
         }
+        $primaryUrl = rtrim((string)$store['mint_url'], '/');
+        $primaryUnit = strtolower((string)($store['mint_unit'] ?? 'sat'));
 
-        $total = 0;
+        $result = [];
         foreach (Config::getStoreWalletAccounts($storeId) as $account) {
             $storage = new WalletStorage(
                 Database::getDbPath(),
@@ -1046,52 +1093,115 @@ class Invoice {
                 $account['unit'],
                 $store['wallet_account_id']
             );
-            $total += $storage->getBalance();
+            $unit = strtolower((string)$account['unit']);
+            $result[] = [
+                'mint_url' => $account['mint_url'],
+                'unit' => $unit,
+                'balance' => $storage->getBalance(),
+                'primary' => rtrim((string)$account['mint_url'], '/') === $primaryUrl && $unit === $primaryUnit,
+                'same_unit' => $unit === $primaryUnit,
+            ];
         }
-        return $total;
+        return $result;
+    }
+
+    /**
+     * The account a withdrawal or export of $amount should be paid from.
+     *
+     * One payment can only spend ecash from one mint. The primary is used whenever it
+     * can cover the amount (or when nothing can); otherwise the same-unit account with
+     * the most money that can. Returns null for a store without a wallet.
+     *
+     * @return array{mint_url: string, unit: string, balance: int, primary: bool, same_unit: bool}|null
+     */
+    public static function getFundsAccount(string $storeId, int $amount): ?array {
+        $accounts = array_values(array_filter(self::getAccountBalances($storeId), fn($a) => $a['same_unit']));
+        if (empty($accounts)) {
+            return null;
+        }
+        $primary = null;
+        foreach ($accounts as $account) {
+            if ($account['primary']) {
+                $primary = $account;
+            }
+        }
+        if ($primary !== null && $primary['balance'] >= $amount) {
+            return $primary;
+        }
+        usort($accounts, fn($x, $y) => $y['balance'] <=> $x['balance']);
+        if ($accounts[0]['balance'] >= $amount) {
+            return $accounts[0];
+        }
+        return $primary ?? $accounts[0];
+    }
+
+    /** The most one withdrawal or export can move: the largest single same-unit account. */
+    public static function getLargestSpendableBalance(string $storeId): int {
+        $max = 0;
+        foreach (self::getAccountBalances($storeId) as $account) {
+            if ($account['same_unit']) {
+                $max = max($max, $account['balance']);
+            }
+        }
+        return $max;
     }
 
     /**
      * Get unspent proofs for a store (reads from local storage)
      *
-     * Returns Proof objects directly from SQLite storage.
+     * Returns Proof objects directly from SQLite storage, for the primary account unless
+     * a specific account (mint URL and unit) is named.
      * No mint contact required - ecash proofs are stored locally.
      */
-    public static function getUnspentProofs(string $storeId): array {
+    public static function getUnspentProofs(string $storeId, ?string $mintUrl = null, ?string $unit = null): array {
+        $storage = self::accountStorage($storeId, $mintUrl, $unit);
+        return $storage ? $storage->getProofsAsObjects(ProofState::UNSPENT) : [];
+    }
+
+    /** Local storage of one of a store's accounts (primary by default), or null. */
+    private static function accountStorage(string $storeId, ?string $mintUrl = null, ?string $unit = null): ?WalletStorage {
         $store = Config::getStore($storeId);
         if (!$store || empty($store['mint_url'])) {
-            return [];
+            return null;
         }
-
-        $storage = new WalletStorage(
+        return new WalletStorage(
             Database::getDbPath(),
-            $store['mint_url'],
-            $store['mint_unit'] ?? 'sat',
+            $mintUrl ?? $store['mint_url'],
+            $unit ?? ($store['mint_unit'] ?? 'sat'),
             $store['wallet_account_id']
         );
-        return $storage->getProofsAsObjects(ProofState::UNSPENT);
+    }
+
+    /** Local storage of the account that holds these proofs (see accountHoldingSecrets). */
+    private static function storageHoldingSecrets(string $storeId, array $secrets): ?WalletStorage {
+        $account = self::accountHoldingSecrets($storeId, $secrets);
+        if ($account['mint_url'] === '') {
+            return null;
+        }
+        return self::accountStorage($storeId, $account['mint_url'], $account['unit']);
     }
 
     /**
      * Mark proofs as spent for a store (updates local storage)
+     *
+     * Conditional, not a blind overwrite: proofs a melt or swap journal has reserved
+     * are left to that journal, which settles them itself — overwriting them made the
+     * journal's own finalization fail ("no longer owns a reserved input").
      */
     public static function markProofsSpent(string $storeId, array $secrets): void {
         if (empty($secrets)) {
             return;
         }
-
-        $store = Config::getStore($storeId);
-        if (!$store || empty($store['mint_url'])) {
+        $storage = self::storageHoldingSecrets($storeId, $secrets);
+        if (!$storage) {
             return;
         }
-
-        $storage = new WalletStorage(
-            Database::getDbPath(),
-            $store['mint_url'],
-            $store['mint_unit'] ?? 'sat',
-            $store['wallet_account_id']
+        $storage->transitionProofStates(
+            $secrets,
+            ProofState::SPENT,
+            [ProofState::UNSPENT, ProofState::PENDING, ProofState::EXPORTED],
+            array_flip($storage->getReservedInputSecrets())
         );
-        $storage->updateProofsState($secrets, ProofState::SPENT);
     }
 
     /**
@@ -1251,20 +1361,17 @@ class Invoice {
         $inputs = array_merge($proofs, $helpers);
         $total = \Cashu\Wallet::sumProofs($inputs);
 
-        // Briefly spendable so the library may reserve them, then immediately swapped.
-        // The swap is journaled, so an interruption here is recovered rather than lost.
-        $storage->updateProofsState($secrets, ProofState::UNSPENT);
-        try {
-            $wallet->swap($inputs, \Cashu\Wallet::splitAmount($total - $fee));
-        } catch (Throwable $e) {
-            // Put them back where they were: still handed out, not spendable. The helper
-            // proofs were already spendable and stay that way.
-            try {
-                $storage->updateProofsState($secrets, ProofState::EXPORTED);
-            } catch (Throwable $ignored) {
-            }
-            throw $e;
-        }
+        // The library reserves the exported proofs straight from EXPORTED inside its
+        // journaled transaction. They are never made spendable on the way, and a
+        // rejected swap returns them to EXPORTED itself. (The old code flipped them to
+        // UNSPENT first and back in a catch block: a crash in between put a token
+        // someone else holds back into the balance, and overwriting the journal's
+        // PENDING reservation made a timed-out swap impossible to finish.)
+        $wallet->swap(
+            $inputs,
+            \Cashu\Wallet::splitAmount($total - $fee),
+            [ProofState::UNSPENT, ProofState::EXPORTED]
+        );
 
         // What the operator gets back is the token's own value less the fee this swap
         // cost; the helpers were already theirs and merely came along for the ride.
@@ -1308,19 +1415,17 @@ class Invoice {
         if (empty($secrets)) {
             return;
         }
-
-        $store = Config::getStore($storeId);
-        if (!$store || empty($store['mint_url'])) {
+        $storage = self::storageHoldingSecrets($storeId, $secrets);
+        if (!$storage) {
             return;
         }
-
-        $storage = new WalletStorage(
-            Database::getDbPath(),
-            $store['mint_url'],
-            $store['mint_unit'] ?? 'sat',
-            $store['wallet_account_id']
-        );
-        $storage->updateProofsState($secrets, ProofState::EXPORTED);
+        // Only spendable proofs may be handed out. If something else (the cron's
+        // automatic withdrawal, a concurrent request) already reserved or spent one, the
+        // token being built is not ours to give: fail instead of handing it over.
+        $changed = $storage->transitionProofStates($secrets, ProofState::EXPORTED, [ProofState::UNSPENT]);
+        if ($changed !== count(array_unique($secrets))) {
+            throw new Exception('Some of this money was being used by another payment at the same moment. Nothing was sent; please try again.');
+        }
     }
 
     /**
@@ -1333,19 +1438,17 @@ class Invoice {
         if (empty($secrets)) {
             return;
         }
-
-        $store = Config::getStore($storeId);
-        if (!$store || empty($store['mint_url'])) {
+        $storage = self::storageHoldingSecrets($storeId, $secrets);
+        if (!$storage) {
             return;
         }
-
-        $storage = new WalletStorage(
-            Database::getDbPath(),
-            $store['mint_url'],
-            $store['mint_unit'] ?? 'sat',
-            $store['wallet_account_id']
-        );
-        $storage->updateProofsState($secrets, ProofState::PENDING);
+        // Only spendable proofs may be handed out. If something else (the cron's
+        // automatic withdrawal, a concurrent request) already reserved or spent one, the
+        // token being built is not ours to give: fail instead of handing it over.
+        $changed = $storage->transitionProofStates($secrets, ProofState::PENDING, [ProofState::UNSPENT]);
+        if ($changed !== count(array_unique($secrets))) {
+            throw new Exception('Some of this money was being used by another payment at the same moment. Nothing was sent; please try again.');
+        }
     }
 
     // =========================================================================
@@ -1367,6 +1470,7 @@ class Invoice {
      * @return array{token: ?string, amount: int, count: int, wallet_id: string}
      */
     public static function exportNamespaceAsToken(string $mintUrl, string $unit, ?string $account): array {
+        self::assertNotLiveNamespace($mintUrl, $unit, $account);
         $wallet = new Wallet(rtrim($mintUrl, '/'), strtolower($unit), Database::getDbPath(), $account);
         $storage = $wallet->getStorage();
         $unspent = $storage->getProofsAsObjects(ProofState::UNSPENT);
@@ -1379,21 +1483,43 @@ class Invoice {
             'amount' => Wallet::sumProofs($unspent),
             'count' => count($unspent),
             'wallet_id' => $wid,
+            // Server-side only: which proofs this token carries, so "mark recovered"
+            // touches exactly these and not a payment that arrived afterwards.
+            'secrets' => array_map(fn($p) => $p->secret, $unspent),
         ];
     }
 
     /**
-     * Mark a namespace's UNSPENT proofs SPENT after its token has been claimed.
+     * Refuse the stranded-funds tools on a namespace a store still uses.
+     *
+     * Exporting a live wallet as a "stranded" token and then marking it recovered
+     * wrote off whatever was in it — including payments that arrived in between.
+     * Live wallets have the ordinary withdraw and export buttons.
+     */
+    private static function assertNotLiveNamespace(string $mintUrl, string $unit, ?string $account): void {
+        $wid = WalletStorage::deriveWalletId(rtrim($mintUrl, '/'), strtolower($unit), $account);
+        foreach (Database::fetchAll("SELECT id, wallet_account_id FROM stores") as $st) {
+            foreach (Config::getStoreWalletAccounts($st['id']) as $acc) {
+                if (WalletStorage::deriveWalletId($acc['mint_url'], $acc['unit'], $st['wallet_account_id'] ?: null) === $wid) {
+                    throw new Exception('This money belongs to a mint a store still uses. Use Withdraw or Export on that store instead.');
+                }
+            }
+        }
+    }
+
+    /**
+     * Mark the proofs of a claimed stranded-funds token SPENT.
+     * @param string[] $secrets the 'secrets' exportNamespaceAsToken() returned
      * @return int number of proofs marked
      */
-    public static function markNamespaceRecovered(string $mintUrl, string $unit, ?string $account): int {
-        $storage = new WalletStorage(Database::getDbPath(), rtrim($mintUrl, '/'), strtolower($unit), $account);
-        $unspent = $storage->getProofsAsObjects(ProofState::UNSPENT);
-        if (empty($unspent)) {
+    public static function markNamespaceRecovered(string $mintUrl, string $unit, ?string $account, array $secrets): int {
+        self::assertNotLiveNamespace($mintUrl, $unit, $account);
+        if (empty($secrets)) {
             return 0;
         }
-        $storage->updateProofsState(array_map(fn($p) => $p->secret, $unspent), ProofState::SPENT);
-        return count($unspent);
+        $storage = new WalletStorage(Database::getDbPath(), rtrim($mintUrl, '/'), strtolower($unit), $account);
+        // Only the proofs that went into the claimed token, and only while still unspent.
+        return $storage->transitionProofStates($secrets, ProofState::SPENT, [ProofState::UNSPENT]);
     }
 
     /**
@@ -1582,7 +1708,9 @@ class Invoice {
             }
 
             if (!empty($spentSecrets)) {
-                $wallet->getStorage()->updateProofsState($spentSecrets, ProofState::SPENT);
+                $wallet->getStorage()->transitionProofStates(
+                    $spentSecrets, ProofState::SPENT, [ProofState::PENDING], $reserved
+                );
             }
 
             return [

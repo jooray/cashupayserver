@@ -17,7 +17,18 @@ if (PHP_SAPI !== 'cli') {
     exit('This script runs from the command line only.');
 }
 
+$dataDir = sys_get_temp_dir() . '/cashupay-dust-' . bin2hex(random_bytes(8));
+mkdir($dataDir, 0700, true);
+define('CASHUPAY_DATA_DIR', $dataDir);
+// An operator who turns donations off. Defined before config.php's default, the way
+// config.local.php would; silence only config.php's "already defined" warning.
+define('CASHUPAY_DONATION_PERCENT', 0);
+
 require_once dirname(__DIR__) . '/cashu-wallet-php/CashuWallet.php';
+$reporting = error_reporting(E_ALL & ~E_WARNING);
+require_once dirname(__DIR__) . '/includes/lightning_address.php';
+error_reporting($reporting);
+register_shutdown_function(fn() => exec('rm -rf ' . escapeshellarg($dataDir)));
 
 use Cashu\Wallet;
 
@@ -26,10 +37,9 @@ function check(bool $cond, string $what): void {
     echo "  ok: $what\n";
 }
 
-/** Mirrors Donation::redeemFee() / BackgroundRunner::isBelowMintFee(). */
+/** The production helper itself, not a copy of it. */
 function redeemFee(int $amount, int $ppk): int {
-    if ($amount <= 0) { return 0; }
-    return (int)ceil(count(Wallet::splitAmount($amount)) * $ppk / 1000);
+    return Donation::redeemFeeFor($amount, $ppk);
 }
 
 echo "mint.lnvoltz.com charges 100 ppk — the mint the stuck donation was made on\n";
@@ -55,5 +65,15 @@ check(redeemFee(255, 1000) === 8, 'a 1000 ppk mint charges a full sat per proof'
 echo "Amounts at the boundary\n";
 check(redeemFee(0, 100) === 0, 'zero costs nothing');
 check(redeemFee(3, 100) === 1 && redeemFee(3, 100) < 3, '3 sat (two proofs) is viable');
+
+echo "Donation::isDust agrees\n";
+check(Donation::isDust(1, 100), 'a 1 sat donation on a 100 ppk mint is dust');
+check(!Donation::isDust(2, 100), '2 sat on the same mint is not');
+check(!Donation::isDust(1, 0), '1 sat on a fee-free mint is not');
+
+echo "A donation percentage of 0 donates nothing\n";
+check(Donation::calculateAmount(1000) === 0, '0 % of 1000 is 0, not the old 1-unit floor');
+check(Donation::calculateAmount(1) === 0, '0 % of 1 is 0');
+check(Donation::calculateMaxWithdrawal(1000) === 1000, 'the whole balance can be withdrawn');
 
 echo "\nAll dust-donation checks passed.\n";

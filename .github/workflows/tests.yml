@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.2', '8.3', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # cashu-wallet-php is a submodule; checkout turns its git@github.com: URL into HTTPS.
+          submodules: true
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: gmp, bcmath, pdo_sqlite, sqlite3, curl, mbstring, intl, json
+          coverage: none
+          tools: composer
+
+      # The library's dev lock pins PHPUnit 12, which needs PHP 8.3+. tests/run.php skips
+      # the PHPUnit suite when it is not installed and still runs everything else.
+      - name: Install cashu-wallet-php dev tools
+        if: ${{ contains(fromJSON('["8.3", "8.4", "8.5"]'), matrix.php) }}
+        working-directory: cashu-wallet-php
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Run the test suite
+        run: php tests/run.php

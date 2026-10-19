@@ -130,7 +130,9 @@ function handleGetInvoice(array $auth, array $params, array $body): void {
  */
 function handleUpdateInvoiceStatus(array $auth, array $params, array $body): void {
     $storeId = requireStore($auth, $params);
-    requirePermission($auth, 'btcpay.store.canmodifyinvoices');
+    // BTCPay 2.4.5 split status changes out of canmodifyinvoices (which still implies
+    // it); a plugin paired with only the new permission must not get 403 (OPUS-014).
+    requirePermission($auth, 'btcpay.store.canmanageinvoicestatus');
     $invoiceId = $params['invoiceId'];
 
     $invoice = Invoice::getById($invoiceId);

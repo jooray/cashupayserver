@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 10;
+    private const SCHEMA_VERSION = 12;
 
     /** Set when ensureCurrentSchema() failed, so callers can tell "broken" from "new". */
     private static ?string $migrationError = null;
@@ -42,11 +42,115 @@ class Database {
             // Check for custom path
             if (defined('CASHUPAY_DATA_DIR')) {
                 self::$dataDir = rtrim(CASHUPAY_DATA_DIR, '/');
+            } elseif (($moved = self::relocatedDataDir()) !== null) {
+                self::$dataDir = $moved;
             } else {
                 self::$dataDir = __DIR__ . '/../data';
             }
         }
         return self::$dataDir;
+    }
+
+    /** Where setup moved the data folder to (see relocateOutsideWebroot()), if it did. */
+    private const LOCATION_FILE = __DIR__ . '/data-location.txt';
+
+    private static function relocatedDataDir(): ?string {
+        $path = @file_get_contents(self::LOCATION_FILE);
+        if ($path === false) {
+            return null;
+        }
+        $path = rtrim(trim($path), '/');
+        return $path !== '' && is_dir($path) ? $path : null;
+    }
+
+    /**
+     * Move a fresh install's data folder out of the website, for operators whose
+     * server serves it (typically nginx-based hosting, which ignores .htaccess).
+     *
+     * The folder goes next to the website folder (one level above the document root,
+     * which shared hosting normally lets PHP write) and includes/data-location.txt
+     * records where. Nothing for the operator to configure, and an upgrade keeps it:
+     * the file is not in the release zip. Only offered before any store has a seed,
+     * so nothing of value is in flight while files move.
+     *
+     * @return array{ok: bool, path?: string, error?: string}
+     */
+    public static function relocateOutsideWebroot(): array {
+        if (defined('CASHUPAY_DATA_DIR') || self::relocatedDataDir() !== null) {
+            return ['ok' => false, 'error' => 'The data folder location is already set by this installation.'];
+        }
+        $docRoot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+        if (!$docRoot) {
+            return ['ok' => false, 'error' => 'The server did not say where the website folder is.'];
+        }
+        $old = self::getDataDir();
+        try {
+            if ((int)(self::getInstance()->query(
+                "SELECT COUNT(*) FROM stores WHERE seed_phrase IS NOT NULL AND seed_phrase != ''"
+            )->fetchColumn()) > 0) {
+                return ['ok' => false, 'error' => 'This installation already holds a wallet, so its data is not moved automatically.'];
+            }
+        } catch (Throwable $e) {
+            // No stores table yet: nothing has been set up, which is fine.
+        }
+
+        $parent = dirname($docRoot);
+        $target = $parent . '/cashupay-data';
+        for ($i = 0; file_exists($target) && $i < 5; $i++) {
+            $target = $parent . '/cashupay-data-' . bin2hex(random_bytes(3));
+        }
+        if (file_exists($target) || !is_writable($parent)) {
+            return ['ok' => false, 'error' => 'Your hosting does not let this app create a folder outside the website.'];
+        }
+        if (!is_writable(__DIR__)) {
+            return ['ok' => false, 'error' => 'This app cannot write to its own includes folder to remember the new place.'];
+        }
+
+        if (!@mkdir($target, 0700, true)) {
+            return ['ok' => false, 'error' => 'Your hosting does not let this app create a folder outside the website.'];
+        }
+        self::protectDataDirectory($target);
+
+        try {
+            // A consistent copy of a WAL database, sidecars included.
+            if (file_exists(self::getDbPath())) {
+                self::getInstance()->exec('VACUUM INTO ' . self::getInstance()->quote($target . '/cashupay.sqlite'));
+                @chmod($target . '/cashupay.sqlite', 0600);
+            }
+            foreach (glob($old . '/setup-token*.txt') ?: [] as $file) {
+                @copy($file, $target . '/' . basename($file));
+                @chmod($target . '/' . basename($file), 0600);
+            }
+            if (is_dir($old . '/sessions')) {
+                @mkdir($target . '/sessions', 0700);
+                foreach (glob($old . '/sessions/*') ?: [] as $file) {
+                    if (is_file($file)) {
+                        @copy($file, $target . '/sessions/' . basename($file));
+                    }
+                }
+            }
+            $tmp = self::LOCATION_FILE . '.' . bin2hex(random_bytes(4));
+            if (@file_put_contents($tmp, $target . "\n") === false || !@rename($tmp, self::LOCATION_FILE)) {
+                @unlink($tmp);
+                throw new RuntimeException('could not record the new location');
+            }
+        } catch (Throwable $e) {
+            error_log('CashuPayServer: moving the data folder failed: ' . $e->getMessage());
+            return ['ok' => false, 'error' => 'Moving the data folder did not work on this hosting.'];
+        }
+
+        // The old copies are what was downloadable; remove them.
+        self::$instance = null;
+        foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $name) {
+            @unlink($old . '/' . $name);
+        }
+        foreach (array_merge(glob($old . '/setup-token*.txt') ?: [], glob($old . '/sessions/*') ?: []) as $file) {
+            @unlink($file);
+        }
+        self::$dataDir = null;
+        self::$dbPath = null;
+        error_log("CashuPayServer: data folder moved out of the website to {$target}");
+        return ['ok' => true, 'path' => $target];
     }
 
     /**
@@ -107,6 +211,8 @@ class Database {
         $dir = self::getDataDir();
         if (!is_dir($dir)) {
             self::createDataDirectory($dir);
+        } else {
+            self::protectDataDirectory($dir);
         }
 
         // Whether this call is creating the database, decided before opening it.
@@ -185,10 +291,10 @@ class Database {
         if (!mkdir($dir, 0700, true)) {
             throw new Exception("Failed to create data directory: $dir");
         }
+        self::protectDataDirectory($dir);
+    }
 
-        // Create .htaccess for Apache protection
-        $htaccess = $dir . '/.htaccess';
-        $htaccessContent = <<<'HTACCESS'
+    private const DATA_HTACCESS = <<<'HTACCESS'
 # Deny all access to this directory
 <IfModule mod_authz_core.c>
     Require all denied
@@ -198,11 +304,25 @@ class Database {
     Deny from all
 </IfModule>
 HTACCESS;
-        file_put_contents($htaccess, $htaccessContent);
 
-        // Create index.php as additional protection
+    /**
+     * Write (or bring up to date) the data directory's web-server protection files.
+     *
+     * Runs on every connection, cheaply: older releases shipped a bare `deny from all`,
+     * which Apache 2.4 without mod_access_compat rejects, and operators are told not to
+     * re-upload the data folder on upgrade, so nothing else would ever replace it. A file
+     * the operator wrote themselves (anything else) is left alone.
+     */
+    private static function protectDataDirectory(string $dir): void {
+        $htaccess = $dir . '/.htaccess';
+        $current = @file_get_contents($htaccess);
+        if ($current === false || trim($current) === '' || strtolower(trim($current)) === 'deny from all') {
+            @file_put_contents($htaccess, self::DATA_HTACCESS);
+        }
         $indexPhp = $dir . '/index.php';
-        file_put_contents($indexPhp, "<?php http_response_code(403); exit('Forbidden');");
+        if (!file_exists($indexPhp)) {
+            @file_put_contents($indexPhp, "<?php http_response_code(403); exit('Forbidden');");
+        }
     }
 
     /**
@@ -324,6 +444,7 @@ HTACCESS;
             quote_id TEXT,
             bolt11 TEXT,
             mint_url TEXT,
+            mint_unit TEXT,
             metadata TEXT,
             checkout_config TEXT,
             created_at INTEGER NOT NULL,
@@ -391,6 +512,7 @@ HTACCESS;
             amount INTEGER NOT NULL,
             fee INTEGER NOT NULL DEFAULT 0,
             unit TEXT NOT NULL DEFAULT 'sat',
+            mint_url TEXT,
             destination TEXT,
             status TEXT NOT NULL DEFAULT 'completed',
             detail TEXT,
@@ -413,6 +535,8 @@ HTACCESS;
             received_amount INTEGER,
             received_at INTEGER,
             result TEXT,
+            input_secrets TEXT,
+            receiving_since INTEGER,
             expires_at INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
             FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
@@ -590,6 +714,27 @@ HTACCESS;
                         ->execute([json_encode(array_values($perms)), $key['id']]);
                 }
                 $pdo->exec('PRAGMA user_version = 10');
+            }
+            if ($version < 11) {
+                // A quote and a melt only mean something at the mint, and in the unit,
+                // they were made in. Invoices and outgoing transfers recorded the mint
+                // (or nothing) but read the unit and mint from the store's *current*
+                // settings, so a unit or primary-mint change orphaned a paid quote or
+                // left a withdrawal pending forever. NULL means "the store's settings
+                // at the time", which is what every older row was made with.
+                self::addColumnIfMissing($pdo, 'invoices', 'mint_unit', 'TEXT');
+                self::addColumnIfMissing($pdo, 'transfers', 'mint_url', 'TEXT');
+                $pdo->exec('PRAGMA user_version = 11');
+            }
+            if ($version < 12) {
+                // A NUT-18 request is claimed together with the proofs paying it, so a
+                // retry of the same token is answered from what happened to those
+                // proofs, and a second token cannot pay the same request twice.
+                if (self::tableExists($pdo, 'payment_requests')) {
+                    self::addColumnIfMissing($pdo, 'payment_requests', 'input_secrets', 'TEXT');
+                    self::addColumnIfMissing($pdo, 'payment_requests', 'receiving_since', 'INTEGER');
+                }
+                $pdo->exec('PRAGMA user_version = 12');
             }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()
@@ -791,6 +936,25 @@ HTACCESS;
      */
     public static function beginTransaction(): bool {
         return self::getInstance()->beginTransaction();
+    }
+
+    /**
+     * Begin a transaction that holds the write lock from its first statement.
+     *
+     * PDO's BEGIN is DEFERRED: a transaction that reads first takes a snapshot, and if
+     * another connection commits before its first write, SQLite fails the upgrade with
+     * "database is locked" at once — busy_timeout does not apply. A no-op write up front
+     * takes the lock (waiting on busy_timeout like any writer) before anything is read.
+     */
+    public static function beginWriteTransaction(): void {
+        $pdo = self::getInstance();
+        $pdo->beginTransaction();
+        try {
+            $pdo->exec('DELETE FROM config WHERE 0');
+        } catch (\Throwable $e) {
+            $pdo->rollBack();
+            throw $e;
+        }
     }
 
     /**

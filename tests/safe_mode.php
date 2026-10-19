@@ -115,6 +115,7 @@ check(BackgroundRunner::run(5)['skipped'] === 'emergency shutdown', 'the backgro
 $docroot = $dataDir . '/www';
 mkdir($docroot);
 file_put_contents($docroot . '/entry.php', '<?php define("CASHUPAY_DATA_DIR", ' . var_export($dataDir, true) . ');'
+    . ' define("CASHUPAY_SAFE_MODE_PUBKEYS", [' . var_export(TEST_PUBKEY, true) . ']);'
     . ' require ' . var_export($root . '/includes/entrypoint_guard.php', true) . '; echo "SERVED";');
 $port = random_int(18100, 18999);
 $server = proc_open(['php', '-S', "127.0.0.1:$port", '-t', $docroot],
@@ -138,13 +139,46 @@ check(is_array(SafeMode::RETIRED_NOTICES), 'releases can list notices they fix (
 [$code, $body] = get("http://127.0.0.1:$port/entry.php");
 check(str_contains($body, 'data</code> folder'), 'the page tells the operator where the flag file is');
 
-echo "Upgrading past the range ends it\n";
-// Rewrite the flag as if this install had been upgraded beyond the affected range.
-$flag = json_decode(file_get_contents($dataDir . '/' . SafeMode::FLAG_FILE), true);
-$flag['ranges'] = [['from' => '0.1.0', 'fixed' => '0.2.0']];
+echo "A flag that was not written from a signed notice is ignored\n";
+$genuineFlag = file_get_contents($dataDir . '/' . SafeMode::FLAG_FILE);
+$flag = json_decode($genuineFlag, true);
+check(isset($flag['event']['sig'], $flag['event']['pubkey'], $flag['event']['content']),
+    'the flag keeps the signed event (pubkey, signature, raw content)');
+$flag['event']['content'] = str_replace('Test problem.', 'Go to attacker.example.', $flag['event']['content']);
+$flag['url'] = 'https://attacker.example/upgrade';
 file_put_contents($dataDir . '/' . SafeMode::FLAG_FILE, json_encode($flag));
+[$code, $body] = get("http://127.0.0.1:$port/entry.php");
+check($code === 200 && $body === 'SERVED', 'a tampered flag does not shut the server down');
+file_put_contents($dataDir . '/' . SafeMode::FLAG_FILE, json_encode([
+    'id' => str_repeat('0', 64), 'ranges' => [['from' => '0.0.1', 'fixed' => '9.9.9']],
+    'reason' => 'Security problem. Upgrade now.', 'url' => 'https://attacker.example/upgrade']));
+[$code, $body] = get("http://127.0.0.1:$port/entry.php");
+check($code === 200 && !str_contains($body, 'attacker.example'), 'nor does an unsigned one, and its link is never shown');
+file_put_contents($dataDir . '/' . SafeMode::FLAG_FILE, $genuineFlag);
+[$code, $body] = get("http://127.0.0.1:$port/entry.php");
+check($code === 503, 'the genuine flag still shuts it down');
+
+echo "Upgrading past the range ends it\n";
+// A genuine flag whose range no longer covers this install, as after an upgrade.
+$past = signedNotice(['affected' => [['from' => '0.1.0', 'fixed' => '0.2.0']], 'reason' => 'Old problem.']);
+file_put_contents($dataDir . '/' . SafeMode::FLAG_FILE,
+    json_encode(SafeMode::verify($past) + ['event' => $past]));
 [$code, $body] = get("http://127.0.0.1:$port/entry.php");
 check($code === 200 && $body === 'SERVED', 'a version outside the range serves normally again');
 check(!is_file($dataDir . '/' . SafeMode::FLAG_FILE), 'and the stale flag is removed');
+
+echo "Pre-release versions match the release line they belong to\n";
+$r = fn(?string $from, ?string $fixed) => [['from' => $from, 'fixed' => $fixed]];
+check(SafeMode::matchingRange($r('0.5.4-alpha', '0.5.6'), '0.5.6-alpha') === null,
+    'fixed: 0.5.6 counts 0.5.6-alpha as fixed');
+check(SafeMode::matchingRange($r('0.5.4-alpha', '0.5.6'), '0.5.5-alpha') !== null, 'and 0.5.5-alpha as affected');
+check(SafeMode::matchingRange($r('0.5.5', '0.5.6'), '0.5.5-alpha') !== null, 'from: 0.5.5 includes 0.5.5-alpha');
+check(SafeMode::matchingRange($r('0.5.5', null), '0.5.4-alpha') === null, 'but not the release before it');
+check(SafeMode::matchingRange($r('0.5.5-alpha', '0.5.6-alpha'), '0.5.6-alpha') === null,
+    'an exact pre-release bound still works');
+check(SafeMode::matchingRange($r('0.5.5-alpha', '0.5.6-beta'), '0.5.6-alpha') !== null,
+    'and orders pre-releases of the same version (alpha < beta)');
+check(SafeMode::matchingRange($r('0.5.0', '9.0.0'), '9.0.0') === null && SafeMode::matchingRange($r('0.5.0', '9.0.0'), '0.5.0') !== null,
+    'bare versions behave as before');
 
 echo "All emergency-shutdown checks passed.\n";

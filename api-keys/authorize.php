@@ -32,22 +32,88 @@ if (!Database::isInitialized() || !Config::isSetupComplete()) {
 // Security headers (self-contained page, strict CSP).
 Security::setSecurityHeaders();
 
+// Permission descriptions for UI. Also the allow-list: a pairing link may ask for these
+// and nothing else (DS41-09, OPUS-009). `*` and btcpay.server.* would let one click on a
+// crafted link hand out a key that can do anything, shown to the operator as a bare
+// star or an internal string they cannot be expected to judge.
+$permissionDescriptions = [
+    'btcpay.store.canviewinvoices' => 'View invoices',
+    'btcpay.store.cancreateinvoice' => 'Create invoices',
+    'btcpay.store.canmodifyinvoices' => 'Modify invoices',
+    'btcpay.store.canmanageinvoicestatus' => 'Change an invoice\'s status (for example, cancel it)',
+    'btcpay.store.webhooks.canmodifywebhooks' => 'Manage webhooks (how your shop hears about payments)',
+    'btcpay.store.canviewstoresettings' => 'View store settings',
+    'btcpay.store.canmodifystoresettings' => 'Full control of the store, including deleting it',
+    'btcpay.store.cancreatenonapprovedpullpayments' => 'Create pull payments (refunds; not supported here, has no effect)',
+];
+// Other standard BTCPay store permissions. Shop plugins sometimes ask for them as
+// optional extras; this server has no endpoint they would open.
+foreach ([
+    'btcpay.store.canviewpaymentrequests', 'btcpay.store.canmodifypaymentrequests',
+    'btcpay.store.canviewpullpayments', 'btcpay.store.canmanagepullpayments',
+    'btcpay.store.cancreatepullpayments', 'btcpay.store.canviewpayouts',
+    'btcpay.store.canmanagepayouts', 'btcpay.store.canviewreports',
+    'btcpay.store.canviewlightninginvoice', 'btcpay.store.cancreatelightninginvoice',
+    'btcpay.store.canuselightningnode',
+] as $unusedPermission) {
+    $permissionDescriptions[$unusedPermission] = 'Not used by CashuPayServer (' . substr($unusedPermission, 13) . ', has no effect)';
+}
+
 // Parse request parameters
 // Note: PHP's $_GET only keeps the last value for duplicate keys (e.g. permissions=a&permissions=b).
 // BTCPay clients send permissions without [] brackets, so we parse the raw query string.
-$permissions = [];
+// Every value is checked for shape: `?redirect[]=x` used to reach string functions and
+// end in a TypeError page instead of an explanation (DS41-23).
+$requestProblems = [];
 $queryString = $_SERVER['QUERY_STRING'] ?? '';
-parse_str(str_replace('permissions=', 'permissions[]=', $queryString), $parsedQuery);
-if (!empty($parsedQuery['permissions'])) {
-    $permissions = (array)$parsedQuery['permissions'];
-} elseif (!empty($_GET['permissions'])) {
-    $permissions = (array)$_GET['permissions'];
+parse_str(preg_replace('/(^|&)permissions(%5B%5D|\[\])?=/i', '$1permissions[]=', (string)$queryString), $parsedQuery);
+$rawPermissions = $parsedQuery['permissions'] ?? [];
+if (!is_array($rawPermissions)) {
+    $rawPermissions = [$rawPermissions];
 }
-$applicationName = $_GET['applicationName'] ?? 'Unknown Application';
-$redirect = $_GET['redirect'] ?? null;
-$applicationIdentifier = $_GET['applicationIdentifier'] ?? null;
-$selectiveStores = isset($_GET['selectiveStores']) && $_GET['selectiveStores'] === 'true';
-$strict = !isset($_GET['strict']) || $_GET['strict'] !== 'false';
+$permissions = [];
+foreach ($rawPermissions as $perm) {
+    if (!is_string($perm) || $perm === '') {
+        $requestProblems[] = 'a malformed permission';
+        continue;
+    }
+    // A requested ":storeId" scope is dropped: the operator picks the store below, and
+    // the key only ever works for that one.
+    $base = explode(':', $perm, 2)[0];
+    if (!isset($permissionDescriptions[$base])) {
+        $requestProblems[] = 'a permission CashuPayServer never grants ("' . $perm . '")';
+        continue;
+    }
+    $permissions[] = $base;
+}
+$permissions = array_values(array_unique($permissions));
+
+$queryParam = static function (string $name) use (&$requestProblems): ?string {
+    $value = $_GET[$name] ?? null;
+    if ($value === null || is_string($value)) {
+        return $value;
+    }
+    $requestProblems[] = 'a malformed "' . $name . '" value';
+    return null;
+};
+$applicationName = trim((string)($queryParam('applicationName') ?? ''));
+if ($applicationName === '') {
+    $applicationName = 'Unknown Application';
+}
+$applicationName = mb_substr((string)preg_replace('/[\x00-\x1F\x7F]/u', '', $applicationName), 0, 100);
+if (Auth::isReservedKeyLabel($applicationName)) {
+    // That label marks the dashboard's own key; a look-alike would be undeletable and
+    // would pass for the dashboard in the key list (SPB-SEC-009).
+    $requestProblems[] = 'an application name reserved for CashuPayServer itself';
+}
+$redirect = $queryParam('redirect');
+if ($redirect === '') {
+    $redirect = null;
+}
+$applicationIdentifier = $queryParam('applicationIdentifier');
+$selectiveStores = $queryParam('selectiveStores') === 'true';
+$strict = $queryParam('strict') !== 'false';
+$requestProblems = array_values(array_unique($requestProblems));
 
 // Initialize session
 Auth::initSession();
@@ -58,31 +124,38 @@ $success = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+    $csrfValid = is_string($_POST['csrf_token'] ?? null) && Auth::validateCsrfToken($_POST['csrf_token']);
 
     if ($action === 'login') {
         $password = $_POST['password'] ?? '';
-        $clientIp = Security::getClientIp();
-
-        if (Security::isLockedOut($clientIp)) {
-            $error = 'Too many failed attempts. Please try again later.';
-        } elseif (Auth::login($password)) {
-            Security::clearLoginAttempts($clientIp);
-            // Redirect to same page to show approval form
-            header('Location: ' . $_SERVER['REQUEST_URI']);
-            exit;
-        } else {
-            Security::recordFailedLogin($clientIp);
+        if (!$csrfValid) {
+            // A cross-site form could otherwise burn the operator's own lockout budget.
+            $error = 'This page was open too long. Please try again.';
+        } elseif (!is_string($password)) {
             $error = 'Invalid password';
+        } else {
+            $result = Auth::attemptLogin($password);
+            if ($result === 'ok') {
+                // Redirect to same page to show approval form
+                header('Location: ' . $_SERVER['REQUEST_URI']);
+                exit;
+            }
+            $error = $result === 'locked'
+                ? 'Too many failed attempts. Please try again later.'
+                : 'Invalid password';
         }
-    } elseif ($action === 'approve' && Auth::isLoggedIn()) {
+    } elseif ($action === 'approve' && Auth::isLoggedIn() && empty($requestProblems)) {
         // CSRF protection: this action mints an API key, so it must not be forgeable.
         // See FABLE-SECURITY-AUDIT (CRIT-5).
-        if (!Auth::validateCsrfToken($_POST['csrf_token'] ?? '')) {
+        if (!$csrfValid) {
             $error = 'Invalid security token. Please reload and try again.';
             $selectedStoreId = null;
         } else {
         // Get selected store and permissions
         $selectedStoreId = $_POST['store_id'] ?? null;
+        if (!is_string($selectedStoreId) || !Config::isStoreConfigured($selectedStoreId)) {
+            $selectedStoreId = null;
+        }
 
         // Unchecking every box omits the field entirely, and falling back to the
         // requested list then granted exactly what the operator just declined. An
@@ -129,7 +202,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $approvedPermissions
                 );
                 if ($existingKey) {
-                    Auth::deleteApiKey($existingKey['id']);
+                    try {
+                        Auth::deleteApiKey($existingKey['id']);
+                    } catch (Throwable $e) {
+                        error_log('CashuPayServer: re-pairing kept key ' . $existingKey['id'] . ': ' . $e->getMessage());
+                    }
                 }
             }
 
@@ -167,8 +244,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         } // end CSRF-valid branch
     } elseif ($action === 'deny') {
-        // Only redirect to a validated http(s) destination (open-redirect guard).
-        if ($redirect && Security::isSafePublicHttpUrl($redirect, true)) {
+        // Token-checked like approve, and the destination must be a public http(s) URL
+        // with no localhost exemption: otherwise any site could bounce a visitor through
+        // this page to anywhere, including the merchant's own loopback (SPB-SEC-013).
+        if (!$csrfValid) {
+            $error = 'This page was open too long. Please try again.';
+        } elseif ($redirect !== null && Security::isSafePublicHttpUrl($redirect)) {
             $separator = str_contains($redirect, '?') ? '&' : '?';
             header('Location: ' . $redirect . $separator . 'error=access_denied');
             exit;
@@ -189,17 +270,6 @@ if (Auth::isLoggedIn()) {
          ORDER BY name"
     );
 }
-
-// Permission descriptions for UI
-$permissionDescriptions = [
-    'btcpay.store.canviewinvoices' => 'View invoices',
-    'btcpay.store.cancreateinvoice' => 'Create invoices',
-    'btcpay.store.canmodifyinvoices' => 'Modify invoices',
-    'btcpay.store.webhooks.canmodifywebhooks' => 'Manage webhooks',
-    'btcpay.store.canviewstoresettings' => 'View store settings',
-    'btcpay.store.canmodifystoresettings' => 'Modify store settings',
-    'btcpay.store.cancreatenonapprovedpullpayments' => 'Create pull payments',
-];
 
 /**
  * Render a POST redirect form
@@ -263,6 +333,8 @@ function renderPostRedirect(string $url, array $data, string $appName): void {
 }
 
 $baseUrl = Config::getBaseUrl();
+$csrfToken = Auth::generateCsrfToken();
+$redirectHostLabel = $redirect !== null ? (string)parse_url($redirect, PHP_URL_HOST) : '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -473,7 +545,31 @@ $baseUrl = Config::getBaseUrl();
     <div class="container">
         <div class="logo">&#9889;</div>
 
-        <?php if (!Auth::isLoggedIn()): ?>
+        <?php if (!empty($requestProblems)): ?>
+            <!-- Refused request -->
+            <h1>This connection request can't be approved</h1>
+            <p class="subtitle">
+                <span class="app-name"><?php echo htmlspecialchars($applicationName); ?></span>
+                sent a request CashuPayServer will not accept.
+            </p>
+            <div class="error">
+                The link asks for:
+                <ul style="margin: 0.5rem 0 0 1.25rem;">
+                    <?php foreach ($requestProblems as $problem): ?>
+                        <li><?php echo htmlspecialchars($problem); ?></li>
+                    <?php endforeach; ?>
+                </ul>
+            </div>
+            <p class="subtitle">
+                Nothing was changed. If you were trying to connect your shop, contact the
+                developer of the app or plugin; if you did not start this, you can simply
+                close this page.
+            </p>
+            <a href="<?php echo Urls::admin(); ?>" class="btn btn-primary" style="text-decoration: none; text-align: center;">
+                Go to Dashboard
+            </a>
+
+        <?php elseif (!Auth::isLoggedIn()): ?>
             <!-- Login Form -->
             <h1>Sign In</h1>
             <p class="subtitle">
@@ -487,6 +583,7 @@ $baseUrl = Config::getBaseUrl();
 
             <form method="POST">
                 <input type="hidden" name="action" value="login">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
 
                 <div class="form-group">
                     <label for="password">Admin Password</label>
@@ -499,6 +596,7 @@ $baseUrl = Config::getBaseUrl();
             <?php if ($redirect): ?>
                 <form method="POST" style="margin-top: 0.5rem;">
                     <input type="hidden" name="action" value="deny">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                     <button type="submit" class="btn btn-secondary">Cancel</button>
                 </form>
             <?php endif; ?>
@@ -540,7 +638,7 @@ $baseUrl = Config::getBaseUrl();
             <?php else: ?>
                 <form method="POST">
                     <input type="hidden" name="action" value="approve">
-                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(Auth::generateCsrfToken()); ?>">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
 
                     <div class="form-group">
                         <label for="store_id">Select Store</label>
@@ -580,20 +678,22 @@ $baseUrl = Config::getBaseUrl();
                         </div>
                     <?php endif; ?>
 
+                    <?php if ($redirectHostLabel !== ''): ?>
+                        <div class="warning">
+                            The new API key will be sent to
+                            <strong><?php echo htmlspecialchars($redirectHostLabel); ?></strong>.
+                            Only continue if that is your shop.
+                        </div>
+                    <?php endif; ?>
+
                     <button type="submit" class="btn btn-primary">Authorize</button>
                 </form>
 
                 <form method="POST" style="margin-top: 0;">
                     <input type="hidden" name="action" value="deny">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
                     <button type="submit" class="btn btn-danger">Deny</button>
                 </form>
-
-                <?php if ($redirect): ?>
-                    <div class="redirect-info">
-                        After authorization, you'll be redirected to:<br>
-                        <?php echo htmlspecialchars(parse_url($redirect, PHP_URL_HOST)); ?>
-                    </div>
-                <?php endif; ?>
             <?php endif; ?>
         <?php endif; ?>
     </div>

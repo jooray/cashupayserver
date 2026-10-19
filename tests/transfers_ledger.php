@@ -80,9 +80,26 @@ foreach ($rows as $r) { if ($r['type'] === Transfer::TYPE_LIGHTNING) { $ln = $r;
 check($ln !== null && (int)$ln['amount'] === 1000 && (int)$ln['fee'] === 3 && $ln['destination'] === 'user@wallet.com',
     'lightning transfer preserves amount, fee and destination');
 
-// record() must never throw, even on a bad store (FK off in sqlite by default here).
-Transfer::record('nonexistent', Transfer::TYPE_LIGHTNING, 1, 0, 'sat', null, 'completed', null);
-check(true, 'record() is resilient and never throws');
+// record() must never throw, even on a bad store. Whether the row is stored depends on
+// whether the ledger has a foreign key to stores; assert whichever outcome the schema
+// dictates, and that the failed write left the real store's ledger untouched.
+$thrown = null;
+try {
+    Transfer::record('nonexistent', Transfer::TYPE_LIGHTNING, 1, 0, 'sat', null, 'completed', null);
+} catch (Throwable $e) {
+    $thrown = $e;
+}
+check($thrown === null, 'record() on an unknown store does not throw');
+$hasStoreFk = false;
+foreach (Database::fetchAll('PRAGMA foreign_key_list(transfers)') as $fk) {
+    if (($fk['table'] ?? '') === 'stores') {
+        $hasStoreFk = true;
+    }
+}
+$orphans = count(Transfer::getByStore('nonexistent', 10));
+check($orphans === ($hasStoreFk ? 0 : 1),
+    $hasStoreFk ? 'foreign key rejects a transfer for an unknown store' : 'transfer for an unknown store is recorded');
+check(count(Transfer::getByStore('store_x', 10)) === 3, 'a failed record() leaves other stores\' ledgers unchanged');
 
 exec('rm -rf ' . escapeshellarg($dataDir));
 echo "transfers_ledger: OK\n";

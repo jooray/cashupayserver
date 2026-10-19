@@ -60,6 +60,64 @@ check(
     '100 cents converts back to 1666 sats (round down, we must not overspend)'
 );
 
+// --- Sanity band on fetched rates (SPB-OPS-011 / OPUS-019) --------------------
+final class StubProvider implements PriceProvider {
+    public int $calls = 0;
+    public function __construct(private string $name, private ?float $rate) {}
+    public function getName(): string { return $this->name; }
+    public function getBtcPrice(string $currency): ?float { $this->calls++; return $this->rate; }
+}
+function useProviders(StubProvider ...$stubs): void {
+    $prop = new ReflectionProperty(ExchangeRates::class, 'providers');
+    $map = [];
+    foreach ($stubs as $s) { $map[$s->getName()] = $s; }
+    $prop->setValue(null, $map);
+}
+$expire = fn(string $cur, float $rate, int $age) =>
+    Config::set("rate_$cur", ['rate' => $rate, 'timestamp' => time() - $age, 'provider' => 'test']);
+
+$expire('eur', 50000.0, 600); // expired (older than 5 min), but a recent reference
+useProviders($glitch = new StubProvider('glitch', 500000.0), $good = new StubProvider('good', 51000.0));
+check(ExchangeRates::getBtcPrice('EUR', 'glitch', 'good') === 51000.0,
+    'a 10x glitch from the primary is rejected and the secondary is used');
+check($good->calls === 1, 'the secondary was asked');
+check(Config::get('rate_eur')['provider'] === 'good', 'and only the sane rate was cached');
+
+$expire('eur', 50000.0, 600);
+useProviders(new StubProvider('a', 52000.0), $b = new StubProvider('b', 99999.0));
+check(ExchangeRates::getBtcPrice('EUR', 'a', 'b') === 52000.0 && $b->calls === 0,
+    'a sane primary answer needs no second opinion');
+
+$expire('eur', 50000.0, 600);
+useProviders(new StubProvider('a', 20000.0), new StubProvider('b', 20500.0));
+check(ExchangeRates::getBtcPrice('EUR', 'a', 'b') === 20000.0,
+    'when two providers agree on a big move, the market moved: their rate is used');
+
+Config::set('rate_eur', null); // cold start, nothing to compare with
+useProviders(new StubProvider('a', 500000.0), new StubProvider('b', 50000.0), new StubProvider('c', 50500.0));
+check(ExchangeRates::getBtcPrice('EUR', 'a', 'b') === 50000.0,
+    'with no known rate, the answer two providers agree on wins over a lone outlier');
+
+Config::set('rate_eur', null);
+useProviders(new StubProvider('a', 50000.0));
+check(ExchangeRates::getBtcPrice('EUR', 'a') === 50000.0, 'a single provider with nothing to compare is taken');
+
+$expire('eur', 50000.0, 2 * 3600); // too old for the stale fallback, still a reference
+useProviders(new StubProvider('a', 500000.0), new StubProvider('b', null));
+$msg = null;
+try { ExchangeRates::convertToMintUnit('10', 'EUR', 'SAT'); } catch (Exception $e) { $msg = $e->getMessage(); }
+check($msg === 'Prices are unavailable right now; try again in a few minutes.',
+    'with no trustworthy rate the shop gets a plain message, not "Cannot get exchange rate" (' . $msg . ')');
+
+// One decimals rule for pricing, the dashboard, the payment page and NUT-18 requests.
+check(Config::unitDecimals('sat') === 0 && Config::unitDecimals('msat') === 0, 'sat and msat are whole numbers');
+check(Config::unitDecimals('btc') === 8, 'btc counts satoshis');
+check(Config::unitDecimals('usdt') === 2 && Config::unitDecimals('eur') === 2, 'fiat and stablecoins count cents');
+check(Config::unitFor('usdt')->parse('1.23') === 123, 'a usdt amount with cents parses (library agrees)');
+check(Config::unitFor('btc')->parse('0.001') === 100000, 'a btc amount parses to satoshis');
+check(ExchangeRates::convertMintUnitToSats(12345, 'btc') === 12345, 'a btc mint amount is already in sats');
+check(ExchangeRates::convertSatsToMintUnit(12345, 'btc') === 12345, 'and sats are a btc mint amount');
+
 echo "conversion: OK\n";
 
 foreach (glob($dataDir . '/*') ?: [] as $file) { @unlink($file); }

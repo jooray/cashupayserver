@@ -4,7 +4,7 @@
  * Plugin URI: https://github.com/jooray/cashupayserver
  * Update URI: https://cashupayserver.org/wordpress-plugin/
  * Description: Accept Lightning payments through a Cashu mint. BTCPay Server API compatible.
- * Version: 0.5.5-alpha
+ * Version: 0.5.6-alpha
  * Requires PHP: 8.1
  * Author: CashuPayServer
  * License: MIT
@@ -35,6 +35,10 @@ function cashupay_cron_poll(): void {
     require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
     require_once CASHUPAY_PLUGIN_DIR . '/includes/background_runner.php';
 
+    if (!empty($GLOBALS['cashupay_startup_error'])) {
+        return; // The admin notice explains; polling a broken database helps nobody.
+    }
+
     if (Database::isInitialized() && Config::isSetupComplete()) {
         // The same task list as the HTTP cron endpoint. Running only a subset here left
         // WordPress installs without auto-withdrawal, expired-payment recovery or keyset
@@ -46,6 +50,14 @@ function cashupay_cron_poll(): void {
 // Plugin updates do not run activation hooks, so normal WordPress requests must
 // also perform the cheap version check.
 add_action('plugins_loaded', static function (): void {
-    require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
-    Database::ensureCurrentSchema();
+    // This runs on every request of the whole site: storefront, wp-admin, cron. An
+    // exception escaping it would take the shop down and lock the merchant out of
+    // wp-admin, so CashuPay switches itself off instead and says why to admins only.
+    try {
+        cashupay_maybe_upgrade_data_protection();
+        require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+        Database::ensureCurrentSchema();
+    } catch (Throwable $e) {
+        cashupay_record_startup_error('startup', $e);
+    }
 });

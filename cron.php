@@ -32,7 +32,12 @@ if (!Database::isInitialized() || !Config::isSetupComplete()) {
 ignore_user_abort(true);
 
 // Verify authorization
-$providedKey = $_GET['key'] ?? $_SERVER['HTTP_X_CRON_KEY'] ?? '';
+// The header is preferred (internal self-requests always use it); `?key=` stays for
+// existing external crontab entries.
+$providedKey = (string)($_SERVER['HTTP_X_CRON_KEY'] ?? '');
+if ($providedKey === '') {
+    $providedKey = (string)($_GET['key'] ?? '');
+}
 $isInternal = isset($_GET['internal']) && $_GET['internal'] === '1';
 
 if ($isInternal) {
@@ -65,7 +70,7 @@ header('Content-Type: application/json');
 // A run stops when its budget is spent and the next one continues from that point, so a
 // slow mint early in the list cannot starve webhook delivery at the end of it.
 $budget = (int)($_GET['budget'] ?? 0);
-if ($budget < 5 || $budget > 300) {
+if ($budget < 5 || $budget > BackgroundRunner::MAX_BUDGET) {
     $budget = BackgroundRunner::DEFAULT_BUDGET;
 }
 

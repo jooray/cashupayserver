@@ -73,6 +73,16 @@ check(Transfer::findPendingBySecrets('store_a', ['s1', 's2']) === null,
 check(Transfer::findPendingBySecrets('store_a', ['s3'])['id'] === $otherId,
     'the still-outstanding token is untouched');
 
+echo "A token behind many older unclaimed ones is still found\n";
+for ($i = 0; $i < 60; $i++) {
+    Transfer::open('store_a', Transfer::TYPE_TOKEN_EXPORT, 1, 'sat', 'Exported', "old$i", null, 'cashuOLD');
+}
+$lateId = Transfer::open('store_a', Transfer::TYPE_TOKEN_EXPORT, 7, 'sat', 'Exported', 'late1,late2', null, 'cashuLATE');
+check(Transfer::findPendingBySecrets('store_a', ['late2', 'late1'])['id'] === $lateId,
+    'the lookup is by the token\'s own proofs, not a window of the oldest rows');
+check(Transfer::findPendingBySecrets('store_a', ['late1']) === null,
+    'a secret that is only part of a row still does not match it');
+
 echo "\nAll redeemed-settlement checks passed.\n";
 
 foreach (glob($dataDir . '/*') ?: [] as $f) { @unlink($f); }

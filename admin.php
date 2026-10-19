@@ -12,6 +12,9 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/invoice.php';
 require_once __DIR__ . '/includes/lightning_address.php';
 require_once __DIR__ . '/includes/transfer.php';
+require_once __DIR__ . '/includes/locks.php';
+require_once __DIR__ . '/includes/store_safety.php';
+require_once __DIR__ . '/includes/mint_helpers.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
@@ -34,7 +37,20 @@ use Cashu\ProofState;
  */
 function cashupay_public_store(array $store): array {
     unset($store['seed_phrase'], $store['internal_api_key'], $store['internalApiKey']);
+    if (array_key_exists('mint_unit', $store)) {
+        $store['mint_unit'] = cashupay_display_unit($store['mint_unit']);
+    }
     return $store;
+}
+
+/**
+ * A unit as the dashboard may show it. The unit is whatever a mint advertised, and
+ * older installs stored it unchecked; one carrying markup ran script in the operator's
+ * session. Anything but plain letters and digits is shown as "unknown".
+ */
+function cashupay_display_unit(?string $unit): string {
+    $unit = strtolower(trim((string)$unit));
+    return preg_match('/^[a-z0-9]{1,16}$/', $unit) ? $unit : 'unknown';
 }
 
 /**
@@ -111,59 +127,6 @@ function cashupay_settle_redeemed_transfer(string $storeId, array $secrets): voi
     }
 }
 
-function cashupay_store_deletion_blockers(string $storeId): array {
-    $blockers = [];
-
-    $unresolvedQuotes = (int)(Database::fetchOne(
-        "SELECT COUNT(*) AS cnt FROM invoices
-         WHERE store_id = ? AND quote_id IS NOT NULL AND status IN ('New', 'Processing', 'Expired', 'Invalid')",
-        [$storeId]
-    )['cnt'] ?? 0);
-    if ($unresolvedQuotes > 0) {
-        $blockers[] = "{$unresolvedQuotes} invoice(s) whose Lightning quote may still be paid";
-    }
-
-    $pendingTransfers = (int)(Database::fetchOne(
-        "SELECT COUNT(*) AS cnt FROM transfers WHERE store_id = ? AND status = ?",
-        [$storeId, Transfer::STATUS_PENDING]
-    )['cnt'] ?? 0);
-    if ($pendingTransfers > 0) {
-        $blockers[] = "{$pendingTransfers} outgoing transfer(s) with an unknown outcome";
-    }
-
-    $undelivered = (int)(Database::fetchOne(
-        "SELECT COUNT(*) AS cnt FROM webhook_deliveries d
-         JOIN webhooks w ON w.id = d.webhook_id
-         WHERE w.store_id = ? AND d.delivered_at IS NULL",
-        [$storeId]
-    )['cnt'] ?? 0);
-    if ($undelivered > 0) {
-        $blockers[] = "{$undelivered} webhook event(s) the shop has not acknowledged";
-    }
-
-    if (Config::isStoreConfigured($storeId)) {
-        try {
-            $wallet = Invoice::getWalletInstance($storeId);
-            $storage = $wallet->getStorage();
-
-            $journals = count($storage->getPendingOperations());
-            if ($journals > 0) {
-                $blockers[] = "{$journals} in-flight wallet operation(s)";
-            }
-
-            $exported = \Cashu\Wallet::sumProofs(
-                $storage->getProofsAsObjects(\Cashu\ProofState::EXPORTED)
-            );
-            if ($exported > 0) {
-                $blockers[] = "{$exported} in exported tokens that have not been redeemed";
-            }
-        } catch (Throwable $e) {
-            $blockers[] = 'the wallet could not be inspected (' . $e->getMessage() . ')';
-        }
-    }
-
-    return $blockers;
-}
 
 /**
  * Everything an operator needs to answer "why wasn't my order marked paid?".
@@ -276,7 +239,34 @@ function cashupay_diagnostics(?string $storeId): array {
         }
     }
 
+    $exposureWarning = cashupay_data_exposure_warning();
+
+    // Most operators never open Settings, where the version line lives. An important
+    // or security release is announced on the dashboard as well; it never blocks
+    // anything (only a signed emergency notice can stop an install).
+    $update = UpdateCheck::status();
+    $updatePrompt = null;
+    if ($update['outdated'] && ($update['severity'] !== 'normal' || $update['unsupported'])) {
+        $updatePrompt = [
+            'latest' => $update['latest'],
+            'severity' => $update['unsupported'] ? 'security' : $update['severity'],
+            'notes' => $update['notes'],
+            'howTo' => Urls::isWordPress()
+                ? 'Upgrading takes a few minutes: download a database backup under Settings, then '
+                  . 'upload the new plugin zip in WordPress (Plugins → Add New → Upload Plugin) '
+                  . 'and choose "Replace current with uploaded". Your payments and settings are kept.'
+                : 'Upgrading takes a few minutes: download a database backup under Settings, then '
+                  . 'upload the new files over the old ones with your file manager or FTP program, '
+                  . 'leaving the data folder exactly as it is. Then open this dashboard again.',
+            'url' => ($update['url'] && cashupay_is_trusted_release_link($update['url']))
+                ? $update['url'] : 'https://github.com/jooray/cashupayserver/releases',
+        ];
+    }
+
     return [
+        // Shown as a banner that stays until it is fixed: it means the money is exposed.
+        'databaseExposure' => $exposureWarning,
+        'updatePrompt' => $updatePrompt,
         'background' => $background + ['stale' => $stale, 'needsBaseUrl' => $needsBaseUrl],
         'suggestedBaseUrl' => $needsBaseUrl ? rtrim(Config::getBaseUrl(), '/') : null,
         'pendingTransfers' => array_map([Transfer::class, 'formatForApi'], $pendingTransfers),
@@ -292,6 +282,9 @@ function cashupay_diagnostics(?string $storeId): array {
         // An exported token nobody has cashed in yet is normal, not a fault, so it does
         // not raise an alarm on its own — it is listed so the operator can act on it.
         'needsAttention' => $stale
+            || $exposureWarning !== null
+            || ($updatePrompt !== null && $updatePrompt['severity'] === 'security')
+            || !empty(array_filter($background['failing'] ?? [], fn($t) => !empty($t['paymentPath'])))
             || !empty(array_filter($unreachableAccounts, fn($a) => $a['primary']))
             || !empty(array_filter($recoveringAccounts, fn($a) => $a['primary'] || $a['error'] !== null))
             || $failedDeliveries > 0
@@ -301,32 +294,6 @@ function cashupay_diagnostics(?string $storeId): array {
                 fn($row) => $row['type'] !== Transfer::TYPE_TOKEN_EXPORT
             )),
     ];
-}
-
-/**
- * Acquire a non-blocking exclusive lock (flock) for a named operation, e.g. a per-store
- * withdrawal. Prevents concurrent fund-moving requests (double-click / refresh / two tabs)
- * from each melting a different set of proofs and paying twice.
- * See FABLE-CASHUPAYSERVER-AUDIT (A4). Returns a handle, or null if already locked.
- */
-function cashupay_acquire_lock(string $name) {
-    $path = Database::getDataDir() . '/.' . preg_replace('/[^a-zA-Z0-9_]/', '', $name) . '.lock';
-    $fp = @fopen($path, 'c');
-    if (!$fp) {
-        return null;
-    }
-    if (!flock($fp, LOCK_EX | LOCK_NB)) {
-        fclose($fp);
-        return null;
-    }
-    return $fp;
-}
-
-function cashupay_release_lock($fp): void {
-    if ($fp) {
-        @flock($fp, LOCK_UN);
-        @fclose($fp);
-    }
 }
 
 // Security headers (admin SPA needs Nostr relays + CDNs, so a tuned CSP is used).
@@ -354,8 +321,10 @@ function checkDataDirectoryProtection(): ?string {
     if (Database::isDataDirOutsideWebroot()) {
         return null;
     }
-
-    $baseUrl = rtrim(Config::getBaseUrl(), '/');
+    $dataUrl = cashupay_data_dir_url();
+    if ($dataUrl === null) {
+        return null;
+    }
 
     // Probe the WAL sidecars too: they hold recently written proofs, and a rule that
     // only denies the main file leaves them downloadable.
@@ -363,7 +332,7 @@ function checkDataDirectoryProtection(): ?string {
     foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $name) {
         $ch = curl_init();
         curl_setopt_array($ch, [
-            CURLOPT_URL => $baseUrl . '/data/' . $name,
+            CURLOPT_URL => $dataUrl . '/' . $name,
             CURLOPT_RETURNTRANSFER => true,
             // A ranged GET, not HEAD: some servers answer HEAD from a rule that a real
             // GET would not hit, and one byte is enough to prove readability.
@@ -384,12 +353,62 @@ function checkDataDirectoryProtection(): ?string {
     }
 
     if (!empty($exposed)) {
-        return 'WARNING: your database is downloadable over HTTP (' . implode(', ', $exposed)
-            . '). Anyone who fetches it can spend your funds. Fix your server configuration'
-            . ' or move the data directory outside the webroot.';
+        return 'Your wallet database can be downloaded from the internet (' . implode(', ', $exposed)
+            . '). Anyone who downloads it can take your money. Ask your hosting provider to block'
+            . ' the "' . basename(Database::getDataDir()) . '" folder from the web, or move it'
+            . ' outside the website folder.';
     }
 
     return null;
+}
+
+/**
+ * Where the data directory is reachable over HTTP, if it is inside the document root.
+ *
+ * Derived from the filesystem, not assumed to be "<base>/data": the WordPress plugin
+ * keeps it under wp-content, and probing a path that does not exist reported "safe".
+ */
+function cashupay_data_dir_url(): ?string {
+    $dataDir = realpath(Database::getDataDir());
+    $docRoot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+    $base = Config::getBaseUrl();
+    $scheme = parse_url($base, PHP_URL_SCHEME);
+    $host = parse_url($base, PHP_URL_HOST);
+    if (!$dataDir || !$scheme || !$host) {
+        return null;
+    }
+    $port = parse_url($base, PHP_URL_PORT);
+    $origin = $scheme . '://' . $host . ($port ? ':' . $port : '');
+    if ($docRoot && str_starts_with($dataDir . '/', rtrim($docRoot, '/') . '/')) {
+        $path = substr($dataDir, strlen(rtrim($docRoot, '/')));
+        return $origin . str_replace(DIRECTORY_SEPARATOR, '/', $path);
+    }
+    if (!$docRoot && !Urls::isWordPress()) {
+        // No document root (CLI): the standalone default layout is <app>/data.
+        return rtrim($base, '/') . '/data';
+    }
+    return null;
+}
+
+/**
+ * The last database-exposure check, re-run at most hourly from dashboard loads.
+ *
+ * It used to run only at login and its answer was dropped by the browser, so a
+ * downloadable wallet produced no warning at all — and one exposed after login
+ * would never have been noticed either.
+ */
+function cashupay_data_exposure_warning(bool $force = false): ?string {
+    $cached = Config::get('data_exposure_check');
+    if (!$force && is_array($cached) && (time() - (int)($cached['at'] ?? 0)) < 3600) {
+        return $cached['warning'] ?? null;
+    }
+    try {
+        $warning = checkDataDirectoryProtection();
+    } catch (Throwable $e) {
+        $warning = $cached['warning'] ?? null;
+    }
+    Config::set('data_exposure_check', ['at' => time(), 'warning' => $warning]);
+    return $warning;
 }
 
 // Handle API-style requests from the SPA
@@ -409,6 +428,11 @@ if (isset($_GET['api'])) {
     switch ($action) {
         case 'dashboard':
             $storeId = $_GET['store_id'] ?? null;
+
+            // The emergency-shutdown notice rides on the update check. Fetch it from
+            // dashboard loads too, so an install whose background tasks never run
+            // still hears about it (hourly at most, short timeout, never throws).
+            UpdateCheck::runIfDue();
 
             // Get all stores for selector
             $stores = Database::fetchAll("SELECT * FROM stores ORDER BY created_at DESC");
@@ -449,6 +473,7 @@ if (isset($_GET['api'])) {
             $swapFee = 0;
             $exportAvailable = 0;
             $exportedBalance = 0;
+            $accountBalances = [];
             $mintUnit = Config::getStoreMintUnit($storeId);
 
             // Dashboard uses LOCAL balance (no mint contact) for fast loading
@@ -463,10 +488,20 @@ if (isset($_GET['api'])) {
                 $balanceCached = true;
                 $exportedBalance = Invoice::getExportedBalance($storeId);
 
-                // When using offline balance, set exportAvailable = balance
-                // This allows Max button to work even without mint contact
-                // (no fee deduction since we can't calculate swap fee without mint)
-                $exportAvailable = $balance;
+                // One withdrawal or token can only carry ecash from one mint, so "Max" is
+                // the largest single account, not the total (no fee deduction: that needs
+                // the mint, which the dashboard does not contact).
+                $exportAvailable = Invoice::getLargestSpendableBalance($storeId);
+                foreach (Invoice::getAccountBalances($storeId) as $acct) {
+                    if ($acct['balance'] > 0) {
+                        $accountBalances[] = [
+                            'mint' => (string)parse_url($acct['mint_url'], PHP_URL_HOST),
+                            'unit' => cashupay_display_unit($acct['unit']),
+                            'balance' => $acct['balance'],
+                            'primary' => $acct['primary'],
+                        ];
+                    }
+                }
             }
 
             // Get invoices for this store
@@ -514,11 +549,22 @@ if (isset($_GET['api'])) {
                 'balanceInSats' => $balanceInSats,
                 'swapFee' => $swapFee,
                 'exportAvailable' => $exportAvailable,
-                'mintUnit' => $mintUnit,
+                'mintUnit' => cashupay_display_unit($mintUnit),
                 'balanceCached' => $balanceCached,
                 'exportedBalance' => $exportedBalance,
-                'invoices' => array_map([Invoice::class, 'formatForApi'], $recentInvoices),
-                'transfers' => array_map([Transfer::class, 'formatForApi'], $recentTransfers),
+                'accountBalances' => $accountBalances,
+                'invoices' => array_map(function ($inv) {
+                    $row = Invoice::formatForApi($inv);
+                    if (isset($row['mintUnit'])) {
+                        $row['mintUnit'] = cashupay_display_unit($row['mintUnit']);
+                    }
+                    return $row;
+                }, $recentInvoices),
+                'transfers' => array_map(function ($t) {
+                    $row = Transfer::formatForApi($t);
+                    $row['unit'] = cashupay_display_unit($row['unit'] ?? 'sat');
+                    return $row;
+                }, $recentTransfers),
                 'stores' => $stores,
                 'autoMelt' => $autoMelt,
                 // The admin is installable as a PWA, so a loaded page can outlive a
@@ -576,6 +622,16 @@ if (isset($_GET['api'])) {
             echo json_encode(array_map([Invoice::class, 'formatForApi'], $invoices));
             break;
 
+        case 'proxy_settings':
+            $proxies = Config::get('trusted_proxies');
+            echo json_encode([
+                'mode' => Security::proxyMode(),
+                'trustedProxies' => is_array($proxies) ? array_values($proxies) : [],
+                'behindCloudflare' => Config::get('behind_cloudflare') === true,
+                'seen' => Security::describeClientIp(),
+            ]);
+            break;
+
         case 'stores':
             $stores = Database::fetchAll("SELECT * FROM stores ORDER BY created_at DESC");
             $stores = array_map('cashupay_public_store', $stores);
@@ -593,74 +649,50 @@ if (isset($_GET['api'])) {
             break;
 
         case 'export_info':
+            // Read-only (a GET carries no CSRF token): what an export could move right
+            // now. One token can only carry ecash from one mint, so this is the largest
+            // single account, checked with the mint; the export itself syncs states.
             $storeId = $_GET['store_id'] ?? null;
-            if (!$storeId || !Config::isStoreConfigured($storeId)) {
+            if (!is_string($storeId) || !Config::isStoreConfigured($storeId)) {
                 echo json_encode(['available' => 0, 'error' => 'Store not configured']);
                 break;
             }
+            $displayUnit = cashupay_display_unit(Config::getStoreMintUnit($storeId));
+            $account = Invoice::getFundsAccount($storeId, Invoice::getLargestSpendableBalance($storeId));
 
-            $mintReachable = true;
-
-            // Try to resolve pending proofs (requires mint contact)
             try {
-                Invoice::checkPendingProofs($storeId);
-            } catch (\Exception $e) {
-                $mintReachable = false;
-                error_log("CashuPayServer: export_info checkPendingProofs failed: " . $e->getMessage());
-            }
-
-            if ($mintReachable) {
-                // Mint is reachable - get proofs and check states
-                $proofs = Invoice::getUnspentProofs($storeId);
-                $wallet = Invoice::getWalletInstance($storeId);
-
-                // Check proof states at mint (same as export_token)
+                if ($account === null) {
+                    throw new \Cashu\CashuException('No wallet');
+                }
+                $proofs = Invoice::getUnspentProofs($storeId, $account['mint_url'], $account['unit']);
+                $wallet = Invoice::getWalletForStore($storeId, $account['mint_url'], $account['unit']);
                 if (!empty($proofs)) {
-                    try {
-                        $states = $wallet->checkProofState($proofs);
-                        $validProofs = [];
-                        $spentSecrets = [];
-
-                        foreach ($states as $i => $state) {
-                            // Normalize case - mints may return lowercase states
-                            $mintState = strtoupper($state['state'] ?? ProofState::UNSPENT);
-                            if ($mintState === ProofState::UNSPENT) {
-                                $validProofs[] = $proofs[$i];
-                            } elseif ($mintState === ProofState::SPENT) {
-                                $spentSecrets[] = $proofs[$i]->secret;
-                            }
-                            // Skip PENDING proofs (same as export_token)
+                    $states = $wallet->checkProofState($proofs);
+                    $validProofs = [];
+                    foreach ($states as $i => $state) {
+                        // Only an explicit UNSPENT counts; anything else is not ours to offer.
+                        if (strtoupper((string)($state['state'] ?? '')) === ProofState::UNSPENT && isset($proofs[$i])) {
+                            $validProofs[] = $proofs[$i];
                         }
-
-                        // Update spent proofs locally
-                        if (!empty($spentSecrets)) {
-                            Invoice::markProofsSpent($storeId, $spentSecrets);
-                        }
-
-                        $proofs = $validProofs;
-                    } catch (\Cashu\CashuException $e) {
-                        // If checkstate fails, fall back to local balance
-                        $mintReachable = false;
-                        error_log("CashuPayServer: export_info checkProofState failed: " . $e->getMessage());
                     }
+                    $proofs = $validProofs;
                 }
-
-                if ($mintReachable) {
-                    $balance = \Cashu\Wallet::sumProofs($proofs);
-                    $fee = $wallet->calculateFee($proofs);
-                    $available = max(0, $balance - $fee);
-                    echo json_encode(['available' => $available, 'mintUnit' => Config::getStoreMintUnit($storeId)]);
-                    break;
-                }
+                $balance = \Cashu\Wallet::sumProofs($proofs);
+                $fee = $wallet->calculateFee($proofs);
+                echo json_encode([
+                    'available' => max(0, $balance - $fee),
+                    'mintUnit' => $displayUnit,
+                    'fromBackupMint' => !$account['primary'],
+                ]);
+            } catch (Throwable $e) {
+                // Mint unreachable - fall back to offline balance with no fee calculation
+                error_log("CashuPayServer: export_info check failed: " . $e->getMessage());
+                echo json_encode([
+                    'available' => Invoice::getLargestSpendableBalance($storeId),
+                    'mintUnit' => $displayUnit,
+                    'mintUnreachable' => true
+                ]);
             }
-
-            // Mint unreachable - fall back to offline balance with no fee calculation
-            $offlineBalance = Invoice::getBalance($storeId);
-            echo json_encode([
-                'available' => $offlineBalance,
-                'mintUnit' => Config::getStoreMintUnit($storeId),
-                'mintUnreachable' => true
-            ]);
             break;
 
         case 'proofs':
@@ -692,21 +724,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     $action = $_POST['action'] ?? '';
 
-    // Login doesn't require existing session or CSRF (first request)
+    // Login has no authenticated session yet, but the page that posts it was served
+    // with a session-bound token; requiring it stops another site from logging this
+    // browser in (or burning its lockout) with a hidden form.
     if ($action === 'login') {
-        $password = $_POST['password'] ?? '';
+        $password = (string)($_POST['password'] ?? '');
         $clientIp = Security::getClientIp();
 
-        // Check if locked out
-        if (Security::isLockedOut($clientIp)) {
+        $csrfToken = (string)($_SERVER['HTTP_X_CSRF_TOKEN'] ?? $_POST['csrf_token'] ?? '');
+        if (!Auth::validateCsrfToken($csrfToken)) {
+            // An expired session lost its token; hand out a fresh one for one retry.
+            http_response_code(403);
+            echo json_encode(['error' => 'This page has expired. Please try again.', 'csrfToken' => Auth::generateCsrfToken()]);
+            exit;
+        }
+
+        // Counted before the password is checked, in one locked step, so parallel
+        // guesses cannot slip past the lockout.
+        $outcome = Auth::attemptLogin($password, $clientIp);
+        if ($outcome === 'locked') {
             $remaining = Security::getLockoutRemaining($clientIp);
             http_response_code(429);
             echo json_encode(['error' => "Too many failed attempts. Try again in {$remaining} seconds."]);
             exit;
         }
 
-        if (Auth::login($password)) {
-            Security::clearLoginAttempts($clientIp);
+        if ($outcome === 'ok') {
 
             // C1: Trigger background sync on login
             if (Background::shouldSync()) {
@@ -714,10 +757,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
 
             // H5: Check DB protection on login
-            $securityWarning = null;
-            if (!Database::isDataDirOutsideWebroot()) {
-                $securityWarning = checkDataDirectoryProtection();
-            }
+            // Fresh check at every login; the dashboard shows it as a banner.
+            $securityWarning = cashupay_data_exposure_warning(true);
 
             echo json_encode([
                 'success' => true,
@@ -725,7 +766,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'csrfToken' => Auth::generateCsrfToken()
             ]);
         } else {
-            Security::recordFailedLogin($clientIp);
             http_response_code(401);
             echo json_encode(['error' => 'Invalid password']);
         }
@@ -751,6 +791,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     switch ($action) {
         case 'logout':
             Auth::logout();
+            echo json_encode(['success' => true]);
+            break;
+
+        case 'change_password':
+            // Gated on the current password, like the seed reveal; changing it ends
+            // every other session (a stolen cookie must not outlive the old password).
+            try {
+                if (Urls::isWordPress()) {
+                    throw new Exception('In WordPress, change your WordPress password instead.');
+                }
+                if (!Security::checkRateLimit('change_password', Security::getClientIp(), 5)
+                    || !Security::reserveLoginAttempt(Security::getClientIp())) {
+                    http_response_code(429);
+                    echo json_encode(['error' => 'Too many attempts. Wait a few minutes and try again.']);
+                    break;
+                }
+                Auth::changeAdminPassword(
+                    (string)($_POST['current_password'] ?? ''),
+                    (string)($_POST['new_password'] ?? '')
+                );
+                Security::clearLoginAttempts(Security::getClientIp());
+                echo json_encode(['success' => true]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'logout_everywhere':
+            Auth::logoutEverywhere();
             echo json_encode(['success' => true]);
             break;
 
@@ -827,6 +897,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             break;
 
+        case 'save_proxy_settings':
+            // Which hops may tell us the visitor's real address (login limits and rate
+            // limits are per address). "auto" works on typical hosting with no setup.
+            try {
+                $mode = (string)($_POST['mode'] ?? 'auto');
+                if (!in_array($mode, ['auto', 'direct', 'custom'], true)) {
+                    throw new Exception('Choose one of the options.');
+                }
+                $entries = [];
+                foreach (preg_split('/[\s,]+/', (string)($_POST['trusted_proxies'] ?? '')) as $raw) {
+                    if ($raw === '') {
+                        continue;
+                    }
+                    $entry = Security::normalizeProxyEntry($raw);
+                    if ($entry === null) {
+                        throw new Exception("\"{$raw}\" is not an address like 203.0.113.5 or a range like 10.0.0.0/8.");
+                    }
+                    $entries[] = $entry;
+                }
+                Config::set('proxy_mode', $mode);
+                Config::set('trusted_proxies', array_values(array_unique($entries)));
+                Config::set('behind_cloudflare', ($_POST['behind_cloudflare'] ?? '') === '1');
+                Config::clearCache();
+                echo json_encode(['success' => true, 'seen' => Security::describeClientIp()]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
         case 'save_base_url':
             // Pins the origin used for generated links and for the credential-bearing
             // background self-request. Only the operator can set it, and only to a plain
@@ -836,6 +936,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($baseUrl === '' || !Security::isSafeAppBaseUrl($baseUrl)) {
                     http_response_code(400);
                     echo json_encode(['error' => 'Enter a full http(s) URL for this server']);
+                    break;
+                }
+                // A pinned address on another host would send the background key and
+                // every payment link there. Ask before pinning anything but the host
+                // this dashboard is being used on.
+                $requestHost = strtolower((string)preg_replace('/:\d+$/', '', (string)($_SERVER['HTTP_HOST'] ?? '')));
+                $pinnedHost = strtolower((string)parse_url($baseUrl, PHP_URL_HOST));
+                if ($requestHost !== '' && $pinnedHost !== $requestHost && ($_POST['confirm_other_host'] ?? '') !== '1') {
+                    http_response_code(409);
+                    echo json_encode([
+                        'error' => "That address is on {$pinnedHost}, but you are using this dashboard on {$requestHost}.",
+                        'confirmOtherHost' => true,
+                    ]);
                     break;
                 }
                 Config::set('base_url', rtrim($baseUrl, '/'));
@@ -879,7 +992,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     echo json_encode(['error' => 'Transfer not found']);
                     break;
                 }
-                $secrets = array_values(array_filter(explode(',', (string)($row['reference'] ?? ''))));
+                // Only token-style transfers carry proof secrets in `reference`; a
+                // withdrawal's reference is its melt quote and is checked by the cron.
+                $secrets = in_array($row['type'], Transfer::TOKEN_TYPES, true)
+                    ? array_values(array_filter(explode(',', (string)($row['reference'] ?? ''))))
+                    : [];
                 if (empty($secrets)) {
                     echo json_encode(['status' => $row['status'], 'message' => 'Nothing to check for this transfer.']);
                     break;
@@ -928,6 +1045,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($row['status'] !== Transfer::STATUS_PENDING) {
                     http_response_code(409);
                     echo json_encode(['error' => 'This transfer is already ' . $row['status'] . '.']);
+                    break;
+                }
+                if (!in_array($row['type'], Transfer::TOKEN_TYPES, true)) {
+                    http_response_code(409);
+                    echo json_encode(['error' => 'Only a token can be taken back. A withdrawal resolves on its own.']);
                     break;
                 }
 
@@ -1052,9 +1174,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         case 'create_store':
             try {
-                $name = trim($_POST['name'] ?? 'New Store');
-                $mintUrl = $_POST['mint_url'] ?? null;
-                $mintUnit = $_POST['mint_unit'] ?? 'sat';
+                $name = trim((string)($_POST['name'] ?? 'New Store'));
+                $mintUrl = isset($_POST['mint_url']) && $_POST['mint_url'] !== ''
+                    ? Config::normalizeMintUrl(MintHelpers::assertSafeMintUrl((string)$_POST['mint_url']))
+                    : null;
+                $mintUnit = Config::validUnit((string)($_POST['mint_unit'] ?? 'sat'));
                 $seedPhrase = $_POST['seed_phrase'] ?? null;
                 $exchangeFee = (float)($_POST['exchange_fee_percent'] ?? 0);
                 $primaryProvider = $_POST['price_provider_primary'] ?? 'coingecko';
@@ -1097,17 +1221,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // even though the raw strings differ. Two stores on one seed do not have
                 // separate funds — only separate bookkeeping for the same money.
                 if ($seedPhrase) {
-                    require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
-                    $canonical = static fn(string $seed): string =>
-                        preg_replace('/\s+/', ' ', mb_strtolower(trim($seed)));
-                    $candidate = $canonical($seedPhrase);
-                    foreach (Database::fetchAll("SELECT id, name, seed_phrase FROM stores WHERE seed_phrase IS NOT NULL") as $row) {
-                        if ($row['id'] === ($existingStore['id'] ?? '')) {
-                            continue;
-                        }
-                        if (hash_equals($canonical((string)$row['seed_phrase']), $candidate)) {
-                            throw new Exception("This seed phrase is already used by store: {$row['name']}. Using the same seed for multiple stores can result in lost funds.");
-                        }
+                    $clash = Config::storeUsingSeed($seedPhrase, $existingStore['id'] ?? null);
+                    if ($clash) {
+                        throw new Exception("This seed phrase is already used by store: {$clash['name']}. Using the same seed for multiple stores can result in lost funds.");
                     }
                 }
 
@@ -1189,8 +1305,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $updates['name'] = $_POST['name'];
                 }
                 if (isset($_POST['mint_url'])) {
-                    $mintUrl = $_POST['mint_url'];
+                    $mintUrl = (string)$_POST['mint_url'];
                     if ($mintUrl) {
+                        // Refuse private/internal addresses before the server fetches it.
+                        $mintUrl = MintHelpers::assertSafeMintUrl($mintUrl);
                         $test = Config::testMintConnection($mintUrl);
                         if (!$test['success']) {
                             throw new Exception('Cannot connect to mint: ' . $test['error']);
@@ -1247,7 +1365,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $oldMintRetained = Config::isMintRetainedAsBackup($storeId, $currentMint, $currentUnit);
 
                 if (($mintChanged || $unitChanged) && !$oldMintRetained) {
-                    $blockers = cashupay_store_deletion_blockers($storeId);
+                    $blockers = StoreSafety::deletionBlockers($storeId, false);
                     if (!empty($blockers)) {
                         http_response_code(409);
                         echo json_encode([
@@ -1396,7 +1514,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // own a paid-but-unminted quote, an in-flight melt or swap, exported tokens
             // nobody has redeemed, or a settlement webhook that never reached the shop —
             // and deletion cascades all of it away.
-            $blockers = cashupay_store_deletion_blockers($storeId);
+            $blockers = StoreSafety::deletionBlockers($storeId);
             if (!empty($blockers) && !$confirmLoss) {
                 http_response_code(409);
                 echo json_encode([
@@ -1413,16 +1531,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
 
         case 'create_api_key':
-            $storeId = $_POST['store_id'] ?? '';
-            $label = $_POST['label'] ?? 'API Key';
-            $apiKey = Auth::createApiKey($storeId, $label);
-            echo json_encode($apiKey);
+            try {
+                $storeId = (string)($_POST['store_id'] ?? '');
+                $label = (string)($_POST['label'] ?? 'API Key');
+                $apiKey = Auth::createApiKey($storeId, $label);
+                echo json_encode($apiKey);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
             break;
 
         case 'delete_api_key':
-            $keyId = $_POST['key_id'] ?? '';
-            Auth::deleteApiKey($keyId);
-            echo json_encode(['success' => true]);
+            // A refusal (e.g. the dashboard's own key) is a message, not a PHP fatal.
+            try {
+                Auth::deleteApiKey((string)($_POST['key_id'] ?? ''));
+                echo json_encode(['success' => true]);
+            } catch (Throwable $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
             break;
 
         case 'check_proofs_spent':
@@ -1525,7 +1653,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // Get wallet for this store
                 $wallet = Invoice::getWalletInstance($storeId);
-                $balance = Invoice::getBalance($storeId);
+                // What one withdrawal can use: the largest single mint's balance.
+                $balance = Invoice::getLargestSpendableBalance($storeId);
 
                 // Check if it's a BOLT-11 invoice or Lightning address
                 $isBolt11 = LightningAddress::isBolt11Invoice($destination);
@@ -1578,10 +1707,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'balance' => $balance,
                     'canAfford' => $canAfford,
                     'maxAffordableSats' => $maxAffordableSats,
-                    'mintUnit' => $mintUnit,
+                    'mintUnit' => cashupay_display_unit($mintUnit),
                     'isFiatMint' => $isFiatMint,
                 ]);
-            } catch (Exception $e) {
+            } catch (Throwable $e) {
                 echo json_encode([
                     'success' => false,
                     'error' => $e->getMessage()
@@ -1668,88 +1797,68 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Amount required');
                 }
 
-                // For ALL Lightning destinations with fiat mints, amount is in SATS
-                // We need to handle donation calculations differently
+                if (!$isLightningDestination) {
+                    throw new Exception('Enter a Lightning address (name@domain) or a Lightning invoice.');
+                }
+                // Lightning works in sats: the field is labelled SAT for every non-sat
+                // mint, msat included (sending msat as sats paid 1000x).
+                if (strtolower($mintUnit) === 'msat' || $isFiatMint) {
+                    $amountIsSats = true;
+                }
+                $amountSats = $amountIsSats
+                    ? $amount
+                    : LightningAddress::mintAmountToSats($storeId, $amount, $mintUnit);
+                if ($amountSats < 1) {
+                    throw new Exception('The amount to send is too small.');
+                }
+
+                // Refuse before fetching an invoice while an earlier withdrawal is open.
+                LightningAddress::assertNoPendingWithdrawal($storeId);
+
+                $bolt11 = $isBolt11
+                    ? $destination
+                    : LightningAddress::getInvoice($destination, $amountSats, 'CashuPayServer withdrawal');
+
+                // One payment is paid from one mint. Price it at the primary, then pay
+                // from the account that can cover it (a backup that took payments while
+                // the primary was down, if the primary alone cannot).
+                try {
+                    $probeQuote = Invoice::getWalletInstance($storeId)->requestMeltQuote($bolt11);
+                    $needed = $probeQuote->amount + $probeQuote->feeReserve;
+                } catch (Throwable $probeError) {
+                    // Primary unreachable: estimate, so a funded backup can still pay.
+                    $needed = match (strtolower($mintUnit)) {
+                        'sat', 'sats' => $amountSats,
+                        'msat' => $amountSats * 1000,
+                        default => Invoice::getLargestSpendableBalance($storeId),
+                    };
+                }
+                $account = Invoice::getFundsAccount($storeId, $needed);
+                $result = LightningAddress::meltToBolt11(
+                    $storeId,
+                    $bolt11,
+                    null,
+                    $account ? ['mint_url' => $account['mint_url'], 'unit' => $account['unit']] : null
+                );
+
+                // The donation comes only after the payment went out, from what the same
+                // account holds now. Taking it first cost the merchant a donation on
+                // every failed attempt, and retries donated again.
                 $donationAmount = 0;
                 $donationSuccess = false;
-
-                if ($isLightningDestination && $isFiatMint && $amountIsSats) {
-                    // Amount is in SATS - need to estimate equivalent mint units for donation
-                    $withdrawAmountSats = $amount;
-
-                    // Get bolt11 invoice first (to get melt quote before doing anything)
-                    if ($isBolt11) {
-                        $bolt11ForQuote = $destination;
-                    } else {
-                        // Get invoice from Lightning address
-                        $bolt11ForQuote = LightningAddress::getInvoice($destination, $withdrawAmountSats, 'CashuPayServer withdrawal');
-                    }
-
-                    // Get melt quote to know the cost in mint units BEFORE doing anything
-                    $wallet = Invoice::getWalletInstance($storeId);
-                    $meltQuote = $wallet->requestMeltQuote($bolt11ForQuote);
-                    $meltCost = $meltQuote->amount + $meltQuote->feeReserve;
-
-                    // Process donation FIRST (while we have all proofs available)
-                    if ($donate && defined('CASHUPAY_DONATION_PERCENT')) {
-                        $donationAmount = Donation::calculateAmount($meltQuote->amount);
-
-                        if ($donationAmount > 0) {
-                            $balance = Invoice::getBalance($storeId);
-                            if ($balance >= $meltCost + $donationAmount) {
-                                // Send donation FIRST while we have all proofs to work with
-                                $donationResult = Donation::sendToDonationSink($storeId, $donationAmount);
-                                $donationSuccess = $donationResult['success'];
-                                if (!$donationSuccess) {
-                                    error_log("Donation failed: " . ($donationResult['error'] ?? 'unknown'));
-                                    $donationAmount = 0;
-                                }
-                            } else {
-                                error_log("Skipping donation: balance {$balance} < melt cost {$meltCost} + donation {$donationAmount}");
-                                $donationAmount = 0;
-                            }
+                if ($donate && !empty($result['success']) && defined('CASHUPAY_DONATION_PERCENT')) {
+                    $donationAmount = Donation::calculateAmount((int)($result['amountPaid'] ?? 0));
+                    if ($donationAmount > 0) {
+                        $donationResult = Donation::sendToDonationSink(
+                            $storeId,
+                            $donationAmount,
+                            $account ? ['mint_url' => $account['mint_url'], 'unit' => $account['unit']] : null
+                        );
+                        $donationSuccess = !empty($donationResult['success']);
+                        if (!$donationSuccess) {
+                            error_log("Donation failed: " . ($donationResult['error'] ?? 'unknown'));
+                            $donationAmount = 0;
                         }
-                    }
-
-                    // THEN do the melt (using the bolt11 we already have)
-                    $result = LightningAddress::meltToBolt11($storeId, $bolt11ForQuote);
-                } else {
-                    // Standard flow: amount is in mint units (sat mint or non-Lightning destination)
-                    // Process donation if enabled (using donation sink)
-                    // Donation is taken ON TOP of the withdrawal amount - user receives exactly what they entered
-                    if ($donate && defined('CASHUPAY_DONATION_PERCENT')) {
-                        $donationAmount = Donation::calculateAmount($amount);
-
-                        if ($donationAmount > 0) {
-                            // Check balance covers withdrawal amount + donation
-                            $balance = Invoice::getBalance($storeId);
-                            $totalNeeded = $amount + $donationAmount;
-
-                            if ($balance < $totalNeeded) {
-                                // Insufficient balance for amount + donation, skip donation
-                                error_log("Skipping donation: balance {$balance} < total needed {$totalNeeded}");
-                                $donationAmount = 0;
-                            } else {
-                                $donationResult = Donation::sendToDonationSink($storeId, $donationAmount);
-                                $donationSuccess = $donationResult['success'];
-
-                                if (!$donationSuccess) {
-                                    // Donation failed - continue with full withdrawal
-                                    error_log("Donation failed: " . ($donationResult['error'] ?? 'unknown'));
-                                    $donationAmount = 0;
-                                }
-                            }
-                        }
-                    }
-
-                    // Proceed with main withdrawal
-                    $withdrawAmount = $amount;
-
-                    if ($isBolt11) {
-                        $result = LightningAddress::meltToBolt11($storeId, $destination, $withdrawAmount);
-                    } else {
-                        // For Lightning address with sat mint, amount is already in sats
-                        $result = LightningAddress::meltToAddress($storeId, $destination, $withdrawAmount, 'CashuPayServer withdrawal');
                     }
                 }
 
@@ -1777,7 +1886,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $wallet->syncProofStates();
                         http_response_code(400);
                         echo json_encode([
-                            'error' => 'Some proofs were already spent. Balance updated. Please try again.',
+                            'error' => 'Part of this balance had already been spent, so the payment did not go out. Your balance has been corrected; please try again.',
                             'sync' => true
                         ]);
                         break;
@@ -1912,14 +2021,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Reconcile proofs handed out earlier (marks redeemed ones SPENT).
                 Invoice::checkPendingProofs($storeId);
 
-                // 1. Get proofs from local storage (offline-first)
-                $proofs = Invoice::getUnspentProofs($storeId);
+                // 1. Get proofs from local storage (offline-first). A token carries
+                // ecash from one mint, so pick the one account (primary, or a backup that
+                // collected payments while the primary was down) that can cover it.
+                $account = Invoice::getFundsAccount($storeId, $amount);
+                if ($account === null) {
+                    throw new Exception('Store not configured');
+                }
+                $proofs = Invoice::getUnspentProofs($storeId, $account['mint_url'], $account['unit']);
                 $balance = \Cashu\Wallet::sumProofs($proofs);
 
                 if ($balance < $amount) {
-                    $store = Config::getStore($storeId);
-                    $mintUnit = $store['mint_unit'] ?? 'sat';
-                    throw new Exception("Insufficient balance. Have: {$balance} {$mintUnit}, Need: {$amount} {$mintUnit}");
+                    $mintUnit = $account['unit'];
+                    $total = Invoice::getBalance($storeId);
+                    throw new Exception($total > $balance
+                        ? "Your balance is spread over more than one mint, and one token can only come from one of them. The most you can export at once is {$balance} {$mintUnit}."
+                        : "Insufficient balance. Have: {$balance} {$mintUnit}, Need: {$amount} {$mintUnit}");
                 }
 
                 // 2. Calculate donation if enabled
@@ -1943,7 +2060,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // 4. If no exact change, try mint swap
                 if (!$hasExactChange) {
                     try {
-                        $wallet = Invoice::getWalletInstance($storeId);
+                        $wallet = Invoice::getWalletForStore($storeId, $account['mint_url'], $account['unit']);
 
                         // Check proof states at mint first (filter out spent/pending)
                         if (!empty($proofs)) {
@@ -1952,7 +2069,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $spentSecrets = [];
 
                             foreach ($states as $i => $state) {
-                                $mintState = strtoupper($state['state'] ?? ProofState::UNSPENT);
+                                // A missing state is not "unspent": only offer what the
+                                // mint explicitly says is still spendable.
+                                $mintState = strtoupper((string)($state['state'] ?? ''));
                                 if ($mintState === ProofState::SPENT) {
                                     $spentSecrets[] = $proofs[$i]->secret;
                                 } elseif ($mintState === ProofState::UNSPENT) {
@@ -1972,6 +2091,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         // charged input fees on every proof, reserved all of them for the
                         // duration (failing a concurrent auto-melt), and left the entire
                         // balance in a pending swap if the response was lost.
+                        // A donation worth less than the mint charges to cash it in
+                        // would never arrive; keep that money with the merchant.
+                        if ($donationAmount > 0 && Donation::isDust($donationAmount, $wallet->getInputFeePpk())) {
+                            $donationAmount = 0;
+                        }
                         $target = $amount + $donationAmount;
                         try {
                             $proofs = $wallet->selectProofsWithFees($proofs, $target);
@@ -2019,6 +2143,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             // before the POST, so a lost response leaves something to
                             // retry instead of a token nobody has any more.
                             if (!empty($donationProofs)) {
+                              $donationTransferId = null;
+                              try {
                                 $donationToken = $wallet->serializeToken($donationProofs);
                                 $donationSecrets = array_map(fn($p) => $p->secret, $donationProofs);
                                 $donationTransferId = Transfer::open(
@@ -2029,7 +2155,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     Donation::sinkDescription(),
                                     implode(',', $donationSecrets),
                                     'Donation with token export',
-                                    $donationToken
+                                    $donationToken,
+                                    $account['mint_url']
                                 );
                                 Invoice::markProofsExported($storeId, $donationSecrets);
                                 if (Donation::postTokenToSink($donationToken)) {
@@ -2037,6 +2164,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     Invoice::markProofsSpent($storeId, $donationSecrets);
                                     $donationSuccess = true;
                                 }
+                              } catch (Throwable $de) {
+                                // The donation could not be recorded or reserved: its
+                                // proofs simply stay in the balance. The export goes on.
+                                error_log("CashuPayServer: export donation skipped: " . $de->getMessage());
+                                if ($donationTransferId !== null) {
+                                    Transfer::fail($donationTransferId, $de->getMessage());
+                                }
+                                $donationAmount = 0;
+                              }
                             }
 
                             $mintUsed = true;
@@ -2066,7 +2202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
                             http_response_code(400);
                             echo json_encode([
-                                'error' => 'Some proofs were already spent. Balance updated. Please try again.',
+                                'error' => 'Part of this balance had already been spent, so the payment did not go out. Your balance has been corrected; please try again.',
                                 'sync' => true
                             ]);
                             break;
@@ -2117,9 +2253,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         } else {
                             $donationTransferId = null;
                             try {
-                                $store = Config::getStore($storeId);
-                                $mintUrl = $store['mint_url'];
-                                $mintUnit = $store['mint_unit'] ?? 'sat';
+                                $mintUrl = $account['mint_url'];
+                                $mintUnit = $account['unit'];
 
                                 $donationToken = \Cashu\TokenSerializer::serializeV4($mintUrl, $donationSelected, $mintUnit);
                                 $donationSecrets = array_map(fn($p) => $p->secret, $donationSelected);
@@ -2135,7 +2270,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     Donation::sinkDescription(),
                                     implode(',', $donationSecrets),
                                     'Donation with token export',
-                                    $donationToken
+                                    $donationToken,
+                                    $account['mint_url']
                                 );
                                 Invoice::markProofsExported($storeId, $donationSecrets);
 
@@ -2146,9 +2282,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
                                 // A failed post leaves the transfer pending with its token;
                                 // cron retries it rather than losing the only copy.
-                            } catch (Exception $de) {
+                            } catch (Throwable $de) {
                                 error_log("CashuPayServer: Offline donation failed: " . $de->getMessage());
-                                Transfer::fail($donationTransferId, $de->getMessage());
+                                if ($donationTransferId !== null) {
+                                    Transfer::fail($donationTransferId, $de->getMessage());
+                                }
                                 $donationAmount = 0;
                             }
                         }
@@ -2160,10 +2298,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception("Export failed: no proofs available");
                 }
 
-                // Get store config for serialization
-                $store = Config::getStore($storeId);
-                $mintUrl = $store['mint_url'];
-                $mintUnit = $store['mint_unit'] ?? 'sat';
+                // The token names the mint its proofs came from.
+                $mintUrl = $account['mint_url'];
+                $mintUnit = $account['unit'];
 
                 // Use wallet serialization if available, otherwise manual
                 if ($wallet && $mintUsed) {
@@ -2195,7 +2332,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     null,
                     implode(',', $sentSecrets),
                     'Cashu token',
-                    $token
+                    $token,
+                    $account['mint_url']
                 );
                 Invoice::markProofsExported($storeId, $sentSecrets);
 
@@ -2257,6 +2395,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($mintUrl)) {
                     throw new Exception('Mint URL required');
                 }
+                $mintUrl = MintHelpers::assertSafeMintUrl((string)$mintUrl);
 
                 // Test connection first
                 $test = Config::testMintConnection($mintUrl);
@@ -2425,6 +2564,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($result['token'] === null) {
                     throw new Exception('No unspent funds found in that namespace.');
                 }
+                // Remember exactly which proofs this token carries; "mark recovered"
+                // may only write those off.
+                $_SESSION['stranded_export'][$result['wallet_id']] = $result['secrets'];
                 echo json_encode([
                     'success' => true,
                     'token' => $result['token'],
@@ -2451,7 +2593,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($mintUrl === '') {
                     throw new Exception('Mint URL required');
                 }
-                $n = Invoice::markNamespaceRecovered($mintUrl, $unit, $account);
+                $wid = \Cashu\WalletStorage::deriveWalletId(rtrim($mintUrl, '/'), $unit, $account);
+                $secrets = $_SESSION['stranded_export'][$wid] ?? null;
+                if (!is_array($secrets)) {
+                    throw new Exception('Create the recovery token again first, then confirm it was claimed.');
+                }
+                $n = Invoice::markNamespaceRecovered($mintUrl, $unit, $account, $secrets);
+                unset($_SESSION['stranded_export'][$wid]);
                 echo json_encode(['success' => true, 'marked' => $n]);
             } catch (Throwable $e) {
                 http_response_code(400);
@@ -3419,6 +3567,13 @@ $isWp = Urls::isWordPress();
                     </div>
                 </div>
 
+                <div class="card" id="exposure-banner" role="alert" style="display: none; border: 2px solid #e53e3e;">
+                    <div class="card-header">
+                        <div class="card-title" style="color: #e53e3e;">Your money is at risk</div>
+                    </div>
+                    <div id="exposure-banner-body"></div>
+                </div>
+
                 <div class="card" id="diagnostics-card" style="display: none;">
                     <div class="card-header">
                         <div class="card-title" id="diagnostics-title">Needs attention</div>
@@ -3646,6 +3801,10 @@ $isWp = Urls::isWordPress();
                             <button class="btn btn-secondary" type="button" id="reveal-seed-btn">Show seed phrase</button>
                             <button class="btn btn-secondary" type="button" id="download-backup-btn">Download database backup</button>
                         </div>
+                        <p class="form-help" style="margin-top: 0.75rem;">
+                            Data folder on the server (keep it when you upgrade, copy it for a full backup):
+                            <code style="word-break: break-all;"><?php echo htmlspecialchars((string)(realpath(Database::getDataDir()) ?: Database::getDataDir())); ?></code>
+                        </p>
                         <div id="seed-reveal-box" style="display: none; margin-top: 1rem; padding: 1rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px;">
                             <p style="color: var(--danger); font-size: 0.85rem; margin-bottom: 0.5rem;">
                                 Anyone with these words can spend this store's funds. Write them down
@@ -3654,6 +3813,41 @@ $isWp = Urls::isWordPress();
                             <code id="seed-reveal-text" style="display: block; word-break: break-word; user-select: all; line-height: 1.7;"></code>
                             <button class="btn btn-secondary" type="button" id="hide-seed-btn" style="margin-top: 0.75rem;">Hide</button>
                         </div>
+                    </div>
+                </div>
+
+                <div class="card" id="proxy-card">
+                    <div class="card-header">
+                        <div class="card-title">Visitor addresses</div>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-help" style="margin-bottom: 0.75rem;">
+                            Login and request limits count attempts per visitor address. If your site runs
+                            behind a cache, a load balancer or Cloudflare, this server has to read the real
+                            address from what that service passes along. <strong>Automatic</strong> handles
+                            that on almost every hosting setup &mdash; change it only if the address below is wrong.
+                        </p>
+                        <div id="proxy-seen" class="form-help" style="margin-bottom: 0.75rem;"></div>
+                        <label style="display: flex; gap: 0.5rem; align-items: flex-start; margin-bottom: 0.4rem;">
+                            <input type="radio" name="proxy-mode" value="auto" style="margin-top: 0.2rem;">
+                            <span><strong>Automatic</strong> (recommended)</span>
+                        </label>
+                        <label style="display: flex; gap: 0.5rem; align-items: flex-start; margin-bottom: 0.4rem;">
+                            <input type="radio" name="proxy-mode" value="direct" style="margin-top: 0.2rem;">
+                            <span><strong>Visitors connect directly</strong> &mdash; no cache, proxy or Cloudflare in front of this site</span>
+                        </label>
+                        <label style="display: flex; gap: 0.5rem; align-items: flex-start; margin-bottom: 0.4rem;">
+                            <input type="radio" name="proxy-mode" value="custom" style="margin-top: 0.2rem;">
+                            <span><strong>Only these proxies</strong> (for advanced setups; your hosting provider can tell you the addresses)</span>
+                        </label>
+                        <div id="proxy-custom" style="display: none; margin: 0.5rem 0 0 1.5rem;">
+                            <textarea class="form-input" id="proxy-list" rows="3"
+                                      placeholder="One address or range per line, e.g. 203.0.113.5 or 10.0.0.0/8"></textarea>
+                            <label style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.4rem;">
+                                <input type="checkbox" id="proxy-cloudflare"> <span>Also trust Cloudflare</span>
+                            </label>
+                        </div>
+                        <button class="btn btn-secondary btn-full" type="button" id="btn-save-proxy" style="margin-top: 0.75rem;">Save</button>
                     </div>
                 </div>
 
@@ -3711,8 +3905,16 @@ $isWp = Urls::isWordPress();
                     </div>
                     <div class="card-body">
                         <button class="btn btn-secondary btn-full" id="btn-set-pin">
-                            Set/Change PIN
+                            Set/Change screen PIN
                         </button>
+                        <?php if (!$isWp): ?>
+                        <button class="btn btn-secondary btn-full" id="btn-change-password" style="margin-top: 0.5rem;">
+                            Change password
+                        </button>
+                        <button class="btn btn-secondary btn-full" id="btn-logout-everywhere" style="margin-top: 0.5rem;">
+                            Log out on all devices
+                        </button>
+                        <?php endif; ?>
                         <button class="btn btn-danger btn-full" id="btn-logout" style="margin-top: 0.5rem;">
                             Logout
                         </button>
@@ -3953,12 +4155,38 @@ $isWp = Urls::isWordPress();
         </div>
     </div>
 
+    <div class="modal-overlay" id="modal-change-password">
+        <div class="modal">
+            <div class="modal-handle"></div>
+            <div class="modal-title">Change password</div>
+            <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+                Every other device is logged out when the password changes.
+            </p>
+            <div class="form-group">
+                <input type="password" class="form-input" id="current-password" autocomplete="current-password"
+                       placeholder="Current password">
+            </div>
+            <div class="form-group">
+                <input type="password" class="form-input" id="new-password" autocomplete="new-password"
+                       placeholder="New password (at least 8 characters)">
+            </div>
+            <div class="form-group">
+                <input type="password" class="form-input" id="confirm-password" autocomplete="new-password"
+                       placeholder="Repeat the new password">
+            </div>
+            <button class="btn btn-full" id="btn-save-password">Change password</button>
+            <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;" onclick="closeModal('modal-change-password')">Cancel</button>
+        </div>
+    </div>
+
     <div class="modal-overlay" id="modal-pin-setup">
         <div class="modal">
             <div class="modal-handle"></div>
             <div class="modal-title">Set PIN</div>
             <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-                Enter a 4-digit PIN to quickly unlock the app.
+                A 4-digit PIN that covers the dashboard on this device. It is not a password:
+                anyone who can use this browser can still reach your account. Log out when you
+                leave the device unattended.
             </p>
 
             <div class="form-group">
@@ -4081,28 +4309,44 @@ $isWp = Urls::isWordPress();
             });
         }
 
-        // Format amount for display based on unit (handles fiat decimals)
-        function formatAmount(amount, unit) {
+        // Decimals of a unit's smallest amount. Mirrors Config::unitDecimals() on the
+        // server: sat/msat are whole numbers, btc counts satoshis, everything else cents.
+        function unitDecimals(unit) {
             const u = (unit || 'sat').toLowerCase();
-            if (u === 'sat' || u === 'msat') {
+            if (u === 'sat' || u === 'sats' || u === 'msat') return 0;
+            if (u === 'btc') return 8;
+            return 2;
+        }
+
+        // Format amount for display based on unit (handles decimals)
+        function formatAmount(amount, unit) {
+            const d = unitDecimals(unit);
+            if (d === 0) {
                 return Math.floor(amount).toLocaleString();
             }
-            // Fiat: divide by 100 for cents → main unit
-            return (amount / 100).toLocaleString(undefined, {
-                minimumFractionDigits: 2,
-                maximumFractionDigits: 2
+            return (amount / 10 ** d).toLocaleString(undefined, {
+                minimumFractionDigits: Math.min(d, 2),
+                maximumFractionDigits: d
             });
         }
 
-        // Parse user input to smallest unit (handles fiat decimals)
+        // Parse user input to smallest unit (handles decimals)
         function parseAmount(value, unit) {
-            const u = (unit || 'sat').toLowerCase();
+            const d = unitDecimals(unit);
             const num = parseFloat(value) || 0;
-            if (u === 'sat' || u === 'msat') {
-                return Math.floor(num);
-            }
-            // Fiat: multiply by 100 for main unit → cents
-            return Math.round(num * 100);
+            return d === 0 ? Math.floor(num) : Math.round(num * 10 ** d);
+        }
+
+        // A smallest-unit amount as the value of a number input
+        function toInputValue(amount, unit) {
+            const d = unitDecimals(unit);
+            return d === 0 ? String(amount) : (amount / 10 ** d).toFixed(d);
+        }
+
+        // The step (and minimum) of a number input for this unit: one smallest unit
+        function inputStep(unit) {
+            const d = unitDecimals(unit);
+            return d === 0 ? '1' : (1 / 10 ** d).toFixed(d);
         }
 
         // Check if unit is fiat (needs decimal display)
@@ -4228,11 +4472,24 @@ $isWp = Urls::isWordPress();
             document.getElementById('password-submit').addEventListener('click', async () => {
                 const password = document.getElementById('password-input').value;
                 try {
-                    const response = await fetch(adminUrl, {
+                    const send = () => fetch(adminUrl, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        headers: {
+                            'Content-Type': 'application/x-www-form-urlencoded',
+                            'X-CSRF-Token': getCsrfToken()
+                        },
                         body: `action=login&password=${encodeURIComponent(password)}`
                     });
+                    let response = await send();
+                    if (response.status === 403) {
+                        // The page outlived its session: take the fresh token and retry once.
+                        const expired = await response.json().catch(() => ({}));
+                        const metaTag = document.querySelector('meta[name="csrf-token"]');
+                        if (expired.csrfToken && metaTag) {
+                            metaTag.content = expired.csrfToken;
+                            response = await send();
+                        }
+                    }
 
                     if (response.ok) {
                         const data = await response.json();
@@ -4334,6 +4591,17 @@ $isWp = Urls::isWordPress();
             document.getElementById('btn-set-pin').addEventListener('click', () => openModal('modal-pin-setup'));
             document.getElementById('btn-save-pin').addEventListener('click', savePin);
             document.getElementById('btn-logout').addEventListener('click', logout);
+            if (document.getElementById('proxy-card')) {
+                document.querySelectorAll('input[name="proxy-mode"]').forEach(r => r.addEventListener('change', () => {
+                    document.getElementById('proxy-custom').style.display = r.value === 'custom' && r.checked ? '' : 'none';
+                }));
+                document.getElementById('btn-save-proxy').addEventListener('click', saveProxySettings);
+            }
+            if (document.getElementById('btn-change-password')) {
+                document.getElementById('btn-change-password').addEventListener('click', () => openModal('modal-change-password'));
+                document.getElementById('btn-save-password').addEventListener('click', changePassword);
+                document.getElementById('btn-logout-everywhere').addEventListener('click', logoutEverywhere);
+            }
 
             // URL Mode settings (standalone only)
             if (document.getElementById('btn-detect-url-mode')) {
@@ -4417,6 +4685,7 @@ $isWp = Urls::isWordPress();
             const storeSelector = document.getElementById('header-store-selector');
             if (view === 'settings') {
                 storeSelector.style.display = 'none';
+                if (document.getElementById('proxy-card')) loadProxySettings();
             } else {
                 storeSelector.style.display = 'flex';
             }
@@ -4617,6 +4886,11 @@ $isWp = Urls::isWordPress();
                 if (!response.ok) throw new Error('Failed to load');
 
                 dashboardData = await response.json();
+                // Defence in depth: the server already reduces units to [a-z0-9].
+                if (dashboardData && typeof dashboardData.mintUnit === 'string'
+                    && !/^[a-z0-9]{1,16}$/i.test(dashboardData.mintUnit)) {
+                    dashboardData.mintUnit = 'unknown';
+                }
                 checkDeployedVersion(dashboardData.version);
                 renderDiagnostics(dashboardData.diagnostics);
 
@@ -4688,6 +4962,26 @@ $isWp = Urls::isWordPress();
                     exportedNote.style.display = 'none';
                 }
 
+                // Money a backup mint collected (a payment taken while the main mint was
+                // down) is counted above, but each withdrawal comes from one mint. Say
+                // where it is, so a smaller "Max" does not look like missing money.
+                let accountsNote = document.getElementById('account-balances-note');
+                if (!accountsNote) {
+                    accountsNote = document.createElement('div');
+                    accountsNote.id = 'account-balances-note';
+                    accountsNote.style.cssText = 'margin-top: 0.5rem; font-size: 0.8rem; color: rgba(255,255,255,0.92);';
+                    document.querySelector('.balance-card')?.appendChild(accountsNote);
+                }
+                const funded = dashboardData.accountBalances || [];
+                if (funded.length > 1 || funded.some(a => !a.primary)) {
+                    accountsNote.textContent = 'Held at: ' + funded.map(a =>
+                        `${a.mint}${a.primary ? '' : ' (backup)'} ${formatAmount(a.balance, a.unit)} ${a.unit.toUpperCase()}`
+                    ).join(' · ') + '. Each withdrawal is paid from one mint.';
+                    accountsNote.style.display = '';
+                } else {
+                    accountsNote.style.display = 'none';
+                }
+
                 // Show mint status warning if unreachable
                 const balanceLabel = document.querySelector('.balance-label');
                 if (dashboardData.mintUnreachable) {
@@ -4707,7 +5001,7 @@ $isWp = Urls::isWordPress();
 
                 // Update available amounts in modals with proper formatting
                 document.getElementById('withdraw-available').textContent =
-                    formatAmount(dashboardData.balance ?? 0, mintUnit);
+                    formatAmount(dashboardData.exportAvailable ?? 0, mintUnit);
                 document.getElementById('export-available').textContent =
                     formatAmount(dashboardData.exportAvailable ?? 0, mintUnit);
 
@@ -4724,13 +5018,11 @@ $isWp = Urls::isWordPress();
                     document.getElementById('auto-melt-enabled').checked = dashboardData.autoMelt.enabled;
                     // Format threshold for display (fiat needs decimal)
                     const thresholdInput = document.getElementById('auto-melt-threshold');
-                    thresholdInput.value = isFiatUnit(mintUnit)
-                        ? (dashboardData.autoMelt.threshold / 100).toFixed(2)
-                        : dashboardData.autoMelt.threshold;
+                    thresholdInput.value = toInputValue(dashboardData.autoMelt.threshold, mintUnit);
                     // Set input attributes for fiat
                     if (isFiatUnit(mintUnit)) {
-                        thresholdInput.step = '0.01';
-                        thresholdInput.min = '0.01';
+                        thresholdInput.step = inputStep(mintUnit);
+                        thresholdInput.min = inputStep(mintUnit);
                     } else {
                         thresholdInput.step = '1';
                         thresholdInput.min = '1';
@@ -4798,17 +5090,15 @@ $isWp = Urls::isWordPress();
                     document.getElementById('auto-melt-address').value = dashboardData.autoMelt.address || '';
                     document.getElementById('auto-melt-enabled').checked = dashboardData.autoMelt.enabled;
                     const thresholdInput = document.getElementById('auto-melt-threshold');
-                    thresholdInput.value = isFiatUnit(mintUnit)
-                        ? (dashboardData.autoMelt.threshold / 100).toFixed(2)
-                        : dashboardData.autoMelt.threshold;
+                    thresholdInput.value = toInputValue(dashboardData.autoMelt.threshold, mintUnit);
                     // Update threshold label
                     document.querySelectorAll('.unit-label').forEach(el => {
                         el.textContent = mintUnit.toUpperCase();
                     });
                     // Set input attributes for fiat
                     if (isFiatUnit(mintUnit)) {
-                        thresholdInput.step = '0.01';
-                        thresholdInput.min = '0.01';
+                        thresholdInput.step = inputStep(mintUnit);
+                        thresholdInput.min = inputStep(mintUnit);
                     } else {
                         thresholdInput.step = '1';
                         thresholdInput.min = '1';
@@ -4912,8 +5202,21 @@ $isWp = Urls::isWordPress();
             const body = document.getElementById('diagnostics-body');
             if (!card || !body) return;
 
+            // Not dismissible and not a toast: it stays until the server is fixed.
+            const banner = document.getElementById('exposure-banner');
+            if (banner) {
+                if (diag && diag.databaseExposure) {
+                    document.getElementById('exposure-banner-body').textContent = diag.databaseExposure;
+                    banner.style.display = '';
+                } else {
+                    banner.style.display = 'none';
+                }
+            }
+
             const hasItems = diag && (diag.needsAttention
                 || diag.background?.needsBaseUrl
+                || (diag.background?.failing || []).length > 0
+                || diag.updatePrompt
                 || (diag.pendingTransfers || []).length > 0);
             if (!hasItems) {
                 card.style.display = 'none';
@@ -4923,6 +5226,16 @@ $isWp = Urls::isWordPress();
             const items = [];
             const actions = [];
             const bg = diag.background || {};
+
+            if (diag.updatePrompt) {
+                const u = diag.updatePrompt;
+                items.push(`A newer version of CashuPayServer (v${u.latest}) is available`
+                    + (u.notes ? `: ${u.notes}` : '.') + ' ' + (u.howTo || ''));
+                actions.push({
+                    label: 'How to upgrade',
+                    run: () => window.open(u.url, '_blank', 'noopener'),
+                });
+            }
 
             // Name the actual cause before the generic "tasks are stale" line, so an
             // upgraded install does not just look broken. Only urgent when nothing else
@@ -4999,6 +5312,18 @@ $isWp = Urls::isWordPress();
                     ? what + ` The last attempt failed (${a.error}); it is retried automatically.`
                     : what);
             });
+            (bg.failing || []).forEach(t => {
+                let text = `${t.name} keeps failing`
+                    + (t.failures > 1 ? ` (${t.failures} times in a row)` : '')
+                    + (t.impact ? `: ${t.impact}` : '.');
+                if (t.retryAt) {
+                    text += ` It is tried again automatically at ${new Date(t.retryAt * 1000).toLocaleTimeString()}.`;
+                }
+                if (t.message) {
+                    text += ` Technical detail: ${t.message}`;
+                }
+                items.push(text);
+            });
             if (diag.failedWebhookDeliveries > 0) {
                 items.push(`${diag.failedWebhookDeliveries} webhook ${diag.failedWebhookDeliveries === 1 ? 'delivery has' : 'deliveries have'} not been acknowledged by the shop.`);
             }
@@ -5041,13 +5366,94 @@ $isWp = Urls::isWordPress();
             card.style.display = '';
         }
 
+        function renderProxySeen(seen) {
+            const box = document.getElementById('proxy-seen');
+            if (!box || !seen) return;
+            let text = `Your address, as this server sees it: ${seen.seenAs}.`;
+            if (seen.peerIsCloudflare || seen.cloudflareHeader) {
+                text += ' Your site is behind Cloudflare.';
+                if (seen.mode === 'direct') {
+                    text += ' With "Visitors connect directly", every visitor counts as Cloudflare\'s address: choose Automatic.';
+                }
+            } else if (seen.proxied && seen.seenAs === seen.peer) {
+                text += ` The request came through a proxy (${seen.peer}) whose information is not used. `
+                    + 'If the address above is not yours, choose Automatic.';
+            }
+            box.textContent = text;
+        }
+
+        async function loadProxySettings() {
+            try {
+                const response = await fetch(`${adminUrl}?api=proxy_settings`);
+                if (!response.ok) return;
+                const data = await response.json();
+                document.querySelectorAll('input[name="proxy-mode"]').forEach(r => { r.checked = r.value === data.mode; });
+                document.getElementById('proxy-list').value = (data.trustedProxies || []).join('\n');
+                document.getElementById('proxy-cloudflare').checked = !!data.behindCloudflare;
+                document.getElementById('proxy-custom').style.display = data.mode === 'custom' ? '' : 'none';
+                renderProxySeen(data.seen);
+            } catch (e) {
+                // The card simply stays empty.
+            }
+        }
+
+        async function saveProxySettings() {
+            const mode = document.querySelector('input[name="proxy-mode"]:checked')?.value || 'auto';
+            const response = await postWithCsrf(adminUrl,
+                `action=save_proxy_settings&mode=${encodeURIComponent(mode)}`
+                + `&trusted_proxies=${encodeURIComponent(document.getElementById('proxy-list').value)}`
+                + `&behind_cloudflare=${document.getElementById('proxy-cloudflare').checked ? '1' : '0'}`);
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                showToast(result.error || 'Could not save', 'error');
+                return;
+            }
+            renderProxySeen(result.seen);
+            showToast('Saved', 'success');
+        }
+
+        async function changePassword() {
+            const current = document.getElementById('current-password').value;
+            const next = document.getElementById('new-password').value;
+            if (next !== document.getElementById('confirm-password').value) {
+                showToast('The new passwords do not match', 'error');
+                return;
+            }
+            const response = await postWithCsrf(adminUrl,
+                `action=change_password&current_password=${encodeURIComponent(current)}`
+                + `&new_password=${encodeURIComponent(next)}`);
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                showToast(result.error || 'Could not change the password', 'error');
+                return;
+            }
+            ['current-password', 'new-password', 'confirm-password'].forEach(id => {
+                document.getElementById(id).value = '';
+            });
+            closeModal('modal-change-password');
+            showToast('Password changed. Other devices have been logged out.', 'success');
+        }
+
+        async function logoutEverywhere() {
+            if (!confirm('Log out on every device, including this one?')) return;
+            await postWithCsrf(adminUrl, 'action=logout_everywhere');
+            window.location.reload();
+        }
+
         /** Pin the canonical origin so credential-bearing self-requests have a target. */
-        async function saveBaseUrl(url) {
+        async function saveBaseUrl(url, confirmOtherHost = false) {
             const response = await postWithCsrf(
                 adminUrl,
                 `action=save_base_url&base_url=${encodeURIComponent(url)}`
+                    + (confirmOtherHost ? '&confirm_other_host=1' : '')
             );
             const result = await response.json().catch(() => ({}));
+            if (response.status === 409 && result.confirmOtherHost) {
+                if (confirm(result.error + '\n\nUse it anyway? Only do this if you are sure this is your server.')) {
+                    return saveBaseUrl(url, true);
+                }
+                return;
+            }
             if (!response.ok) {
                 showToast(result.error || 'Could not save the server URL', 'error');
                 return;
@@ -5246,8 +5652,10 @@ $isWp = Urls::isWordPress();
             let amount;
             let amountIsSats = '0';
 
-            if (isLightningDestination && isFiatMint) {
-                // Amount is in sats (integer) for all Lightning destinations
+            if (isLightningDestination && (isFiatMint || mintUnit === 'msat')) {
+                // Amount is in sats (integer) for all Lightning destinations. An msat
+                // mint is no exception: the field is labelled SAT, and sending its value
+                // as msat paid a Lightning invoice 1000 times too large.
                 amount = parseInt(document.getElementById('withdraw-amount').value, 10) || 0;
                 amountIsSats = '1';
             } else {
@@ -5429,7 +5837,7 @@ $isWp = Urls::isWordPress();
         function updateWithdrawInfo() {
             const mintUnit = dashboardData?.mintUnit || 'sat';
             const donate = document.getElementById('withdraw-donate').checked;
-            const balance = dashboardData?.balance || 0;
+            const balance = dashboardData?.exportAvailable || 0;
             const isFiatMint = isFiatUnit(mintUnit);
 
             // Lightning withdrawals ALWAYS use SAT (Lightning Network operates in satoshis)
@@ -5443,7 +5851,7 @@ $isWp = Urls::isWordPress();
                 if (lastWithdrawEstimate && lastWithdrawEstimate.amountSats === amountSats) {
                     const cost = lastWithdrawEstimate.costMintUnit;
                     const fee = lastWithdrawEstimate.feeReserve;
-                    equivEl.innerHTML = `Cost: ${formatAmount(cost, mintUnit)} + ${formatAmount(fee, mintUnit)} fee = <strong>${formatAmount(cost + fee, mintUnit)} ${mintUnit.toUpperCase()}</strong>`;
+                    equivEl.innerHTML = `Cost: ${formatAmount(cost, mintUnit)} + ${formatAmount(fee, mintUnit)} fee = <strong>${formatAmount(cost + fee, mintUnit)} ${escapeHtml(mintUnit.toUpperCase())}</strong>`;
                     equivEl.style.display = 'block';
                 } else if (dashboardData?.balanceInSats > 0) {
                     // Fallback to our approximation
@@ -5606,7 +6014,11 @@ $isWp = Urls::isWordPress();
             // Get balance in SAT
             let maxSats;
             if (isFiatMint) {
-                maxSats = dashboardData?.balanceInSats;
+                // Scaled to the part one withdrawal can use (one mint's worth).
+                const total = dashboardData?.balance || 0;
+                maxSats = total > 0
+                    ? Math.floor((dashboardData?.balanceInSats || 0) * (dashboardData?.exportAvailable || 0) / total)
+                    : 0;
                 if (!maxSats || maxSats <= 0) {
                     showToast('Could not calculate max amount (no exchange rate)', 'error');
                     return;
@@ -5626,7 +6038,9 @@ $isWp = Urls::isWordPress();
                     }
                 }
             } else {
-                maxSats = dashboardData?.balance || 0;
+                // One withdrawal is paid from one mint; an msat balance is 1000 per sat.
+                const spendable = dashboardData?.exportAvailable || 0;
+                maxSats = mintUnit === 'msat' ? Math.floor(spendable / 1000) : spendable;
             }
 
             // Reserve buffer for Lightning routing fees
@@ -5724,7 +6138,7 @@ $isWp = Urls::isWordPress();
                     // exact change can also be unavailable with a perfectly healthy mint.
                     const heading = result.mintUnreachable
                         ? 'Mint Unreachable - Offline Export\n\nThe mint is currently unreachable, so exact change cannot be provided.'
-                        : 'Exact Change Unavailable\n\nYour proofs cannot be combined into exactly this amount.';
+                        : 'Exact Change Unavailable\n\nThe coins in this wallet cannot be combined into exactly this amount.';
 
                     const confirmed = confirm(
                         `${heading}\n\n` +
@@ -5867,15 +6281,10 @@ $isWp = Urls::isWordPress();
 
             amountLabel.textContent = `Amount (${unit})`;
 
-            if (mintUnit === 'sat' || mintUnit === 'msat') {
-                amountInput.placeholder = '100';
-                amountInput.min = '1';
-                amountInput.step = '1';
-            } else {
-                amountInput.placeholder = '1.00';
-                amountInput.min = '0.01';
-                amountInput.step = '0.01';
-            }
+            const step = inputStep(mintUnit);
+            amountInput.placeholder = step === '1' ? '100' : (unitDecimals(mintUnit) > 2 ? '0.0001' : '1.00');
+            amountInput.min = step;
+            amountInput.step = step;
         }
 
         async function handleGenerateRequest() {
@@ -5891,7 +6300,7 @@ $isWp = Urls::isWordPress();
             // Get store info from dashboardData
             const store = dashboardData?.stores?.find(s => s.id === storeId);
             const mintUnit = store?.mint_unit || 'sat';
-            const minAmount = (mintUnit === 'sat' || mintUnit === 'msat') ? 1 : 0.01;
+            const minAmount = parseFloat(inputStep(mintUnit));
 
             if (!amount || amount < minAmount) {
                 showToast('Please enter an amount', 'error');
@@ -6431,7 +6840,8 @@ $isWp = Urls::isWordPress();
             // Get store info from dashboardData
             const store = dashboardData?.stores?.find(s => s.id === storeId);
             const mintUrl = store?.mint_url || 'Not configured';
-            const mintUnit = (store?.mint_unit || 'sat').toUpperCase();
+            // Escaped: the unit is whatever the mint advertised.
+            const mintUnit = escapeHtml((store?.mint_unit || 'sat').toUpperCase());
 
             // Build pairing URL for testing
             const pairingParams = new URLSearchParams({
@@ -6645,9 +7055,9 @@ $isWp = Urls::isWordPress();
             document.getElementById('modal-apikey-title').textContent = 'API Key Created';
             document.getElementById('modal-apikey-content').innerHTML = `
                 <p style="color: var(--text-secondary); margin-bottom: 1rem;">Save this key now - it won't be shown again!</p>
-                <div class="token-display" style="user-select: all; cursor: text;">${key}</div>
-                <button class="btn btn-full" onclick="copyApiKey('${key}')">Copy to Clipboard</button>
-                <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;" onclick="closeApiKeyModal('${storeId}')">Close</button>
+                <div class="token-display" style="user-select: all; cursor: text;">${escapeHtml(key)}</div>
+                <button class="btn btn-full" onclick="copyApiKey('${escapeHtml(key)}')">Copy to Clipboard</button>
+                <button class="btn btn-secondary btn-full" style="margin-top: 0.5rem;" onclick="closeApiKeyModal('${escapeHtml(storeId)}')">Close</button>
             `;
         }
 
@@ -6673,7 +7083,11 @@ $isWp = Urls::isWordPress();
         async function deleteApiKey(keyId, storeId) {
             if (!confirm('Delete this API key?')) return;
 
-            await postWithCsrf(adminUrl, `action=delete_api_key&key_id=${keyId}`);
+            const response = await postWithCsrf(adminUrl, `action=delete_api_key&key_id=${encodeURIComponent(keyId)}`);
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                showToast(result.error || 'Could not delete this API key', 'error');
+            }
 
             const store = dashboardData?.stores?.find(s => s.id === storeId);
             if (store) showStoreDetails(storeId, store.name);
@@ -6682,7 +7096,11 @@ $isWp = Urls::isWordPress();
         async function deleteApiKeyFromSettings(keyId) {
             if (!confirm('Delete this API key?')) return;
 
-            await postWithCsrf(adminUrl, `action=delete_api_key&key_id=${keyId}`);
+            const response = await postWithCsrf(adminUrl, `action=delete_api_key&key_id=${encodeURIComponent(keyId)}`);
+            if (!response.ok) {
+                const result = await response.json().catch(() => ({}));
+                showToast(result.error || 'Could not delete this API key', 'error');
+            }
             loadStoreApiKeys();
         }
 
@@ -6761,7 +7179,7 @@ $isWp = Urls::isWordPress();
                     <div class="store-info-item" style="flex-direction: column; align-items: stretch; gap: 0.4rem; border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 8px; padding: 0.75rem; margin-bottom: 0.5rem;">
                         <div><strong>${amt}</strong> &middot; ${mint}</div>
                         <div style="font-size: 0.75rem; color: var(--text-secondary); word-break: break-all;">
-                            ${s.count} proof(s) &middot; ${s.account_mode} namespace &middot; keysets: ${ks || '-'}
+                            ${escapeHtml(s.count)} piece(s) of ecash &middot; key set: ${escapeHtml(ks || '-')}
                         </div>
                         ${canExport
                             ? `<button class="btn btn-secondary" data-stranded="${i}" style="align-self: flex-start; padding: 0.3rem 0.7rem; font-size: 0.8rem;">Export as token</button>`
@@ -6786,11 +7204,11 @@ $isWp = Urls::isWordPress();
                 if (!response.ok) throw new Error(result.error || 'Export failed');
 
                 const target = index !== null ? document.getElementById(`stranded-token-${index}`) : document.getElementById('stranded-results');
-                const unit = (result.unit || '').toUpperCase();
+                const unit = escapeHtml((result.unit || '').toUpperCase());
                 target.style.display = 'block';
                 target.innerHTML = `
                     <div style="margin-top: 0.5rem; padding: 0.75rem; background: rgba(247,147,26,0.1); border-radius: 8px;">
-                        <div style="font-size: 0.85rem; margin-bottom: 0.5rem;">Claimable token for <strong>${result.amount} ${unit}</strong> — redeem it in any Cashu wallet on <code>${escapeHtml(result.mint_url)}</code>:</div>
+                        <div style="font-size: 0.85rem; margin-bottom: 0.5rem;">Claimable token for <strong>${escapeHtml(result.amount)} ${unit}</strong> — redeem it in any Cashu wallet on <code>${escapeHtml(result.mint_url)}</code>:</div>
                         <textarea readonly style="width: 100%; min-height: 70px; font-size: 0.7rem; word-break: break-all;">${escapeHtml(result.token)}</textarea>
                         <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap;">
                             <button class="btn btn-secondary" id="copy-stranded-${index}" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">Copy</button>
@@ -6817,7 +7235,7 @@ $isWp = Urls::isWordPress();
                 const response = await postWithCsrf(adminUrl, params);
                 const result = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(result.error || 'Failed');
-                showToast(`Marked ${result.marked} proof(s) recovered`, 'success');
+                showToast('Marked as recovered', 'success');
                 scanStrandedFunds();
             } catch (e) {
                 showToast(e.message || 'Failed', 'error');
@@ -6911,9 +7329,7 @@ $isWp = Urls::isWordPress();
                 }
 
                 // Convert to display format (divide by 100 for fiat)
-                const displayValue = isFiatUnit(mintUnit)
-                    ? (Math.max(0, maxAmountSmallest) / 100).toFixed(2)
-                    : Math.max(0, maxAmountSmallest);
+                const displayValue = toInputValue(Math.max(0, maxAmountSmallest), mintUnit);
                 document.getElementById('export-amount').value = displayValue;
                 updateExportDonation();  // Update donation display
             } else {
@@ -6955,8 +7371,8 @@ $isWp = Urls::isWordPress();
 
                 // Set input attributes for fiat vs sats
                 const exportInput = document.getElementById('export-amount');
-                exportInput.step = isFiat ? '0.01' : '1';
-                exportInput.min = isFiat ? '0.01' : '1';
+                exportInput.step = inputStep(mintUnit);
+                exportInput.min = inputStep(mintUnit);
                 exportInput.placeholder = isFiat ? '0.00' : '0';
 
                 // Reset export button state
@@ -7001,11 +7417,11 @@ $isWp = Urls::isWordPress();
                 if (isFiat) {
                     const balanceSats = dashboardData?.balanceInSats || 0;
                     const balanceFiat = dashboardData?.balance || 0;
-                    document.getElementById('withdraw-available').innerHTML =
+                    document.getElementById('withdraw-available').textContent =
                         `${formatAmount(balanceFiat, mintUnit)} ${mintUnit.toUpperCase()} (~${balanceSats.toLocaleString()} SAT)`;
                 } else {
                     document.getElementById('withdraw-available').textContent =
-                        formatAmount(dashboardData?.balance ?? 0, mintUnit) + ' SAT';
+                        `${formatAmount(dashboardData?.exportAvailable ?? 0, mintUnit)} ${mintUnit.toUpperCase()}`;
                 }
 
                 updateWithdrawInfo();

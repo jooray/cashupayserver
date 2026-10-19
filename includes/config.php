@@ -10,7 +10,7 @@ require_once __DIR__ . '/database.php';
 // Version
 require_once __DIR__ . '/http.php';
 
-define('CASHUPAY_VERSION', '0.5.5-alpha');
+define('CASHUPAY_VERSION', '0.5.6-alpha');
 
 /**
  * The BTCPay Server version reported to Greenfield clients.
@@ -23,7 +23,9 @@ define('CASHUPAY_VERSION', '0.5.5-alpha');
 define('BTCPAY_COMPAT_VERSION', '1.0.0');
 
 // Donation settings for supporting CashuPayServer development
-define('CASHUPAY_DONATION_PERCENT', 1); // 1% donation
+if (!defined('CASHUPAY_DONATION_PERCENT')) {
+    define('CASHUPAY_DONATION_PERCENT', 1); // 1% donation; config.local.php may set 0
+}
 define('CASHUPAY_DONATION_SINK_URL', 'https://cypherpunk.today/donation-sink/donation-sink.php');
 // Which project the sink credits these donations to. The sink accepts any
 // alphanumeric name without being configured for it, and ignores the field
@@ -68,26 +70,13 @@ class Config {
         $now = Database::timestamp();
         $jsonValue = is_string($value) ? $value : json_encode($value);
 
-        $existing = Database::fetchOne(
-            "SELECT key FROM config WHERE key = ?",
-            [$key]
+        // One statement: a SELECT-then-INSERT let two first writers of the same key
+        // both insert, and the loser died on the primary key (a 500 on checkout).
+        Database::query(
+            "INSERT INTO config (key, value, created_at, updated_at) VALUES (?, ?, ?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            [$key, $jsonValue, $now, $now]
         );
-
-        if ($existing) {
-            Database::update(
-                'config',
-                ['value' => $jsonValue, 'updated_at' => $now],
-                'key = ?',
-                [$key]
-            );
-        } else {
-            Database::insert('config', [
-                'key' => $key,
-                'value' => $jsonValue,
-                'created_at' => $now,
-                'updated_at' => $now,
-            ]);
-        }
 
         self::$cache[$key] = $value;
     }
@@ -140,7 +129,35 @@ class Config {
     }
 
     /**
-     * Get seed phrase (encrypted)
+     * The store (other than $excludeStoreId) that already uses this seed phrase, or null.
+     *
+     * NUT-13 derives every secret from seed + keyset + counter alone, so two stores on
+     * one seed at one mint generate identical outputs: one money, two ledgers, and
+     * whoever spends first leaves the other holding dead proofs. Compared canonically
+     * (case and whitespace), because the wallet normalizes both before deriving.
+     * Every writer of a seed must ask this first.
+     */
+    public static function storeUsingSeed(string $seedPhrase, ?string $excludeStoreId = null): ?array {
+        $canonical = static fn(string $seed): string =>
+            (string)preg_replace('/\s+/', ' ', mb_strtolower(trim($seed)));
+        $candidate = $canonical($seedPhrase);
+        if ($candidate === '') {
+            return null;
+        }
+        foreach (Database::fetchAll("SELECT id, name, seed_phrase FROM stores WHERE seed_phrase IS NOT NULL AND seed_phrase != ''") as $row) {
+            if ($excludeStoreId !== null && $row['id'] === $excludeStoreId) {
+                continue;
+            }
+            if (hash_equals($canonical((string)$row['seed_phrase']), $candidate)) {
+                return ['id' => $row['id'], 'name' => $row['name']];
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Get the global seed phrase (legacy; stored in plain text like the per-store seeds,
+     * so the data directory must never be web-readable).
      */
     public static function getSeedPhrase(): ?string {
         return self::get('seed_phrase');
@@ -314,6 +331,18 @@ class Config {
                 }
             }
         }
+        if (array_key_exists('mint_url', $data) && (string)$data['mint_url'] !== '') {
+            $data['mint_url'] = self::normalizeMintUrl((string)$data['mint_url'], $store['mint_url'] ?? null);
+        }
+        if (array_key_exists('mint_unit', $data)) {
+            $data['mint_unit'] = self::validUnit((string)$data['mint_unit']);
+        }
+        if (array_key_exists('seed_phrase', $data) && (string)$data['seed_phrase'] !== '') {
+            $clash = self::storeUsingSeed((string)$data['seed_phrase'], $storeId);
+            if ($clash) {
+                throw new Exception("This seed phrase is already used by store: {$clash['name']}. Using the same seed for multiple stores can result in lost funds.");
+            }
+        }
         $allowed = [
             'name', 'mint_url', 'mint_unit', 'seed_phrase',
             'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary'
@@ -323,6 +352,74 @@ class Config {
         if (!empty($updateData)) {
             Database::update('stores', $updateData, 'id = ?', [$storeId]);
         }
+    }
+
+    /**
+     * A mint URL in the one spelling the wallet will use.
+     *
+     * The wallet's identity is a hash of the URL string, so `https://Mint.Example/`
+     * and `https://mint.example` would be two wallets for one mint — a second wallet
+     * starting at counter 0 for a seed the mint has already signed. New input is
+     * canonicalized; when it names the mint already in $existing (any spelling), the
+     * existing string is kept so an established wallet does not move.
+     *
+     * @throws Exception If the URL cannot be used as a mint endpoint
+     */
+    public static function normalizeMintUrl(string $mintUrl, ?string ...$existing): string {
+        require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
+        try {
+            $canonical = \Cashu\MintClient::canonicalizeMintUrl($mintUrl);
+        } catch (\Throwable $e) {
+            throw new Exception('That is not a valid mint address: ' . $e->getMessage());
+        }
+        foreach ($existing as $known) {
+            if ($known === null || $known === '') {
+                continue;
+            }
+            try {
+                if (\Cashu\MintClient::canonicalizeMintUrl($known) === $canonical) {
+                    return rtrim($known, '/');
+                }
+            } catch (\Throwable $e) {
+                // An unparseable stored value cannot be the same mint.
+            }
+        }
+        return $canonical;
+    }
+
+    /**
+     * How many decimals a mint unit's smallest amount has, for display and input.
+     *
+     * The one rule every screen and the pricing code (ExchangeRates::toSmallestUnit)
+     * share: sat and msat are whole numbers, btc counts satoshis (8 decimals), and any
+     * other unit — a fiat currency or a dollar stablecoin — counts cents.
+     */
+    public static function unitDecimals(string $unit): int {
+        return match (strtolower(trim($unit))) {
+            'sat', 'sats', 'msat' => 0,
+            'btc' => 8,
+            default => 2,
+        };
+    }
+
+    /** The library's Unit for this mint unit, with this application's decimals. */
+    public static function unitFor(string $unit): \Cashu\Unit {
+        require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
+        return \Cashu\Unit::fromCode($unit, self::unitDecimals($unit));
+    }
+
+    /**
+     * A mint unit as stored: lowercase letters and digits only.
+     *
+     * The unit comes from the mint's /v1/keysets (a stranger) and is rendered in the
+     * dashboard, so it must never carry markup.
+     */
+    public static function validUnit(string $unit): string {
+        $unit = strtolower(trim($unit));
+        if (!preg_match('/^[a-z0-9]{1,16}$/', $unit)) {
+            throw new Exception('Unsupported mint unit.');
+        }
+        return $unit;
     }
 
     /** Whether a store's wallet has been initialized (holds a seed fingerprint
@@ -461,7 +558,13 @@ class Config {
      * Add a backup mint to a store
      */
     public static function addStoreBackupMint(string $storeId, string $mintUrl, string $unit = 'sat', int $priority = 100): int {
-        $mintUrl = rtrim($mintUrl, '/');
+        $store = self::getStore($storeId);
+        $known = array_merge(
+            [$store['mint_url'] ?? null],
+            array_column(Database::fetchAll("SELECT mint_url FROM store_mints WHERE store_id = ?", [$storeId]), 'mint_url')
+        );
+        $mintUrl = self::normalizeMintUrl($mintUrl, ...$known);
+        $unit = self::validUnit($unit);
 
         return (int) Database::insert('store_mints', [
             'store_id' => $storeId,

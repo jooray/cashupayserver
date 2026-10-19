@@ -243,24 +243,80 @@ class ExchangeRates {
             }
         }
 
-        // Try each provider
+        // Try each provider. A positive number is not enough: one bad answer (a decimal
+        // slip, a wrong field, a hijacked response) would price every invoice for minutes
+        // to an hour (SPB-OPS-011, OPUS-019). A rate is accepted when it agrees with the
+        // last known rate, or — with no recent rate to compare against, or when the
+        // market really moved — with another provider.
+        $reference = self::lastKnownRate($currency);
+        $collected = [];
         foreach ($order as $provider) {
             try {
                 $rate = $provider->getBtcPrice($currency);
-                // Reject non-positive rates: a provider glitch returning 0 would otherwise
-                // cause a division-by-zero or wildly wrong pricing. See FABLE-CASHUPAYSERVER-AUDIT (C-RATE-1).
-                if ($rate !== null && $rate > 0) {
-                    self::saveToCache($currency, $rate, $provider->getName());
-                    return $rate;
-                }
             } catch (Exception $e) {
                 error_log("ExchangeRates: {$provider->getName()} failed for {$currency}: " . $e->getMessage());
                 continue;
             }
+            // Reject non-positive rates: a provider glitch returning 0 would otherwise
+            // cause a division-by-zero or wildly wrong pricing. See FABLE-CASHUPAYSERVER-AUDIT (C-RATE-1).
+            if ($rate === null || !is_finite($rate) || $rate <= 0) {
+                continue;
+            }
+            if ($reference !== null && self::withinBand($rate, $reference)) {
+                self::saveToCache($currency, $rate, $provider->getName());
+                return $rate;
+            }
+            foreach ($collected as [$earlierRate, $earlierName]) {
+                if (self::withinBand($rate, $earlierRate)) {
+                    // Two independent sources agree: prefer the higher-priority one.
+                    self::saveToCache($currency, $earlierRate, $earlierName);
+                    return $earlierRate;
+                }
+            }
+            if ($reference !== null) {
+                error_log("ExchangeRates: rejected {$provider->getName()} {$currency} rate {$rate}: more than "
+                    . (int)(self::SANITY_BAND * 100) . "% away from the last known rate {$reference}");
+            }
+            $collected[] = [$rate, $provider->getName()];
+        }
+        // Nothing to compare a single answer with: take it.
+        if ($reference === null && count($collected) === 1) {
+            self::saveToCache($currency, $collected[0][0], $collected[0][1]);
+            return $collected[0][0];
+        }
+        if (count($collected) > 1) {
+            error_log("ExchangeRates: providers disagree on the {$currency} rate; refusing to price from any of them");
         }
 
         // Fall back to stale cache as last resort
         return self::getCached($currency, true);
+    }
+
+    /** A rate further than this fraction from its reference is not trusted on its own. */
+    private const SANITY_BAND = 0.5;
+    /** How old the last known rate may be and still serve as the reference. */
+    private const REFERENCE_TTL = 86400;
+
+    private static function withinBand(float $rate, float $reference): bool {
+        return abs($rate - $reference) <= self::SANITY_BAND * $reference;
+    }
+
+    /** The last cached rate, even if expired, while it is recent enough to compare with. */
+    private static function lastKnownRate(string $currency): ?float {
+        $data = Config::get('rate_' . $currency);
+        if (!is_array($data) || !isset($data['rate']) || (float)$data['rate'] <= 0
+            || time() - (int)($data['timestamp'] ?? 0) > self::REFERENCE_TTL) {
+            return null;
+        }
+        return (float)$data['rate'];
+    }
+
+    /** What the shop and the API show when no price can be had. */
+    public const UNAVAILABLE_MESSAGE = 'Prices are unavailable right now; try again in a few minutes.';
+
+    private static function rateUnavailable(string $currency): Exception {
+        error_log("ExchangeRates: no usable exchange rate for {$currency}");
+        return new Exception(self::UNAVAILABLE_MESSAGE);
     }
 
     /**
@@ -333,7 +389,7 @@ class ExchangeRates {
         // Fiat currency - divide by BTC price
         $btcPrice = self::getBtcPrice($currency, $primary, $secondary);
         if ($btcPrice === null || $btcPrice <= 0) {
-            throw new Exception("Cannot get exchange rate for {$currency}");
+            throw self::rateUnavailable($currency);
         }
 
         return bcdiv($amount, (string)$btcPrice, self::SCALE);
@@ -359,8 +415,8 @@ class ExchangeRates {
 
         // Fiat currency - multiply by BTC price
         $btcPrice = self::getBtcPrice($currency, $primary, $secondary);
-        if ($btcPrice === null) {
-            throw new Exception("Cannot get exchange rate for {$currency}");
+        if ($btcPrice === null || $btcPrice <= 0) {
+            throw self::rateUnavailable($currency);
         }
 
         return bcmul($btcAmount, (string)$btcPrice, self::SCALE);
@@ -436,7 +492,7 @@ class ExchangeRates {
         // Convert fiat to sats
         $btcPrice = self::getBtcPrice($currency);
         if ($btcPrice === null) {
-            throw new Exception("Cannot get exchange rate for {$currency}");
+            throw self::rateUnavailable($currency);
         }
 
         $btcAmount = bcdiv($amount, (string)$btcPrice, 8);
@@ -515,8 +571,8 @@ class ExchangeRates {
     ): int {
         $mintUnit = strtoupper($mintUnit);
 
-        // Already in sats
-        if ($mintUnit === 'SAT' || $mintUnit === 'SATS') {
+        // Already in sats (a btc mint's smallest unit is the satoshi)
+        if ($mintUnit === 'SAT' || $mintUnit === 'SATS' || $mintUnit === 'BTC') {
             return $amountInSmallestUnit;
         }
 
@@ -553,8 +609,8 @@ class ExchangeRates {
     ): int {
         $mintUnit = strtoupper($mintUnit);
 
-        // Already in sats
-        if ($mintUnit === 'SAT' || $mintUnit === 'SATS') {
+        // Already in sats (a btc mint's smallest unit is the satoshi)
+        if ($mintUnit === 'SAT' || $mintUnit === 'SATS' || $mintUnit === 'BTC') {
             return $sats;
         }
 

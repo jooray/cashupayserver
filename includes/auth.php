@@ -61,7 +61,16 @@ class Auth {
                 && current_user_can('manage_options');
         }
         self::initSession();
-        return isset($_SESSION['admin_logged_in']) && $_SESSION['admin_logged_in'] === true;
+        if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
+            return false;
+        }
+        // A password change or "log out everywhere" retires every session issued
+        // before it, including one sitting in a stolen cookie (SPB-SEC-008).
+        if (!hash_equals(self::passwordVersion(), (string)($_SESSION['password_version'] ?? ''))) {
+            $_SESSION = []; // may run mid-page, so no session_regenerate_id() here
+            return false;
+        }
+        return true;
     }
 
     /**
@@ -82,6 +91,7 @@ class Auth {
             self::initSession();
             $_SESSION['admin_logged_in'] = true;
             $_SESSION['login_time'] = time();
+            $_SESSION['password_version'] = self::passwordVersion();
             session_regenerate_id(true);
             return true;
         }
@@ -89,6 +99,27 @@ class Auth {
         // M4: Log failed login attempt
         error_log("CashuPayServer: Failed admin login attempt from {$clientIp}");
         return false;
+    }
+
+    /**
+     * Log in with the lockout applied atomically.
+     *
+     * The attempt is counted *before* the (slow) password check, so parallel guesses
+     * cannot all slip in under the limit (DS41-26, SPB-SEC-006).
+     *
+     * @return string 'ok', 'locked' (too many attempts; see
+     *                Security::getLockoutRemaining()) or 'invalid'
+     */
+    public static function attemptLogin(string $password, ?string $clientIp = null): string {
+        $clientIp = $clientIp ?? Security::getClientIp();
+        if (!Security::reserveLoginAttempt($clientIp)) {
+            return 'locked';
+        }
+        if (self::login($password)) {
+            Security::clearLoginAttempts($clientIp);
+            return 'ok';
+        }
+        return 'invalid';
     }
 
     /**
@@ -122,6 +153,68 @@ class Auth {
     public static function setAdminPassword(string $password): void {
         $hash = password_hash($password, PASSWORD_DEFAULT);
         Config::set('admin_password_hash', $hash);
+    }
+
+    /** Same rule as the setup wizard. */
+    public const MIN_PASSWORD_LENGTH = 8;
+
+    /**
+     * Change the admin password (SPB-SEC-008).
+     *
+     * Every other session is logged out; the one making the change stays logged in.
+     * Throws InvalidArgumentException with a message fit to show the operator.
+     */
+    public static function changeAdminPassword(string $current, string $new): void {
+        $hash = Config::getAdminPasswordHash();
+        if ($hash === null) {
+            throw new \InvalidArgumentException(
+                'This installation has no separate admin password (in WordPress, change your WordPress password instead).'
+            );
+        }
+        if (!password_verify($current, $hash)) {
+            throw new \InvalidArgumentException('The current password is not correct.');
+        }
+        if (strlen($new) < self::MIN_PASSWORD_LENGTH) {
+            throw new \InvalidArgumentException(
+                'The new password must be at least ' . self::MIN_PASSWORD_LENGTH . ' characters long.'
+            );
+        }
+
+        self::setAdminPassword($new);
+        $version = self::bumpPasswordVersion();
+
+        if (session_status() === PHP_SESSION_ACTIVE && ($_SESSION['admin_logged_in'] ?? false) === true) {
+            $_SESSION['password_version'] = $version;
+            session_regenerate_id(true);
+        }
+        error_log('CashuPayServer: admin password changed from ' . Security::getClientIp());
+    }
+
+    /**
+     * End every admin session, this one included — for a lost laptop or a cookie that
+     * may have leaked. The password stays the same.
+     */
+    public static function logoutEverywhere(): void {
+        self::bumpPasswordVersion();
+        error_log('CashuPayServer: all admin sessions ended from ' . Security::getClientIp());
+        self::logout();
+    }
+
+    /**
+     * Current session generation. Empty until the first change, so sessions from before
+     * this check existed stay valid.
+     */
+    private static function passwordVersion(): string {
+        $version = Config::get('admin_password_version');
+        return is_string($version) ? $version : '';
+    }
+
+    private static function bumpPasswordVersion(): string {
+        // Random rather than a counter: two concurrent bumps can never agree on a value.
+        // The prefix keeps Config's JSON decoding from reading it as a number.
+        $version = 'pv_' . bin2hex(random_bytes(12));
+        Config::set('admin_password_version', $version);
+        return $version;
     }
 
     /**
@@ -206,10 +299,31 @@ class Auth {
     }
 
     /**
+     * What each BTCPay permission implies, as BTCPay applies it (OPUS-014).
+     *
+     * Store settings management is the store owner's permission and covers every
+     * store-level one. Modifying invoices covers viewing, creating and changing their
+     * status (BTCPay 2.4.5 split the last one out as canmanageinvoicestatus).
+     */
+    private const PERMISSION_IMPLIES = [
+        'btcpay.store.canmodifyinvoices' => [
+            'btcpay.store.canviewinvoices',
+            'btcpay.store.cancreateinvoice',
+            'btcpay.store.canmanageinvoicestatus',
+        ],
+        'btcpay.store.canviewstoresettings' => [
+            'btcpay.store.canviewinvoices',
+        ],
+    ];
+
+    /**
      * Check if API key has specific permission
      */
     public static function hasPermission(array $authData, string $permission): bool {
         $perms = $authData['permissions'] ?? [];
+        if (!is_array($perms)) {
+            return false;
+        }
 
         // Wildcard (admin-created keys) grants everything.
         if (in_array('*', $perms, true)) {
@@ -217,23 +331,39 @@ class Auth {
         }
 
         foreach ($perms as $held) {
-            // Exact match.
-            if ($held === $permission) {
-                return true;
+            if (!is_string($held)) {
+                continue;
             }
             // BTCPay Greenfield stores store-scoped permissions as "perm:storeId".
             // Treat the base permission as held regardless of the scope suffix (the
             // store scope itself is enforced separately by requireStore()).
-            if (strpos($held, $permission . ':') === 0) {
-                return true;
-            }
-            // BTCPay's server-settings permission implies store-settings management.
-            if ($held === 'btcpay.server.canmodifyserversettings'
-                && strpos($permission, 'btcpay.store.') === 0) {
+            $held = explode(':', $held, 2)[0];
+            if (self::permissionImplies($held, $permission)) {
                 return true;
             }
         }
 
+        return false;
+    }
+
+    /** Whether holding $held grants $wanted under BTCPay's hierarchy. */
+    public static function permissionImplies(string $held, string $wanted): bool {
+        if ($held === $wanted) {
+            return true;
+        }
+        $isStorePermission = strpos($wanted, 'btcpay.store.') === 0;
+        // BTCPay's server-settings permission implies store-settings management.
+        if ($held === 'btcpay.server.canmodifyserversettings' && $isStorePermission) {
+            return true;
+        }
+        if ($held === 'btcpay.store.canmodifystoresettings' && $isStorePermission) {
+            return true;
+        }
+        foreach (self::PERMISSION_IMPLIES[$held] ?? [] as $child) {
+            if (self::permissionImplies($child, $wanted)) {
+                return true;
+            }
+        }
         return false;
     }
 
@@ -247,6 +377,12 @@ class Auth {
         ?string $applicationIdentifier = null,
         ?string $redirectHost = null
     ): array {
+        if (self::isReservedKeyLabel($label)) {
+            throw new \InvalidArgumentException(
+                'The name "' . self::INTERNAL_KEY_LABEL . '" is reserved for the dashboard\'s own key. Please choose another name.'
+            );
+        }
+
         $rawKey = bin2hex(random_bytes(32));
         $keyHash = hash('sha256', $rawKey);
         $keyId = Database::generateId('key');
@@ -316,18 +452,43 @@ class Auth {
         );
     }
 
+    /** Label of the key the dashboard itself uses (see getOrCreateInternalApiKey()). */
+    public const INTERNAL_KEY_LABEL = 'Internal (Dashboard)';
+
     /**
-     * Delete API key
+     * Whether a caller-chosen key name collides with the dashboard key's label, ignoring
+     * case and spacing. A look-alike label used to make a key undeletable (SPB-SEC-009).
      */
-    public static function deleteApiKey(string $keyId): bool {
-        // Check if this is an internal dashboard key
-        $key = Database::fetchOne(
-            "SELECT label FROM api_keys WHERE id = ?",
+    public static function isReservedKeyLabel(string $label): bool {
+        $normalize = static fn(string $s) => strtolower((string)preg_replace('/\s+/u', '', $s));
+        return $normalize($label) === $normalize(self::INTERNAL_KEY_LABEL);
+    }
+
+    /**
+     * Whether a key is the dashboard's own, judged by the key itself (its hash matches
+     * the store's internal_api_key), never by its label text.
+     */
+    public static function isInternalApiKey(string $keyId): bool {
+        $row = Database::fetchOne(
+            "SELECT ak.key_hash, s.internal_api_key
+             FROM api_keys ak JOIN stores s ON s.id = ak.store_id
+             WHERE ak.id = ?",
             [$keyId]
         );
+        if ($row === null || empty($row['internal_api_key'])) {
+            return false;
+        }
+        return hash_equals((string)$row['key_hash'], hash('sha256', (string)$row['internal_api_key']));
+    }
 
-        if ($key && $key['label'] === 'Internal (Dashboard)') {
-            throw new \Exception('Cannot delete the internal dashboard API key');
+    /**
+     * Delete API key
+     *
+     * @throws \RuntimeException for the dashboard's own key
+     */
+    public static function deleteApiKey(string $keyId): bool {
+        if (self::isInternalApiKey($keyId)) {
+            throw new \RuntimeException('This key is used by the dashboard itself and cannot be deleted.');
         }
 
         return Database::delete('api_keys', 'id = ?', [$keyId]) > 0;
@@ -375,7 +536,7 @@ class Auth {
             'id' => $keyId,
             'key_hash' => $keyHash,
             'store_id' => $storeId,
-            'label' => 'Internal (Dashboard)',
+            'label' => self::INTERNAL_KEY_LABEL,
             'permissions' => json_encode(['btcpay.store.cancreateinvoice']),
             'application_identifier' => null,
             'redirect_host' => null,

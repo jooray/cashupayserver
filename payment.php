@@ -27,8 +27,10 @@ if (!Database::isInitialized() || !Config::isSetupComplete()) {
 }
 
 // Get invoice ID
+// `?id[]=x` arrives as an array; it must be refused here, before it reaches a
+// string-typed parameter and becomes an uncaught TypeError (a stack trace on a public page).
 $invoiceId = $_GET['id'] ?? '';
-if (empty($invoiceId)) {
+if (!is_string($invoiceId) || $invoiceId === '' || strlen($invoiceId) > 128) {
     http_response_code(400);
     echo 'Invoice ID required';
     exit;
@@ -95,9 +97,10 @@ if ($invoice['amount_sats'] && $requestCurrency !== 'SAT' && $requestCurrency !=
         $displayAmount .= ' (' . number_format($invoice['amount_sats']) . ' sats)';
     } elseif ($requestCurrency !== $mintUnitUpper) {
         // Different currency than mint unit - show mint unit equivalent
-        // For fiat mints (EUR, USD), amount_sats is actually in cents
-        $mintAmount = $invoice['amount_sats'] / 100; // Convert cents to main unit
-        $displayAmount .= ' (' . number_format($mintAmount, 2) . ' ' . $mintUnitUpper . ')';
+        // amount_sats is in the mint's smallest unit (cents for fiat, satoshis for btc)
+        $decimals = Config::unitDecimals($mintUnit);
+        $mintAmount = $invoice['amount_sats'] / (10 ** $decimals);
+        $displayAmount .= ' (' . number_format($mintAmount, $decimals) . ' ' . $mintUnitUpper . ')';
     }
     // If request currency matches mint unit, no secondary display needed
 }

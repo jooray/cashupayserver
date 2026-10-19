@@ -43,6 +43,19 @@ if (!function_exists('cashupay_guard_direct_entry')) {
 
 cashupay_guard_direct_entry();
 
+// Baseline security headers for every entry point (SPB-SEC-011): setup, receive, index
+// and cron sent none. Pages with other needs (the admin's relay connections) call
+// Security::setSecurityHeaders() again with their own policy; header() replaces the
+// earlier value, so the later, specific call wins.
+// The setup wizard discovers mints from the browser (Nostr relays over wss, mints over
+// https), which the strict default connect-src would block, so it gets the admin policy.
+require_once __DIR__ . '/security.php';
+if (PHP_SAPI !== 'cli' && !headers_sent()) {
+    $cashupayIncluder = basename((string)(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1)[0]['file'] ?? ''));
+    Security::setSecurityHeaders($cashupayIncluder === 'setup.php' ? Security::adminCsp() : null);
+    unset($cashupayIncluder);
+}
+
 // A signed emergency notice shut this install down: nothing past this point runs,
 // including the admin (see includes/safe_mode.php). One small file read when not.
 require_once __DIR__ . '/config.php';

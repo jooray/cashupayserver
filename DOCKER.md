@@ -54,7 +54,8 @@ docker run -d --name cashupay-wordpress -p 127.0.0.1:80:80 cashupayserver-wordpr
 2. Open `http://localhost/wp-admin` (login: `admin` / `admin`)
 3. CashuPay appears in the WordPress admin menu
 4. WooCommerce → Settings → Payments → BTCPay Server
-5. Set Server URL to `http://localhost/cashupay-api/` and configure the API key
+5. The setup wizard already fills these in. If you set them by hand, the Server URL is
+   `http://localhost/cashupay` (the plugin adds `/api/v1/` itself), plus the API key
 
 ## Default Credentials
 
@@ -87,6 +88,13 @@ docker run -d --name cashupay-wordpress -p 127.0.0.1:80:80 \
   cashupayserver-wordpress
 ```
 
+Or use the compose file, which sets up the same volumes (pick one profile; both use port 80):
+
+```bash
+docker compose -f docker/docker-compose.yml --profile wordpress up -d --build
+docker compose -f docker/docker-compose.yml --profile standalone up -d --build
+```
+
 ## Troubleshooting
 
 ### Container exits immediately
@@ -94,6 +102,11 @@ Check logs: `docker logs cashupay-wordpress` or run without `-d` to see startup 
 ```bash
 docker run --rm cashupayserver-wordpress
 ```
+
+### WooCommerce or BTCPay plugin missing
+Both are downloaded from wordpress.org on first start. If that fails (no network, rate
+limit), the log shows `WARNING: could not download the … plugin` and the container keeps
+running without it. Restart the container once the network is back to try again.
 
 ### WooCommerce not showing payment options
 Ensure WooCommerce setup wizard is completed. Go to WooCommerce → Settings → Payments to enable BTCPay Server.
@@ -105,7 +118,8 @@ docker exec -it <container> ls -la /opt/cashupayserver/data/
 ```
 
 ### Plugin activation fails (WordPress mode)
-Check WordPress debug log:
+The startup log says `ERROR: CashuPay plugin activation failed` with the reason, and WP Admin
+shows the same message. Also check the WordPress debug log:
 ```bash
 docker exec -it <container> cat /var/www/html/wp-content/debug.log
 ```

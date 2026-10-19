@@ -18,6 +18,8 @@ require_once __DIR__ . '/config.php';
 
 class PaymentRequest {
     const STATUS_PENDING = 'pending';
+    /** A token is being swapped for this request; it names the proofs paying it. */
+    const STATUS_RECEIVING = 'receiving';
     const STATUS_PAID = 'paid';
 
     /** How long a published request stays payable. */
@@ -77,11 +79,149 @@ class PaymentRequest {
                 'received_at' => time(),
                 'result' => json_encode($result),
             ],
-            'id = ? AND status = ?',
-            [$request['id'], self::STATUS_PENDING]
+            'id = ? AND status IN (?, ?)',
+            [$request['id'], self::STATUS_PENDING, self::STATUS_RECEIVING]
         );
 
         return $changed === 1;
+    }
+
+    /**
+     * Bind a request to the proofs about to pay it, before any swap.
+     *
+     * Returns 'claimed' (this call bound it), 'same' (already bound to exactly these
+     * proofs: a retry of the same token), 'busy' (another token is paying it) or
+     * 'paid'. Two different tokens can no longer both pay one request, and a retry
+     * after a lost response is answered from what happened to *these* proofs.
+     *
+     * @param string[] $secrets
+     */
+    public static function claim(array $request, array $secrets): string {
+        $key = self::secretsKey($secrets);
+        $claimed = Database::update(
+            'payment_requests',
+            ['status' => self::STATUS_RECEIVING, 'input_secrets' => $key, 'receiving_since' => time()],
+            'id = ? AND status = ?',
+            [$request['id'], self::STATUS_PENDING]
+        );
+        if ($claimed === 1) {
+            return 'claimed';
+        }
+        $current = self::getById((string)$request['id']);
+        if ($current === null) {
+            return 'busy';
+        }
+        if ($current['status'] === self::STATUS_PAID) {
+            return 'paid';
+        }
+        return ($current['status'] === self::STATUS_RECEIVING && hash_equals((string)$current['input_secrets'], $key))
+            ? 'same' : 'busy';
+    }
+
+    /** Undo a claim whose token was refused, so the request can be paid again. */
+    public static function release(array $request, array $secrets): void {
+        Database::update(
+            'payment_requests',
+            ['status' => self::STATUS_PENDING, 'input_secrets' => null, 'receiving_since' => null],
+            'id = ? AND status = ? AND input_secrets = ?',
+            [$request['id'], self::STATUS_RECEIVING, self::secretsKey($secrets)]
+        );
+    }
+
+    /**
+     * What happened to the proofs a claimed request is bound to, from the wallet itself.
+     *
+     * 'paid'     every input is SPENT in our wallet and no swap still holds it: the
+     *            swap finished (possibly via the background recovery). $amount is what
+     *            it credited (inputs minus the mint's input fee).
+     * 'released' none of them is ours and no swap holds them: the mint refused the
+     *            token, or it never got that far.
+     * 'pending'  a swap journal still holds them, or the picture is mixed: wait.
+     *
+     * @param string[] $secrets
+     * @return array{state: string, amount: int}
+     */
+    public static function receiptState(\Cashu\Wallet $wallet, array $secrets): array {
+        $storage = $wallet->getStorage();
+        $reserved = array_flip($storage->getReservedInputSecrets());
+        foreach ($secrets as $secret) {
+            if (isset($reserved[$secret])) {
+                return ['state' => 'pending', 'amount' => 0];
+            }
+        }
+        $in = implode(',', array_fill(0, count($secrets), '?'));
+        $rows = Database::fetchAll(
+            "SELECT secret, state FROM cashu_proofs WHERE wallet_id = ? AND secret IN ($in)",
+            array_merge([$storage->getWalletId()], $secrets)
+        );
+        if (empty($rows)) {
+            return ['state' => 'released', 'amount' => 0];
+        }
+        $spent = array_filter($rows, fn($r) => $r['state'] === \Cashu\ProofState::SPENT);
+        if (count($spent) === count($secrets)) {
+            $proofs = $storage->getProofsBySecretsAsObjects($secrets);
+            $amount = \Cashu\Wallet::sumProofs($proofs) - $wallet->calculateFee($proofs);
+            return ['state' => 'paid', 'amount' => max(0, $amount)];
+        }
+        if (count(array_filter($rows, fn($r) => $r['state'] === \Cashu\ProofState::UNSPENT)) === count($rows)
+            && count($rows) === count($secrets) && empty($spent)) {
+            // Stored as ours but never swapped and no journal: not a payment we hold.
+            return ['state' => 'released', 'amount' => 0];
+        }
+        return ['state' => 'pending', 'amount' => 0];
+    }
+
+    /**
+     * Background step: finish requests whose swap the wallet recovery completed (or
+     * the mint refused) after the sender had already been answered.
+     *
+     * @return array{checked: int, paid: int, released: int, errors: int}
+     */
+    public static function reconcileReceiving(): array {
+        require_once __DIR__ . '/invoice.php';
+        $result = ['checked' => 0, 'paid' => 0, 'released' => 0, 'errors' => 0];
+        $rows = Database::fetchAll(
+            'SELECT * FROM payment_requests WHERE status = ? ORDER BY receiving_since ASC LIMIT 20',
+            [self::STATUS_RECEIVING]
+        );
+        foreach ($rows as $request) {
+            $result['checked']++;
+            try {
+                $secrets = json_decode((string)$request['input_secrets'], true);
+                if (!is_array($secrets) || $secrets === []) {
+                    continue;
+                }
+                $wallet = Invoice::getWalletForStore((string)$request['store_id'], (string)$request['mint_url'], (string)$request['unit']);
+                $wallet->loadMint();
+                $state = self::receiptState($wallet, $secrets);
+                if ($state['state'] === 'paid') {
+                    $response = [
+                        'success' => true,
+                        'id' => $request['id'],
+                        'amount' => $state['amount'],
+                        'unit' => $request['unit'],
+                    ];
+                    if (self::markPaid($request, $state['amount'], $response)) {
+                        $result['paid']++;
+                        error_log("CashuPayServer: payment request {$request['id']} paid (recovered): {$state['amount']} {$request['unit']}");
+                    }
+                } elseif ($state['state'] === 'released') {
+                    self::release($request, $secrets);
+                    $result['released']++;
+                }
+            } catch (Throwable $e) {
+                $result['errors']++;
+                error_log("CashuPayServer: payment request {$request['id']} check failed: " . $e->getMessage());
+            }
+        }
+        return $result;
+    }
+
+    /** @param string[] $secrets */
+    private static function secretsKey(array $secrets): string {
+        $secrets = array_values(array_unique(array_map('strval', $secrets)));
+        sort($secrets, SORT_STRING);
+        return json_encode($secrets);
     }
 
     /** The stored response for an already-paid request, so a retry is idempotent. */

@@ -15,12 +15,16 @@ add_filter('query_vars', 'cashupay_query_vars');
 add_action('template_redirect', 'cashupay_handle_request');
 add_filter('redirect_canonical', 'cashupay_disable_trailing_slash_redirect', 10, 2);
 
+// WordPress only rebuilds its rule table on activation, and an upgrade by replacing
+// the plugin folder does not activate anything. Bump this when the rules change.
+const CASHUPAY_REWRITE_RULES_VERSION = '3';
+
 /**
  * Disable WordPress canonical redirect (trailing slash) for CashuPay API paths.
  * BTCPay clients don't follow redirects, so 301 breaks API calls.
  */
 function cashupay_disable_trailing_slash_redirect($redirect_url, $requested_url) {
-    if (strpos($requested_url, '/cashupay/api/') !== false) {
+    if (strpos($requested_url, '/cashupay/api/') !== false || strpos($requested_url, '/cashupay/v1/') !== false) {
         return false;
     }
     return $redirect_url;
@@ -28,6 +32,8 @@ function cashupay_disable_trailing_slash_redirect($redirect_url, $requested_url)
 
 function cashupay_add_rewrite_rules(): void {
     add_rewrite_rule('^cashupay/api/v1/(.*)$', 'index.php?cashupay_api=1&cashupay_path=$matches[1]', 'top');
+    // BTCPay clients may use the bare /v1/ base; the standalone .htaccess and nginx rules accept it too.
+    add_rewrite_rule('^cashupay/v1/(.*)$', 'index.php?cashupay_api=1&cashupay_path=$matches[1]', 'top');
     add_rewrite_rule('^cashupay/payment/(.*)$', 'index.php?cashupay_payment=$matches[1]', 'top');
     // BTCPay's short checkout link. The WooCommerce gateway sends a customer who retries
     // payment on an order to {server}/i/{invoiceId}; without this they got a 404.
@@ -38,13 +44,30 @@ function cashupay_add_rewrite_rules(): void {
     add_rewrite_rule('^cashupay/receive/?$', 'index.php?cashupay_receive=1', 'top');
     add_rewrite_rule('^cashupay/api-keys/authorize/?$', 'index.php?cashupay_authorize=1', 'top');
 
-    // WordPress only rebuilds its rule table on activation, and an upgrade by replacing
-    // the plugin folder does not activate anything. Bump this when the rules change.
-    $rulesVersion = '2';
-    if (get_option('cashupay_rewrite_rules_version') !== $rulesVersion) {
+    if (get_option('cashupay_rewrite_rules_version') !== CASHUPAY_REWRITE_RULES_VERSION
+        && !get_transient('cashupay_rewrite_flush_retry')) {
+        // Before wp_loaded this only schedules the flush; the marker is written by
+        // cashupay_mark_rewrite_rules_flushed() once the rules are really stored, so a
+        // request that dies in between retries on the next one instead of skipping it.
         flush_rewrite_rules(false);
-        update_option('cashupay_rewrite_rules_version', $rulesVersion);
+        add_action('wp_loaded', 'cashupay_mark_rewrite_rules_flushed', 99);
+        if (did_action('wp_loaded')) {
+            cashupay_mark_rewrite_rules_flushed();
+        }
     }
+}
+
+/** Record the rules version only if WordPress's stored rule table holds our newest rule. */
+function cashupay_mark_rewrite_rules_flushed(): void {
+    $rules = get_option('rewrite_rules');
+    // Plain permalinks store no rule table at all, so there is nothing to wait for.
+    if ((is_array($rules) && isset($rules['^cashupay/v1/(.*)$'])) || get_option('permalink_structure') === '') {
+        update_option('cashupay_rewrite_rules_version', CASHUPAY_REWRITE_RULES_VERSION);
+        return;
+    }
+    // The flush ran but our rule is not in the table (another plugin filtering it out?).
+    // Retry hourly rather than rebuilding the whole rule table on every request.
+    set_transient('cashupay_rewrite_flush_retry', 1, HOUR_IN_SECONDS);
 }
 
 function cashupay_query_vars(array $vars): array {

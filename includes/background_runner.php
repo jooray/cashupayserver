@@ -31,8 +31,47 @@ class BackgroundRunner {
     /** Wall-clock seconds one run may spend before yielding to the next. */
     const DEFAULT_BUDGET = 20;
 
-    /** How long a run holds the lease before another run may take over. */
-    const LEASE_SECONDS = 120;
+    /** Largest budget a caller may ask for (cron.php's ?budget=). */
+    const MAX_BUDGET = 300;
+
+    /**
+     * How long a run holds the lease before another run may take over. Renewed before
+     * every task, and longer than the largest budget plus a slow task, so a run that is
+     * still working never loses it; a run that died releases it within this time.
+     */
+    const LEASE_SECONDS = 360;
+
+    /** Backoff for a task that keeps throwing: 1 min, doubling, capped. */
+    const BACKOFF_BASE = 60;
+    const BACKOFF_CAP = 3600;
+    /** The payment path is retried sooner: a paid order is waiting on it. */
+    const BACKOFF_CAP_ALWAYS_RUN = 900;
+
+    /**
+     * Plain-language names for the diagnostics view, and what it means for the shop
+     * when the task keeps failing.
+     */
+    private const TASK_LABELS = [
+        'update_check' => ['name' => 'Checking for updates', 'impact' => 'You may not hear about a new version or an urgent security notice.'],
+        'recover_wallet_operations' => ['name' => 'Finishing interrupted payments', 'impact' => 'A withdrawal or payment that was cut off part-way is not being finished, so some money may not show in your balance yet.'],
+        'ready_store_wallets' => ['name' => 'Preparing your wallet at a mint', 'impact' => 'New payments to this wallet cannot be collected until this finishes.'],
+        'poll_quotes' => ['name' => 'Checking for customer payments', 'impact' => 'Paid orders may not be marked paid.'],
+        'webhook_outbox' => ['name' => 'Telling your shop about payments', 'impact' => 'Your shop may not learn that an order was paid.'],
+        'reconcile_transfers' => ['name' => 'Confirming withdrawals and exported tokens', 'impact' => 'Some outgoing transfers stay "in progress" longer than they should.'],
+        'recover_orphaned' => ['name' => 'Rescuing interrupted invoices', 'impact' => 'A payment that was interrupted part-way may not be credited.'],
+        'recover_expired_paid' => ['name' => 'Collecting late payments', 'impact' => 'A customer who paid just after the invoice expired may not be credited.'],
+        'expire_invoices' => ['name' => 'Expiring unpaid invoices', 'impact' => 'Old unpaid invoices stay open longer than they should.'],
+        'auto_melt' => ['name' => 'Automatic withdrawal', 'impact' => 'Your balance is not being sent to your Lightning address automatically.'],
+        'sync_proofs' => ['name' => 'Checking your balance with the mint', 'impact' => 'Your balance may be shown higher than what you can actually spend.'],
+        'rotate_keyset_proofs' => ['name' => 'Refreshing ecash the mint is retiring', 'impact' => 'Some of your balance may become harder to spend if the mint retires it.'],
+        'clean_cache' => ['name' => 'Cleaning up temporary files', 'impact' => 'Temporary files are piling up. Nothing urgent.'],
+        'expire_old_invoices' => ['name' => 'Expiring very old invoices', 'impact' => 'Very old unpaid invoices stay open. Nothing urgent.'],
+        'cleanup_invoices' => ['name' => 'Removing old invoices', 'impact' => 'Old invoices are not being cleaned up. Nothing urgent.'],
+        'cleanup_pending_ops' => ['name' => 'Clearing finished wallet records', 'impact' => 'Old wallet records are not being cleaned up. Nothing urgent.'],
+        'cleanup_webhooks' => ['name' => 'Trimming the shop notification history', 'impact' => 'The notification history keeps growing. Nothing urgent.'],
+        'finish_payment_requests' => ['name' => 'Confirming payments to payment requests', 'impact' => 'A payment-request QR that was paid may keep showing as unpaid.'],
+        'cleanup_payment_requests' => ['name' => 'Removing old payment requests', 'impact' => 'Old payment requests are not being cleaned up. Nothing urgent.'],
+    ];
 
     /**
      * Tasks that run on *every* tick, before the round-robin remainder.
@@ -61,6 +100,7 @@ class BackgroundRunner {
         return [
             'recover_wallet_operations' => fn() => Invoice::recoverPendingWalletOperations(),
             'reconcile_transfers' => fn() => self::reconcileTransfers(),
+            'finish_payment_requests' => fn() => PaymentRequest::reconcileReceiving(),
             'update_check' => fn() => UpdateCheck::run(),
             // Before poll_quotes: a paid invoice on an account that is not ready to
             // spend cannot be minted, so the order would never be marked paid.
@@ -115,7 +155,12 @@ class BackgroundRunner {
     /**
      * Run as many tasks as the budget allows, starting where the last run stopped.
      *
-     * @param int $budgetSeconds Wall-clock budget for this run
+     * The budget covers the rotating tasks only and starts after the always-run ones,
+     * and at least one rotating task runs every time: when the payment path alone took
+     * longer than the budget, the rotation (auto-withdrawal, reconciliation, cleanup)
+     * used to be skipped on every run, forever.
+     *
+     * @param int $budgetSeconds Wall-clock budget for the rotating tasks of this run
      * @return array Result document (also recorded as the heartbeat)
      */
     public static function run(int $budgetSeconds = self::DEFAULT_BUDGET): array {
@@ -123,6 +168,7 @@ class BackgroundRunner {
         if (SafeMode::shutdown() !== null) {
             return ['timestamp' => time(), 'skipped' => 'emergency shutdown', 'tasks' => []];
         }
+        $budgetSeconds = max(1, min(self::MAX_BUDGET, $budgetSeconds));
         $lease = self::acquireLease();
         if ($lease === null) {
             return ['timestamp' => time(), 'skipped' => 'another run holds the lease', 'tasks' => []];
@@ -143,54 +189,77 @@ class BackgroundRunner {
         $rotating = array_values(array_diff(array_keys($tasks), self::ALWAYS_RUN));
         $cursor = (int)Config::get('cron_task_cursor', '0');
         $count = count($rotating);
-        $ran = 0;
+        $visited = 0;
+        $leaseLost = false;
 
-        $runTask = function (string $name) use ($tasks, &$results, &$health): void {
+        // Returns false when this run no longer owns the lease and must stop.
+        $runTask = function (string $name) use ($tasks, $lease, &$results, &$health, &$leaseLost): bool {
             // The update check may have just received an emergency notice; nothing
             // after it may move money in the same run.
             if (SafeMode::shutdown() !== null) {
                 $results['tasks'][$name] = 'skipped (emergency shutdown)';
-                return;
+                return true;
+            }
+            // Renew before every task, so a run that is legitimately slow keeps the
+            // lease, and one whose lease was taken over (it overran LEASE_SECONDS)
+            // stops instead of running the same tasks alongside the new owner.
+            if (!self::renewLease($lease)) {
+                $leaseLost = true;
+                return false;
+            }
+            $previous = is_array($health[$name] ?? null) ? $health[$name] : [];
+            $retryAt = (int)($previous['retry_after'] ?? 0);
+            if ($retryAt > time()) {
+                $results['tasks'][$name] = 'skipped (failed ' . (int)($previous['failures'] ?? 1)
+                    . ' times in a row; retrying in ' . ($retryAt - time()) . 's)';
+                return true;
             }
             try {
                 $result = $tasks[$name]();
                 $results['tasks'][$name] = $result;
-                // A task that reports a failure without throwing is not healthy.
-                if (is_string($result) && preg_match('/^(error|unreachable)/i', $result)) {
-                    $health[$name] = ['last_error' => time(), 'message' => mb_substr($result, 0, 300)];
-                } else {
-                    $health[$name] = ['last_ok' => time()];
-                }
+                // A task that reports a failure without throwing is not healthy. It did
+                // its work, though (one mint down among several, one store among many),
+                // so it is reported but not backed off.
+                $failure = self::failureOf($result);
+                $health[$name] = $failure === null
+                    ? ['last_ok' => time()]
+                    : self::failedHealth($previous, $failure, false, in_array($name, self::ALWAYS_RUN, true));
             } catch (Throwable $e) {
                 $results['tasks'][$name] = 'error: ' . $e->getMessage();
-                $health[$name] = [
-                    'last_error' => time(),
-                    'message' => mb_substr($e->getMessage(), 0, 300),
-                ];
+                $health[$name] = self::failedHealth($previous, $e->getMessage(), true, in_array($name, self::ALWAYS_RUN, true));
                 error_log("CashuPayServer cron task {$name} failed: " . $e->getMessage());
             }
+            return true;
         };
 
         try {
             // The payment path runs first and is not subject to the budget: a customer's
             // settlement must never be skipped because housekeeping ran long.
             foreach (self::ALWAYS_RUN as $name) {
-                if (isset($tasks[$name])) {
-                    $runTask($name);
+                if (isset($tasks[$name]) && !$runTask($name)) {
+                    break;
                 }
             }
 
-            for ($i = 0; $i < $count; $i++) {
-                if (microtime(true) - $started > $budgetSeconds) {
+            $rotationStarted = microtime(true);
+            for ($i = 0; $i < $count && !$leaseLost; $i++) {
+                if ($i > 0 && microtime(true) - $rotationStarted > $budgetSeconds) {
                     break;
                 }
-                $runTask($rotating[($cursor + $i) % $count]);
-                $ran++;
+                if (!$runTask($rotating[($cursor + $i) % $count])) {
+                    break;
+                }
+                $visited++;
             }
 
             $results['ran'] = count($results['tasks']);
             $results['durationMs'] = (int)round((microtime(true) - $started) * 1000);
-            Config::set('cron_task_cursor', (string)($count > 0 ? ($cursor + $ran) % $count : 0));
+            if ($leaseLost) {
+                // Another run owns the bookkeeping now; do not overwrite its cursor/health.
+                $results['stopped'] = 'lease taken over by another run';
+                return $results;
+            }
+            Config::set('cron_task_cursor', (string)($count > 0 ? ($cursor + $visited) % $count : 0));
             Config::set('cron_task_health', $health);
             Config::set('cron_last_run', (string)time());
             Config::set('cron_last_result', $results);
@@ -201,16 +270,116 @@ class BackgroundRunner {
         return $results;
     }
 
+    /**
+     * The failure a task result describes, or null when it describes success.
+     *
+     * Tasks report problems in several shapes: an "error …"/"unreachable" string, a
+     * "… N errors" summary, an `errors` list or count, a `failed` count, or (auto_melt)
+     * a list of per-store entries carrying `error`. Treating only the first as failure
+     * recorded `last_ok` for tasks that had in fact failed.
+     */
+    public static function failureOf($result): ?string {
+        if (is_string($result)) {
+            if (preg_match('/^(error|unreachable)/i', $result)) {
+                return $result;
+            }
+            if (preg_match('/\b([1-9]\d*) errors?\b/i', $result)) {
+                return $result;
+            }
+            return null;
+        }
+        if (!is_array($result)) {
+            return null;
+        }
+        $messages = [];
+        if (isset($result['errors'])) {
+            if (is_array($result['errors']) && !empty($result['errors'])) {
+                foreach ($result['errors'] as $label => $error) {
+                    $text = is_array($error) ? implode('; ', array_map('strval', $error)) : (string)$error;
+                    $messages[] = is_string($label) ? "{$label}: {$text}" : $text;
+                }
+            } elseif (is_int($result['errors']) && $result['errors'] > 0) {
+                $messages[] = "{$result['errors']} errors";
+            }
+        }
+        if (isset($result['failed']) && is_int($result['failed']) && $result['failed'] > 0) {
+            $messages[] = "{$result['failed']} failed";
+        }
+        if (isset($result['error']) && is_string($result['error']) && $result['error'] !== '') {
+            $messages[] = $result['error'];
+        }
+        if (array_is_list($result)) {
+            foreach ($result as $entry) {
+                if (is_array($entry) && !empty($entry['error'])) {
+                    $who = $entry['store'] ?? $entry['store_id'] ?? null;
+                    $messages[] = ($who !== null ? "{$who}: " : '') . (string)$entry['error'];
+                }
+            }
+        }
+        return empty($messages) ? null : mb_substr(implode(' | ', $messages), 0, 300);
+    }
+
+    /**
+     * Health record for a failed task, with exponential backoff when it threw.
+     *
+     * A task that throws every time (a dead mint, a broken migration) used to be retried
+     * on every tick forever. Its failures are counted and it waits 1, 2, 4 … minutes,
+     * up to an hour (a quarter of an hour for the payment path), before the next try.
+     * A partial failure is only counted: the task did useful work and keeps running.
+     */
+    private static function failedHealth(array $previous, string $message, bool $threw, bool $alwaysRun): array {
+        $failures = (int)($previous['failures'] ?? 0) + 1;
+        $record = [
+            'last_error' => time(),
+            'message' => mb_substr($message, 0, 300),
+            'failures' => $failures,
+            'failing_since' => (int)($previous['failing_since'] ?? 0) ?: time(),
+        ];
+        if (isset($previous['last_ok'])) {
+            $record['last_ok'] = (int)$previous['last_ok'];
+        }
+        if ($threw) {
+            $cap = $alwaysRun ? self::BACKOFF_CAP_ALWAYS_RUN : self::BACKOFF_CAP;
+            $record['retry_after'] = time() + min($cap, self::BACKOFF_BASE * 2 ** min(10, $failures - 1));
+        }
+        return $record;
+    }
+
     /** Latest heartbeat for the dashboard's diagnostics view. */
     public static function status(): array {
         $lastRun = (int)Config::get('cron_last_run', '0');
         $health = Config::get('cron_task_health', []);
+        $health = is_array($health) ? $health : [];
         $lastResult = Config::get('cron_last_result');
+
+        $failing = [];
+        foreach ($health as $task => $record) {
+            if (!is_array($record) || !isset($record['last_error'])) {
+                continue;
+            }
+            $label = self::TASK_LABELS[$task] ?? ['name' => $task, 'impact' => 'Some background maintenance is not running.'];
+            $retryAt = isset($record['retry_after']) ? (int)$record['retry_after'] : null;
+            $failing[] = [
+                'task' => $task,
+                'name' => $label['name'],
+                'impact' => $label['impact'],
+                'message' => (string)($record['message'] ?? ''),
+                'failures' => (int)($record['failures'] ?? 1),
+                'since' => (int)($record['failing_since'] ?? $record['last_error']),
+                'lastError' => (int)$record['last_error'],
+                'lastOk' => isset($record['last_ok']) ? (int)$record['last_ok'] : null,
+                'retryAt' => $retryAt !== null && $retryAt > time() ? $retryAt : null,
+                'paymentPath' => in_array($task, self::ALWAYS_RUN, true),
+            ];
+        }
+        // Payment-path problems first, then the longest-running ones.
+        usort($failing, fn($a, $b) => [$b['paymentPath'], $a['since']] <=> [$a['paymentPath'], $b['since']]);
 
         return [
             'lastRun' => $lastRun ?: null,
             'secondsAgo' => $lastRun ? time() - $lastRun : null,
-            'taskHealth' => is_array($health) ? $health : [],
+            'taskHealth' => $health,
+            'failing' => $failing,
             'lastResult' => is_array($lastResult) ? $lastResult : null,
         ];
     }
@@ -222,7 +391,7 @@ class BackgroundRunner {
         $pdo = Database::getInstance();
         $pdo->exec('BEGIN IMMEDIATE');
         try {
-            $until = (int)Config::get('cron_lease_until', '0');
+            $until = (int)self::leaseValue('cron_lease_until');
             if ($until > time()) {
                 $pdo->exec('COMMIT');
                 return null;
@@ -237,14 +406,53 @@ class BackgroundRunner {
         }
     }
 
+    /**
+     * Extend the lease, if this run still holds it.
+     *
+     * @return bool false when another run has taken the lease over
+     */
+    private static function renewLease(string $token): bool {
+        $pdo = Database::getInstance();
+        try {
+            $pdo->exec('BEGIN IMMEDIATE');
+        } catch (Throwable $e) {
+            // Could not even take the write lock: keep going on the current lease
+            // rather than abandon a run over a busy database.
+            error_log('CashuPayServer: could not renew cron lease: ' . $e->getMessage());
+            return true;
+        }
+        try {
+            if (!hash_equals(self::leaseValue('cron_lease_token'), $token)) {
+                $pdo->exec('COMMIT');
+                return false;
+            }
+            Config::set('cron_lease_until', (string)(time() + self::LEASE_SECONDS));
+            $pdo->exec('COMMIT');
+            return true;
+        } catch (Throwable $e) {
+            try { $pdo->exec('ROLLBACK'); } catch (Throwable $ignored) {}
+            error_log('CashuPayServer: could not renew cron lease: ' . $e->getMessage());
+            return true;
+        }
+    }
+
     private static function releaseLease(string $token): void {
         try {
-            if (hash_equals((string)Config::get('cron_lease_token', ''), $token)) {
+            if (hash_equals(self::leaseValue('cron_lease_token'), $token)) {
                 Config::set('cron_lease_until', '0');
             }
         } catch (Throwable $e) {
             error_log('CashuPayServer: failed to release cron lease: ' . $e->getMessage());
         }
+    }
+
+    /**
+     * A lease field as stored right now. Read past Config's per-request cache: the
+     * point is to see what *another* process wrote since this one started.
+     */
+    private static function leaseValue(string $key): string {
+        $row = Database::fetchOne('SELECT value FROM config WHERE key = ?', [$key]);
+        return $row === null ? '' : (string)$row['value'];
     }
 
     // --- individual tasks -------------------------------------------------
@@ -256,56 +464,162 @@ class BackgroundRunner {
         );
     }
 
+    /** Seconds reconcile_transfers may spend before leaving the rest for the next run. */
+    const RECONCILE_BUDGET = 15.0;
+
     /**
      * Resolve outgoing operations that never reached a terminal state.
      *
-     * Withdrawals are matched by the melt quote recorded in `reference`; once the
-     * library's recovery has settled that quote the ledger row can follow. Donations
-     * whose token is still held are re-sent.
+     * Withdrawals come first, all of them: their outcome is unknown money. Token rows
+     * (exports, donations) then follow from a persisted cursor, a page at a time within
+     * the time budget, so months of unclaimed exports cannot hide a newer one — or a
+     * withdrawal — behind a fixed window of the oldest rows.
+     *
+     * Each row is resolved at the mint it was made at (`mint_url`, `unit`), not at the
+     * store's current primary.
      */
     private static function reconcileTransfers(): array {
-        $result = ['checked' => 0, 'completed' => 0, 'failed' => 0, 'still_pending' => 0];
+        $result = ['checked' => 0, 'completed' => 0, 'marked_failed' => 0, 'still_pending' => 0, 'errors' => 0];
+        $deadline = microtime(true) + self::RECONCILE_BUDGET;
 
-        foreach (Transfer::getPending() as $row) {
-            $result['checked']++;
-            try {
-                // Anything handed out as a token — an export or a donation — is resolved
-                // by whoever received it. The mint, not our own retry log, is what knows
-                // whether that happened.
-                if (in_array($row['type'], [Transfer::TYPE_DONATION, Transfer::TYPE_TOKEN_EXPORT], true)) {
-                    $outcome = self::reconcileTokenTransfer($row);
-                    $result[$outcome]++;
-                    continue;
+        $after = null;
+        do {
+            $page = Transfer::getPendingPage(Transfer::WITHDRAWAL_TYPES, $after, 50);
+            foreach ($page as $row) {
+                $after = [(int)$row['created_at'], (string)$row['id']];
+                $result['checked']++;
+                $result[self::reconcileOne($row)]++;
+                if (microtime(true) > $deadline) {
+                    return $result;
                 }
+            }
+        } while (count($page) === 50);
 
-                // Lightning withdrawal: the melt quote is authoritative.
-                $quoteId = $row['reference'] ?? '';
-                if ($quoteId === '') {
-                    $result['still_pending']++;
-                    continue;
+        // Token rows: continue after where the last run stopped, wrap around to the
+        // oldest once, and stop on reaching the starting point again.
+        $cursor = Config::get('reconcile_token_cursor');
+        $start = is_array($cursor) && count($cursor) === 2 ? [(int)$cursor[0], (string)$cursor[1]] : null;
+        $after = $start;
+        $wrapped = $start === null;
+        while (microtime(true) <= $deadline) {
+            $page = Transfer::getPendingPage(Transfer::TOKEN_TYPES, $after, 25);
+            if (empty($page)) {
+                $after = null;
+                if ($wrapped) {
+                    break;
                 }
-                $wallet = Invoice::getWalletInstance($row['store_id']);
-                if ($wallet->getStorage()->getPendingOperationById('melt:' . $quoteId) !== null) {
-                    $result['still_pending']++;
-                    continue;
+                $wrapped = true;
+                continue;
+            }
+            foreach ($page as $row) {
+                $key = [(int)$row['created_at'], (string)$row['id']];
+                if ($wrapped && $start !== null && $key >= $start) {
+                    // Back where this run began: every pending token row was visited.
+                    break 2;
                 }
-                $quote = $wallet->checkMeltQuote($quoteId);
-                if ($quote->isPaid()) {
-                    Transfer::complete($row['id'], (int)$row['amount'], 0, $quote->paymentPreimage);
-                    $result['completed']++;
-                } elseif ($quote->isUnpaid() && $quote->expiry !== null && $quote->expiry < time()) {
-                    Transfer::fail($row['id'], 'Melt quote expired unpaid; inputs released');
-                    $result['failed']++;
-                } else {
-                    $result['still_pending']++;
+                $after = $key;
+                $result['checked']++;
+                $result[self::reconcileOne($row)]++;
+                if (microtime(true) > $deadline) {
+                    break 2;
                 }
-            } catch (Throwable $e) {
-                $result['still_pending']++;
-                error_log("CashuPayServer: transfer {$row['id']} reconciliation failed: " . $e->getMessage());
             }
         }
+        Config::set('reconcile_token_cursor', $after);
 
         return $result;
+    }
+
+    /** @return string One of the reconcileTransfers() result keys */
+    private static function reconcileOne(array $row): string {
+        try {
+            // Anything handed out as a token — an export or a donation — is resolved
+            // by whoever received it. The mint, not our own retry log, is what knows
+            // whether that happened.
+            if (in_array($row['type'], Transfer::TOKEN_TYPES, true)) {
+                return self::reconcileTokenTransfer($row);
+            }
+            return self::reconcileWithdrawal($row);
+        } catch (Throwable $e) {
+            error_log("CashuPayServer: transfer {$row['id']} reconciliation failed: " . $e->getMessage());
+            return 'errors';
+        }
+    }
+
+    /**
+     * Resolve a Lightning withdrawal. The melt quote is authoritative while the mint
+     * knows it; once it does not, the inputs the withdrawal spent are.
+     */
+    private static function reconcileWithdrawal(array $row): string {
+        $quoteId = Transfer::meltQuoteId($row);
+        if ($quoteId === '') {
+            return 'still_pending';
+        }
+        $wallet = Invoice::getWalletForStore(
+            $row['store_id'],
+            ($row['mint_url'] ?? '') !== '' ? $row['mint_url'] : null,
+            ($row['unit'] ?? '') !== '' ? $row['unit'] : null
+        );
+        // The library's journal is still open: its recovery owns the outcome.
+        if ($wallet->getStorage()->getPendingOperationById('melt:' . $quoteId) !== null) {
+            return 'still_pending';
+        }
+        try {
+            $quote = $wallet->checkMeltQuote($quoteId);
+        } catch (\Cashu\CashuProtocolException $e) {
+            if (!$e->isQuoteNotFound()) {
+                throw $e;
+            }
+            return self::settleForgottenMelt($row, $wallet);
+        }
+        if ($quote->isPaid()) {
+            Transfer::complete($row['id'], (int)$row['amount'], (int)$row['fee'], $quote->paymentPreimage);
+            return 'completed';
+        }
+        if ($quote->isUnpaid() && $quote->expiry !== null && $quote->expiry < time()) {
+            Transfer::fail($row['id'], 'The payment did not go through and the money stayed in your balance.');
+            return 'marked_failed';
+        }
+        return 'still_pending';
+    }
+
+    /**
+     * The mint no longer knows this withdrawal's quote (restart, pruning). The library
+     * has already settled its own journal from the inputs' state and deleted it; reach
+     * the same answer from the inputs recorded on the row. All spent: the payment went
+     * out. All unspent: it cannot have — a mint cannot pay a quote it has forgotten
+     * with inputs it never consumed. Anything else waits.
+     */
+    private static function settleForgottenMelt(array $row, \Cashu\Wallet $wallet): string {
+        $secrets = Transfer::meltInputSecrets($row);
+        if (empty($secrets)) {
+            // Recorded before inputs were kept: nothing to decide by. Say so once.
+            if (!str_contains((string)($row['detail'] ?? ''), 'no longer has a record')) {
+                Transfer::note(
+                    $row['id'],
+                    'The mint no longer has a record of this withdrawal, so whether it was paid '
+                    . 'cannot be confirmed automatically. Check the destination wallet before sending again.'
+                );
+            }
+            return 'still_pending';
+        }
+        $proofs = $wallet->getStorage()->getProofsBySecretsAsObjects($secrets);
+        if (count($proofs) !== count($secrets)) {
+            return 'still_pending';
+        }
+        $states = array_values(array_unique(array_map(
+            fn($state) => strtoupper((string)($state['state'] ?? '')),
+            $wallet->checkProofState($proofs)
+        )));
+        if ($states === [\Cashu\ProofState::SPENT]) {
+            Transfer::complete($row['id'], (int)$row['amount'], (int)$row['fee'], 'Paid (confirmed from the money it spent)');
+            return 'completed';
+        }
+        if ($states === [\Cashu\ProofState::UNSPENT]) {
+            Transfer::fail($row['id'], 'The payment did not go through and the money stayed in your balance.');
+            return 'marked_failed';
+        }
+        return 'still_pending';
     }
 
     /**
@@ -377,12 +691,6 @@ class BackgroundRunner {
     }
 
     /**
-     * Would this amount cost at least as much to redeem as it is worth?
-     *
-     * NUT-02 mints charge one fee per input proof, and an amount decomposes into a fixed
-     * number of proofs (powers of two), so this is knowable without asking anyone.
-     */
-    /**
      * Can this token ever be worth redeeming?
      *
      * The fee is charged per *input proof* and rounded up once for the whole swap
@@ -434,7 +742,11 @@ class BackgroundRunner {
         return $below;
     }
 
-    /** checkAutoMelt() returns one entry per store, not a single result. */
+    /**
+     * checkAutoMelt() returns one entry per store (and mint) attempted or skipped.
+     * Keep the keys it actually returns — store_name/store_id and amount — so a failed
+     * auto-withdrawal names the store and the amount.
+     */
     private static function autoMelt() {
         $meltResults = LightningAddress::checkAutoMelt();
         if (empty($meltResults)) {
@@ -442,7 +754,14 @@ class BackgroundRunner {
         }
         return array_map(
             fn($entry) => is_array($entry)
-                ? ['store' => $entry['store'] ?? null, 'amount' => $entry['amountPaid'] ?? null, 'error' => $entry['error'] ?? null]
+                ? array_filter([
+                    'store' => $entry['store_name'] ?? $entry['store_id'] ?? null,
+                    'store_id' => $entry['store_id'] ?? null,
+                    'mint' => $entry['mint_url'] ?? null,
+                    'amount' => $entry['amount'] ?? null,
+                    'skipped' => $entry['skipped'] ?? null,
+                    'error' => $entry['error'] ?? null,
+                ], fn($v) => $v !== null)
                 : $entry,
             $meltResults
         );
@@ -490,6 +809,7 @@ class BackgroundRunner {
 
         $rotated = 0;
         $checked = 0;
+        $errors = 0;
         foreach (self::stores() as $store) {
             try {
                 $wallet = Invoice::getWalletInstance($store['id']);
@@ -498,16 +818,18 @@ class BackgroundRunner {
                     $rotated += $rotation['rotated'];
                     $checked += $rotation['checked'];
                     foreach ($rotation['errors'] as $rotationError) {
+                        $errors++;
                         error_log("Keyset rotation error for store {$store['id']}: {$rotationError}");
                     }
                 }
             } catch (Throwable $e) {
+                $errors++;
                 error_log("Keyset rotation failed for store {$store['id']}: " . $e->getMessage());
             }
         }
         Config::set('last_keyset_rotation_check', (string)time());
 
-        return "checked {$checked} proofs, rotated {$rotated}";
+        return "checked {$checked} proofs, rotated {$rotated}, {$errors} errors";
     }
 
     /**
@@ -533,6 +855,7 @@ class BackgroundRunner {
 
     private static function cleanupPendingOperations(): string {
         $totalCleaned = 0;
+        $errors = 0;
         foreach (self::stores() as $store) {
             try {
                 $wallet = Invoice::getWalletInstance($store['id']);
@@ -540,10 +863,11 @@ class BackgroundRunner {
                     $totalCleaned += $wallet->getStorage()->cleanExpiredPendingOperations();
                 }
             } catch (Throwable $e) {
+                $errors++;
                 error_log("Cleanup failed for store {$store['id']}: " . $e->getMessage());
             }
         }
-        return "cleaned {$totalCleaned}";
+        return "cleaned {$totalCleaned}, {$errors} errors";
     }
 
     /**

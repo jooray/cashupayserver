@@ -150,5 +150,20 @@ check(UpdateCheck::run() === 'update available', 'a six-hour-old answer is asked
 Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time() - 3601, 'failed' => true]);
 check(UpdateCheck::run() === 'update available', 'a failure is retried after an hour even with an older answer cached');
 
+echo "Opportunistic check from a page load (runIfDue)\n";
+Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time()]);
+UpdateCheck::runIfDue();
+check(Config::get('update_check_state')['at'] <= time() && empty(Config::get('update_check_state')['ok_at']),
+    'a fresh answer is not re-fetched from a page load');
+Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time() - 21601]);
+UpdateCheck::runIfDue();
+$st = Config::get('update_check_state');
+check(!empty($st['ok_at']) && empty($st['failed']) && $st['latest'] === '0.9.9', 'a due check runs from a page load');
+Config::set('update_check_enabled', false);
+Config::set('update_check_state', ['latest' => '0.9.9', 'at' => time() - 21601]);
+UpdateCheck::runIfDue();
+check(empty(Config::get('update_check_state')['ok_at']), 'and respects the opt-out');
+Config::set('update_check_enabled', true);
+
 echo "\n$passed passed, $failed failed\n";
 exit($failed === 0 ? 0 : 1);

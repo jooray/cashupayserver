@@ -325,8 +325,18 @@ check($resolved['found'] && $resolved['amount'] === $balBefore && $resolved['acc
 $exp2 = Invoice::exportNamespaceAsToken($oldMint, 'sat', $storeAccount);
 check($exp2['amount'] === $balBefore, 're-export before marking recovered still yields the funds (read-only)');
 
-$marked = Invoice::markNamespaceRecovered($oldMint, 'sat', $storeAccount);
+$marked = Invoice::markNamespaceRecovered($oldMint, 'sat', $storeAccount, $exp['secrets']);
 check($marked === $exp['count'], "mark recovered marks all {$exp['count']} exported proofs");
+
+// The stranded-funds tools refuse a wallet a store still uses: exporting it as
+// "stranded" and marking it recovered would write off live money.
+$liveRefused = false;
+try {
+    Invoice::exportNamespaceAsToken('https://some-other-mint.example', 'sat', $storeAccount);
+} catch (Exception $e) {
+    $liveRefused = true;
+}
+check($liveRefused, 'stranded export refuses the store\'s live wallet');
 $strandedAfter = Invoice::scanStrandedNamespaces();
 $stillThere = false;
 foreach ($strandedAfter as $s) {

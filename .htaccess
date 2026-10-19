@@ -54,9 +54,13 @@
     RewriteRule ^docs/ - [F,L]
     RewriteRule ^tests/ - [F,L]
     RewriteRule ^wordpress/ - [F,L]
+    # The wallet database, its WAL sidecars, sessions and the setup token. data/ ships
+    # its own .htaccess too; this covers a server that ignores per-directory files there.
+    RewriteRule ^data(/|$) - [F,L]
+    RewriteRule \.sqlite(-wal|-shm|-journal)?$ - [F,L]
     # The FilesMatch above only covers dotted *basenames*, so a request for
     # .git/config was allowed through as a normal path.
-    RewriteRule (^|/)\.(git|svn|hg|env|claude)(/|$) - [F,L]
+    RewriteRule (^|/)\.(git|github|svn|hg|env|claude)(/|$) - [F,L]
 </IfModule>
 
 # PHP settings (if allowed)

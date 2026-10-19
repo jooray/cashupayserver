@@ -79,6 +79,24 @@ function askHidden(string $question): string {
     return $line;
 }
 
+/**
+ * Release tags of this checkout that belong to $version ("0.5.6" -> v0.5.6, v0.5.6-alpha, …),
+ * or null when git is not available.
+ *
+ * @return string[]|null
+ */
+function releaseTagsFor(string $version): ?array {
+    global $root;
+    if (!is_dir($root . '/.git') && !is_file($root . '/.git')) {
+        return null;
+    }
+    $out = [];
+    $code = 0;
+    exec('git -C ' . escapeshellarg($root) . ' tag -l ' . escapeshellarg("v$version") . ' '
+        . escapeshellarg("v$version-*") . ' 2>/dev/null', $out, $code);
+    return $code === 0 ? array_values(array_filter(array_map('trim', $out))) : null;
+}
+
 function isVersion(string $v): bool {
     return (bool)preg_match('/^[0-9]+(\.[0-9]+){0,3}(-[A-Za-z0-9.]{1,20})?$/', $v);
 }
@@ -156,7 +174,14 @@ function describe(array $manifest): void {
     foreach ($notice['ranges'] as $r) {
         out('    shuts down versions ' . ($r['from'] ?? 'any') . ' <= v < ' . ($r['fixed'] ?? '(no fixed version yet — every newer version too!)'));
     }
-    foreach (['0.5.4-alpha', CASHUPAY_VERSION] as $v) {
+    $versions = ['0.5.4-alpha', CASHUPAY_VERSION];
+    foreach ($notice['ranges'] as $r) {
+        if ($r['fixed'] !== null) {
+            $versions[] = $r['fixed'];
+            $versions[] = SafeMode::versionCore($r['fixed']) . '-alpha';
+        }
+    }
+    foreach (array_unique($versions) as $v) {
         out("    {$v}: " . (SafeMode::matchingRange($notice['ranges'], $v) ? 'SHUT DOWN' : 'runs'));
     }
 }
@@ -290,6 +315,22 @@ if ($from === '' && $fixed === '') {
 if ($from !== '' && $fixed !== '' && version_compare($from, $fixed, '>=')) {
     fail('The fixed version must be newer than the first affected one.');
 }
+// Installs compare a bound without a suffix against their version's numeric core, so
+// "0.5.6" covers 0.5.6-alpha (SPB-OPS-006). Still warn when no such release exists:
+// the default upgrade link names the tag, and a typo here shuts down the fix release.
+$fixedTags = $fixed !== '' ? releaseTagsFor($fixed) : [];
+if ($fixed !== '' && $fixedTags !== null) {
+    if (!in_array("v$fixed", $fixedTags, true)) {
+        out();
+        out("WARNING: there is no git tag v$fixed in this checkout"
+            . ($fixedTags ? ' (found: ' . implode(', ', $fixedTags) . ').' : '.'));
+        out('  That is fine if you tag the fix release later, but check the version and the');
+        out('  upgrade link below. The summary shows whether the fix release would still be shut down.');
+        out();
+    }
+} elseif ($fixed !== '') {
+    out("(Could not list git tags here; make sure v$fixed — or v$fixed-<suffix> — is the release with the fix.)");
+}
 
 out('Reason: one plain sentence a shop owner understands. It is shown on every');
 out('affected install and is public.');
@@ -297,8 +338,9 @@ $reason = ask('Reason');
 if ($reason === '') {
     fail('A reason is required.');
 }
-$defaultUrl = $fixed !== ''
-    ? "https://github.com/jooray/cashupayserver/releases/tag/v$fixed"
+$fixedTag = $fixed !== '' ? (in_array("v$fixed", $fixedTags ?? [], true) ? "v$fixed" : ($fixedTags[0] ?? null)) : null;
+$defaultUrl = $fixedTag !== null
+    ? "https://github.com/jooray/cashupayserver/releases/tag/$fixedTag"
     : 'https://github.com/jooray/cashupayserver/releases';
 $url = ask('Upgrade link (github.com/jooray/cashupayserver/… or cashupayserver.org)', $defaultUrl);
 
@@ -311,6 +353,13 @@ out('Summary');
 out('  shuts down : ' . ($from ?: 'any') . ' <= version < ' . ($fixed ?: 'NO FIXED VERSION (all newer too)'));
 out('  0.5.4-alpha: ' . (SafeMode::matchingRange($content['affected'], '0.5.4-alpha') ? 'SHUT DOWN' : 'runs'));
 out('  ' . CASHUPAY_VERSION . ' (this checkout): ' . (SafeMode::matchingRange($content['affected'], CASHUPAY_VERSION) ? 'SHUT DOWN' : 'runs'));
+if ($fixed !== '') {
+    // The release about to carry the fix must run, in every spelling it may ship under.
+    foreach (array_unique(array_merge([$fixed, "$fixed-alpha"], array_map(fn($t) => substr($t, 1), $fixedTags ?? []))) as $v) {
+        $state = SafeMode::matchingRange($content['affected'], $v) ? 'SHUT DOWN  <-- the fix release would stay down!' : 'runs';
+        out('  ' . $v . ' (fix release): ' . $state);
+    }
+}
 out('  reason     : ' . $reason);
 out('  link       : ' . $url);
 out();

@@ -98,6 +98,25 @@ CashuPayServer sits between custodial payment gateways and full self-hosting:
 2. In WordPress admin, go to **Plugins → Add New → Upload Plugin**
 3. **Upload** the zip file and activate
 4. Go to **Tools → CashuPay** to configure
+
+**If your site runs on nginx** (ask your hosting provider if you are not sure): the plugin
+may keep its wallet in `wp-content/cashupay-data/`, inside the website, and nginx does not
+read the `.htaccess` file that protects that folder on Apache. Add this rule to the site's
+`server { }` block, above the other `location` lines, and reload nginx:
+
+```nginx
+location ~* ^/wp-content/cashupay-data/ { deny all; }
+```
+
+If WordPress lives in a subfolder (for example `/shop/`), put that in front:
+`^/shop/wp-content/cashupay-data/`. CashuPay checks this itself and shows a red warning in
+WP Admin, with the exact rule for your site, when the folder can be downloaded. The other
+fix is to keep the folder outside the website: move it, then tell the plugin where it is
+with a line in `wp-config.php` (above *"That's all, stop editing!"*):
+
+```php
+define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');
+```
 5. Optionally integrates with the BTCPay for WooCommerce plugin if installed (configured during setup), or paste the pairing URL into BTCPay plugin settings manually
 
 ### Deployment Options
@@ -142,13 +161,26 @@ location /cashupayserver/ {
         try_files $uri /cashupayserver/payment.php?id=$1;
     }
 
-    # Block sensitive directories
-    location ~ ^/cashupayserver/(data|includes|cashu-wallet-php)/ {
+    # Block sensitive directories (the same list the included .htaccess blocks).
+    # data/ holds your wallet: the database, its -wal/-shm files, sessions and the setup code.
+    location ~ ^/cashupayserver/(data|includes|cashu-wallet-php|mint-discovery|btcpayserver-api-docs|scripts|docker|docs|tests|wordpress)(/|$) {
         deny all;
-        return 403;
+    }
+
+    # Second line of defence: the database and its sidecar files, wherever they are
+    location ~* \.(sqlite|db)(-wal|-shm|-journal)?$ {
+        deny all;
+    }
+
+    # Dotfiles (.git, .env, .htaccess, ...)
+    location ~ /\. {
+        deny all;
     }
 }
 ```
+
+If you installed into a different folder, replace every `/cashupayserver/` above with
+your folder's path (or with `/` if CashuPayServer is the whole site).
 
 Then use:
 ```
@@ -173,25 +205,22 @@ Upgrading never touches your ecash. Your database (`data/`, or `cashupay-data` f
 
 ### Standalone (Shared Hosting)
 
-1. **Back up first** (recommended): copy the `data/` folder and `includes/config.local.php` (if you created one) somewhere safe, such as your own computer.
+1. **Back up first**: in the dashboard, go to **Settings → Wallet backup** and click **Download database backup**. Keep the file on your own computer.
 2. **Download** the new `cashupayserver.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases).
 3. **Extract** it on your computer.
-4. **Upload** the extracted files over your existing installation via FTP or your host's file manager, overwriting the old files. The release zip never includes a `data/` folder or `config.local.php`, so a normal overwrite can't touch them.
-   - **Important**: if your FTP client offers a "mirror" or "delete extra files" sync mode, don't use it here — that could delete your `data/` directory along with everything in it. Do a plain upload/overwrite instead.
-5. **Open** your CashuPayServer URL in a browser. The database upgrades itself automatically on this first request — you should land straight on your normal admin dashboard, not the setup wizard.
-
-**Safer alternative**: if you'd rather not rely on the zip simply not containing `data/`, temporarily move `data/` and `includes/config.local.php` out of the installation folder before uploading the new files, then move them back afterward.
+4. **Upload** the extracted files over your existing installation with your host's file manager or FTP program, overwriting the old files. Your database is not in the zip, so a normal upload cannot overwrite it. (The zip's `data` folder holds only two small protection files; uploading them is safe.)
+   - **Important**: if your FTP program offers a "mirror" or "delete extra files" mode, don't use it here — that could delete your data folder along with everything in it. Do a plain upload/overwrite instead.
+5. **Open** your CashuPayServer dashboard in a browser. The database upgrades itself on this first visit — you should land on your normal dashboard, not the setup wizard.
 
 ### WordPress Plugin
 
-The plugin keeps its database in a `cashupay-data` folder *outside* the plugin's own directory (normally one level above your WordPress installation, or inside `wp-content/cashupay-data` if that's not possible — the exact path is shown on the **Tools → CashuPay** admin page). Updating the plugin only replaces its code folder, so this data is never touched.
+The plugin keeps its database in a `cashupay-data` folder *outside* the plugin's own directory (the exact path is shown in the CashuPay dashboard under **Settings → Wallet backup**). Updating the plugin only replaces its code, so this data is never touched.
 
-1. **Back up first** (recommended): copy the `cashupay-data` folder (path shown on **Tools → CashuPay**) somewhere safe.
+1. **Back up first**: click **Download database backup** in the CashuPay dashboard (**Settings → Wallet backup**).
 2. **Download** the new `cashupay-wordpress.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases).
-3. Update the plugin using either method:
-   - **WP Admin (easiest)**: go to **Plugins**, deactivate and delete the existing CashuPay plugin, then go to **Plugins → Add New → Upload Plugin** and upload the new zip. Deleting the plugin does not remove `cashupay-data` — it's deliberately left in place.
-   - **FTP/file manager**: replace the contents of the plugin's folder (usually `wp-content/plugins/cashupay/`) with the files from the new zip.
-4. **Activate** the plugin if needed, then open **Tools → CashuPay**. The database upgrades itself automatically on this first load.
+3. In WordPress go to **Plugins → Add New → Upload Plugin**, choose the zip and click **Install Now**. WordPress notices the plugin is already installed: click **Replace current with uploaded**.
+   - Do **not** delete the plugin to upgrade it. Deleting runs the plugin's clean-up, which also disconnects WooCommerce from CashuPay, and you would have to connect the shop again. Your money and the CashuPay data stay either way.
+4. Open **Tools → CashuPay**. The database upgrades itself on this first visit.
 
 ### After Upgrading
 
@@ -211,12 +240,24 @@ The `data/` directory contains your SQLite database with ecash tokens (real Bitc
 
 **Apache**: The `.htaccess` file handles this automatically, if enabled and honored. Verify.
 
-**nginx**: Add `location /data/ { deny all; }` to your config.
+**nginx**: nginx ignores `.htaccess`, so you must add a rule. Use the full block from
+[Option 3: nginx](#option-3-nginx) above. The essential lines, for an install in
+`/cashupayserver/` (use your own folder's path; a rule for `/data/` alone does not match
+`/cashupayserver/data/`):
 
-**Verify protection**:
+```nginx
+location ~ ^/cashupayserver/data(/|$) { deny all; }
+location ~* \.(sqlite|db)(-wal|-shm|-journal)?$ { deny all; }
+```
+
+For the WordPress plugin the folder is usually `wp-content/cashupay-data/`:
+`location ~* ^/wp-content/cashupay-data/ { deny all; }`.
+
+**Verify protection** (the `-wal` file holds the most recent payments and needs the same protection):
 ```bash
 curl -I https://yoursite.com/cashupayserver/data/cashupay.sqlite
-# Should return 403 Forbidden or 404 Not Found, NOT the file!
+curl -I https://yoursite.com/cashupayserver/data/cashupay.sqlite-wal
+# Both should return 403 Forbidden or 404 Not Found, NOT the file!
 ```
 
 **Best practice**: Store data outside web root by creating `includes/config.local.php`:
@@ -317,6 +358,9 @@ The distribution zip only includes necessary files. The git repository contains 
 | `mint-discovery/` | Node.js source | Info leak |
 | `scripts/` | Build scripts | Info leak |
 | `docker/` | Docker configs | Info leak |
+| `docs/`, `btcpayserver-api-docs/` | Documentation | Info leak |
+| `tests/` | Test scripts (command-line only) | Info leak |
+| `wordpress/` | Plugin source (unused in standalone) | Info leak |
 
 ### Apache (Development)
 
@@ -338,19 +382,18 @@ curl -I http://localhost/cashu-wallet-php/test-wallet.php
 nginx ignores `.htaccess`. Add this to your server block:
 
 ```nginx
-# Block sensitive directories
-location ~ ^/(data|includes|cashu-wallet-php|mint-discovery|scripts|docker|docs|\.claude)/ {
+# Block sensitive directories (the same list the included .htaccess blocks)
+location ~ ^/(data|includes|cashu-wallet-php|mint-discovery|btcpayserver-api-docs|scripts|docker|docs|tests|wordpress)(/|$) {
     deny all;
-    return 403;
 }
 
-# Block dotfiles
+# Block dotfiles (.git, .env, .claude, ...)
 location ~ /\. {
     deny all;
 }
 
-# Block database files
-location ~* \.(sqlite|db)$ {
+# Block database files, including the -wal/-shm sidecars SQLite writes next to them
+location ~* \.(sqlite|db)(-wal|-shm|-journal)?$ {
     deny all;
 }
 ```

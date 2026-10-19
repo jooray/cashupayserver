@@ -5,7 +5,68 @@
  * Utilities for testing and interacting with Cashu mints.
  */
 
+require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/config.php';
+
 class MintHelpers {
+    /**
+     * Check an operator-supplied mint URL before the server talks to it (SPB-SSRF-001).
+     *
+     * The server fetches whatever mint URL it is given, from setup and the dashboard.
+     * Pointed at 127.0.0.1, a LAN router or a cloud metadata address, that turns the
+     * "test this mint" button into a way to probe the server's private network and read
+     * back error text from it. Mints live on the public internet, so a host that resolves
+     * to a private or reserved address is refused unless the operator opted in with the
+     * `allow_private_mints` setting (or CASHUPAY_ALLOW_PRIVATE_MINTS in
+     * config.local.php), e.g. for a test mint on their own machine.
+     *
+     * @return string The canonical mint URL
+     * @throws \InvalidArgumentException with a message fit to show the operator
+     */
+    public static function assertSafeMintUrl(string $mintUrl): string {
+        require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
+
+        try {
+            $canonical = \Cashu\MintClient::canonicalizeMintUrl($mintUrl);
+        } catch (\Throwable $e) {
+            throw new \InvalidArgumentException(
+                'That does not look like a mint address. It should start with https:// (for example https://mint.example.com).'
+            );
+        }
+
+        $target = Security::resolveTarget($canonical);
+        if ($target === null) {
+            throw new \InvalidArgumentException(
+                'The mint\'s address could not be found. Check it for typos and try again.'
+            );
+        }
+
+        if (!self::privateMintsAllowed()) {
+            foreach ($target['ips'] as $ip) {
+                if (!Security::isPublicIp($ip)) {
+                    throw new \InvalidArgumentException(
+                        'That address points to a private or local network, not a public mint. '
+                        . 'Use a mint on the internet (its address usually starts with https://).'
+                    );
+                }
+            }
+        }
+
+        return $canonical;
+    }
+
+    private static function privateMintsAllowed(): bool {
+        if (defined('CASHUPAY_ALLOW_PRIVATE_MINTS') && CASHUPAY_ALLOW_PRIVATE_MINTS) {
+            return true;
+        }
+        try {
+            $flag = Config::get('allow_private_mints');
+        } catch (\Throwable $e) {
+            return false;
+        }
+        return $flag === true || $flag === 1 || $flag === '1' || $flag === 'true';
+    }
+
     /**
      * Test mint invoice expiry by creating a small test quote.
      *
@@ -17,6 +78,17 @@ class MintHelpers {
      */
     public static function testExpiry(string $mintUrl, string $unit): array {
         require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
+
+        try {
+            $mintUrl = self::assertSafeMintUrl($mintUrl);
+        } catch (\InvalidArgumentException $e) {
+            return [
+                'success' => false,
+                'error' => $e->getMessage(),
+                'warning' => false,
+                'expiry_seconds' => null
+            ];
+        }
 
         try {
             // Get minimum amount from mint info (NUT-4)
@@ -51,7 +123,7 @@ class MintHelpers {
                     ? "Invoice expiry is only " . round($expirySeconds / 60, 1) . " minutes. This may cause payment issues for customers."
                     : null
             ];
-        } catch (Exception $e) {
+        } catch (Throwable $e) {
             return [
                 'success' => false,
                 'error' => $e->getMessage(),

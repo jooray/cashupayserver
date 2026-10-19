@@ -1,8 +1,8 @@
 {
-  "version": "0.5.5-alpha",
-  "released": "2026-09-25",
-  "url": "https://github.com/jooray/cashupayserver/releases/tag/v0.5.5-alpha",
-  "severity": "important",
+  "version": "0.5.6-alpha",
+  "released": "2026-10-19",
+  "url": "https://github.com/jooray/cashupayserver/releases/tag/v0.5.6-alpha",
+  "severity": "security",
   "min_supported": "0.5.0-alpha",
-  "notes": "What changed, in one sentence an operator can act on."
+  "notes": "Security and payment-safety fixes from three independent audits; upgrade now, keeping your data folder."
 }

@@ -9,15 +9,16 @@
  * channel would be a worse vulnerability than the one it closes.
  *
  * What travels: one HTTP GET for a static file, every six hours, from the background
- * runner. No instance identifier, no version, no store count, no POST body, no
+ * runner or (runIfDue()) an admin dashboard load. No instance identifier, no version, no store count, no POST body, no
  * cookies, and a User-Agent that names the software but not which release it is.
  * The comparison happens here, on the operator's own machine; the server learns
  * only that somebody asked for a file. That is still a phone-home, which is why
  * `update_check_enabled` turns it off and the settings toggle says plainly what
  * it does.
  *
- * Nothing here is allowed to throw or to slow a page down. Checking happens on
- * the runner's schedule; the admin UI reads the last cached answer and nothing
+ * Nothing here is allowed to throw or to slow a page down much. Checking happens on
+ * the runner's schedule, or at most once per schedule slot from a dashboard load with a
+ * 3-second cap (runIfDue); status() reads the last cached answer and nothing
  * else, so the day this endpoint is unreachable is a day the admin page is
  * exactly as fast as always and says nothing about it.
  */
@@ -105,12 +106,7 @@ class UpdateCheck
 
         $state = Config::get(self::CACHE_KEY);
         $state = is_array($state) ? $state : [];
-        // `at` is the last attempt; `failed` says whether it failed. A failure is retried
-        // after an hour even when an older answer is cached — keying the retry on "no
-        // answer yet" made every failure after a success wait the full interval.
-        $last = (int)($state['at'] ?? 0);
-        $wait = !empty($state['failed']) || empty($state['latest']) ? self::RETRY_INTERVAL : self::INTERVAL;
-        if ($last > time() - $wait) {
+        if (!self::due($state)) {
             return 'skipped';
         }
 
@@ -131,6 +127,55 @@ class UpdateCheck
     }
 
     /**
+     * Run the check from an ordinary page load when it is due (SPB-OPS-005).
+     *
+     * The signed emergency notice rides on this request, and the background runner is
+     * the only other caller — an install with no cron and no pinned server address never
+     * runs it. So admin dashboard loads call this: same schedule (six hours, an hour
+     * after a failure), same opt-out, a short timeout, and it never throws. The slot is
+     * claimed before fetching, so concurrent page loads do not all fetch.
+     */
+    public static function runIfDue(): void
+    {
+        try {
+            if (!self::enabled()) {
+                return;
+            }
+            $state = Config::get(self::CACHE_KEY);
+            $state = is_array($state) ? $state : [];
+            if (!self::due($state)) {
+                return;
+            }
+            // Provisional: counts as a failed attempt unless the fetch below succeeds.
+            $state['at'] = time();
+            $state['failed'] = true;
+            Config::set(self::CACHE_KEY, $state);
+
+            $fetched = self::fetch(self::endpoint(), 3);
+            if ($fetched === null) {
+                return;
+            }
+            $fetched['at'] = time();
+            $fetched['ok_at'] = $fetched['at'];
+            Config::set(self::CACHE_KEY, $fetched);
+        } catch (Throwable $e) {
+            error_log('CashuPayServer: update check failed: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * `at` is the last attempt; `failed` says whether it failed. A failure is retried
+     * after an hour even when an older answer is cached — keying the retry on "no
+     * answer yet" made every failure after a success wait the full interval.
+     */
+    private static function due(array $state): bool
+    {
+        $last = (int)($state['at'] ?? 0);
+        $wait = !empty($state['failed']) || empty($state['latest']) ? self::RETRY_INTERVAL : self::INTERVAL;
+        return $last <= time() - $wait;
+    }
+
+    /**
      * Fetch and validate the manifest. Null on anything unexpected.
      *
      * The URL in the response becomes a link an operator is invited to click while
@@ -138,7 +183,7 @@ class UpdateCheck
      * to point them anywhere it likes. It has to be HTTPS, and on the host serving
      * the manifest or on the release host.
      */
-    private static function fetch(string $url): ?array
+    private static function fetch(string $url, int $timeout = 8): ?array
     {
         $ch = curl_init($url);
         if ($ch === false) {
@@ -156,8 +201,8 @@ class UpdateCheck
                 $body .= $chunk;
                 return strlen($chunk);
             },
-            CURLOPT_CONNECTTIMEOUT => 3,
-            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_CONNECTTIMEOUT => min(3, $timeout),
+            CURLOPT_TIMEOUT        => $timeout,
             CURLOPT_FOLLOWLOCATION => false,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_SSL_VERIFYHOST => 2,

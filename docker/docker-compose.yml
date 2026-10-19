@@ -1,0 +1,41 @@
+# Test environments for CashuPayServer (see DOCKER.md). Both use port 80, so start one:
+#
+#   docker compose -f docker/docker-compose.yml --profile wordpress up -d --build
+#   docker compose -f docker/docker-compose.yml --profile standalone up -d --build
+#
+# Data survives restarts and rebuilds in the named volumes below. `down -v` deletes it,
+# including the test wallet.
+services:
+  wordpress:
+    profiles: [wordpress]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.wordpress
+    image: cashupayserver-wordpress
+    container_name: cashupay-wordpress
+    ports:
+      - "127.0.0.1:80:80"
+    volumes:
+      # WordPress, its SQLite database and the plugin's wp-content/cashupay-data folder.
+      - wp_data:/var/www/html
+    restart: unless-stopped
+
+  standalone:
+    profiles: [standalone]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.standalone
+    image: cashupayserver-standalone
+    container_name: cashupay-standalone
+    ports:
+      - "127.0.0.1:80:80"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - standalone_wp_data:/var/www/html
+      - cashupay_data:/opt/cashupayserver/data
+    restart: unless-stopped
+
+volumes:
+  wp_data:
+  standalone_wp_data:
+  cashupay_data:

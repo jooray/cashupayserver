@@ -43,15 +43,53 @@ class WebhookSender {
         );
 
         foreach ($webhooks as $webhook) {
-            $events = json_decode($webhook['events'], true) ?? [];
-
-            // If events is empty, it means "everything"
-            if (!empty($events) && !in_array($eventType, $events)) {
+            if (!self::subscribesTo($webhook, $eventType)) {
                 continue;
             }
 
             self::enqueueWebhook($webhook, $eventType, $invoiceData);
         }
+    }
+
+    /**
+     * Event types a webhook may subscribe to: BTCPay's full set, so a client that asks
+     * for events this server never emits (payouts, payment requests) still pairs.
+     */
+    public const KNOWN_EVENTS = [
+        'InvoiceCreated', 'InvoiceReceivedPayment', 'InvoiceProcessing', 'InvoiceExpired',
+        'InvoiceSettled', 'InvoiceInvalid', 'InvoicePaymentSettled',
+        'PayoutCreated', 'PayoutApproved', 'PayoutUpdated',
+        'PaymentRequestCreated', 'PaymentRequestUpdated', 'PaymentRequestArchived',
+        'PaymentRequestStatusChanged',
+    ];
+
+    /**
+     * Whether a stored webhook row wants this event.
+     *
+     * This runs inside the settlement transaction, so it must never throw: a stored
+     * events value that is not a list of strings (written before the API validated it)
+     * used to raise a TypeError there, roll the settlement back on every poll and leave
+     * the invoice in Processing for good (DS41-05). Such a row is treated as "every
+     * event" — delivering too much is recoverable, a vetoed payment is not.
+     */
+    public static function subscribesTo(array $webhook, string $eventType): bool {
+        $events = json_decode((string)($webhook['events'] ?? ''), true);
+        if (!is_array($events)) {
+            if ($events !== null && $events !== '') {
+                error_log("CashuPayServer: webhook {$webhook['id']} has a malformed event list; sending it every event");
+            }
+            return true;
+        }
+        // An empty list means "everything" (BTCPay's authorizedEvents.everything).
+        if (empty($events)) {
+            return true;
+        }
+        foreach ($events as $event) {
+            if (is_string($event) && $event === $eventType) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -133,34 +171,98 @@ class WebhookSender {
     /**
      * Whether a webhook may be delivered to this URL.
      *
-     * Public HTTP(S) targets are always allowed. In addition, the application's *own*
-     * origin is allowed even when it resolves to a private address: in WordPress plugin
-     * mode the WooCommerce webhook is `site_url('/?wc-api=btcpaygf_default')`, and on a
-     * LAN, in Docker, or behind split-horizon DNS that is exactly the case the plain
-     * anti-SSRF rule refused — payments settled and orders stayed unpaid, silently.
+     * Public HTTP(S) targets on the standard ports (80/443) are always allowed. In
+     * addition, the application's *own* origin is allowed even when it resolves to a
+     * private address: in WordPress plugin mode the WooCommerce webhook is
+     * `site_url('/?wc-api=btcpaygf_default')`, and on a LAN, in Docker, or behind
+     * split-horizon DNS that is exactly the case the plain anti-SSRF rule refused —
+     * payments settled and orders stayed unpaid, silently.
      *
-     * Operators with other internal receivers can opt in with the
-     * `webhook_allow_private_targets` config flag.
+     * Operators with other internal receivers, or a shop on another port, can opt in
+     * with the `webhook_allow_private_targets` config flag.
      */
     public static function isAllowedTarget(string $url): bool {
-        if (Security::isSafePublicHttpUrl($url)) {
-            return true;
-        }
-        if (Config::get('webhook_allow_private_targets')) {
-            return Security::isSafeAppBaseUrl($url);
-        }
-        return self::isOwnOrigin($url);
+        return self::planDelivery($url) !== null;
     }
 
-    /** True when the URL points at this installation's own host. */
-    private static function isOwnOrigin(string $url): bool {
-        $host = strtolower((string)parse_url($url, PHP_URL_HOST));
-        if ($host === '' || !Security::isSafeAppBaseUrl($url)) {
-            return false;
+    /**
+     * Decide whether and how to connect to a webhook URL, resolving DNS exactly once.
+     *
+     * Returns the CURLOPT_RESOLVE entries that pin the connection to the addresses that
+     * were checked (empty for a literal IP), or null when the target is refused. The old
+     * flow validated one lookup and pinned a second, unvalidated one (DS41-03).
+     *
+     * @return string[]|null
+     */
+    public static function planDelivery(string $url): ?array {
+        if (!self::isPlainHttpUrl($url)) {
+            return null;
+        }
+        $isOwn = self::isOwnOrigin($url);
+        $allowPrivate = (bool)Config::get('webhook_allow_private_targets');
+
+        if (!$isOwn && !$allowPrivate) {
+            // Other ports on a public host are other services, not a shop (SPB-SEC-004).
+            $port = parse_url($url, PHP_URL_PORT);
+            if ($port !== null && $port !== false && !in_array((int)$port, [80, 443], true)) {
+                return null;
+            }
+            return Security::resolvePublicTarget($url)['resolve'] ?? null;
         }
 
-        $ownHost = strtolower((string)parse_url(Urls::siteBase(), PHP_URL_HOST));
-        return $ownHost !== '' && $host === $ownHost;
+        // Own origin or explicit opt-in: private addresses are fine, but the connection
+        // still goes to the addresses resolved here and nowhere else.
+        $target = Security::resolveTarget($url);
+        return $target === null ? null : $target['resolve'];
+    }
+
+    /** An http(s) URL with a host and no credentials (a query string is fine). */
+    private static function isPlainHttpUrl(string $url): bool {
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['host']) || empty($parts['scheme'])) {
+            return false;
+        }
+        if (isset($parts['user']) || isset($parts['pass'])) {
+            return false;
+        }
+        return in_array(strtolower($parts['scheme']), ['http', 'https'], true);
+    }
+
+    /**
+     * True when the URL points at this installation's own origin: same host and the
+     * same effective port as Urls::siteBase() (DS41-19). Comparing the host alone made
+     * every port on the server — Redis, Elasticsearch, a metrics endpoint — "our own".
+     * The http/https twin on the default ports is accepted too, for TLS terminated by a
+     * proxy in front.
+     */
+    public static function isOwnOrigin(string $url): bool {
+        // Without a configured base_url, siteBase() falls back to the request's Host
+        // header, which the API caller chooses: "own origin" would be whatever they say.
+        if (!Urls::isWordPress() && !Config::get('base_url')) {
+            return false;
+        }
+        $target = parse_url($url);
+        $own = parse_url(Urls::siteBase());
+        if (!$target || !$own || empty($target['host']) || empty($own['host'])) {
+            return false;
+        }
+        if (strtolower($target['host']) !== strtolower($own['host'])) {
+            return false;
+        }
+        $targetScheme = strtolower($target['scheme'] ?? '');
+        $ownScheme = strtolower($own['scheme'] ?? '');
+        if (!in_array($targetScheme, ['http', 'https'], true) || !in_array($ownScheme, ['http', 'https'], true)) {
+            return false;
+        }
+        $defaultPort = static fn(string $scheme) => $scheme === 'http' ? 80 : 443;
+        $targetPort = (int)($target['port'] ?? $defaultPort($targetScheme));
+        $ownPort = (int)($own['port'] ?? $defaultPort($ownScheme));
+
+        if ($targetScheme === $ownScheme) {
+            return $targetPort === $ownPort;
+        }
+        // Scheme differs: only the two standard origins of the same host.
+        return $targetPort === $defaultPort($targetScheme) && $ownPort === $defaultPort($ownScheme);
     }
 
     /**
@@ -173,11 +275,18 @@ class WebhookSender {
 
     /**
      * Send HTTP request
+     *
+     * The stored result is deliberately coarse: the deliveries API hands it to anyone
+     * holding the webhook permission, and raw cURL errors ("Connection refused" vs.
+     * "timed out" per port) turned it into a port scanner (SPB-SEC-004). The detail
+     * goes to the server log instead.
      */
     private static function sendRequest(string $url, string $payload, string $signature): array {
         // Anti-SSRF: refuse non-public / non-http(s) targets at delivery time too
-        // (defence in depth; the create/update handlers validate as well).
-        if (!self::isAllowedTarget($url)) {
+        // (defence in depth; the create/update handlers validate as well). The same
+        // lookup decides and pins, so DNS cannot change the answer in between.
+        $resolve = self::planDelivery($url);
+        if ($resolve === null) {
             return [
                 'status_code' => 0,
                 'response' => 'blocked: webhook URL is not an allowed target',
@@ -201,33 +310,31 @@ class WebhookSender {
                 'User-Agent: CashuPayServer/1.0',
             ],
         ] + cashupay_curl_protocol_options();
-
-        // Connect to the address the safety check approved. Validating DNS and then
-        // letting cURL resolve again leaves a rebinding window.
-        $resolve = Security::resolveOptionFor($url);
         if (!empty($resolve)) {
             $options[CURLOPT_RESOLVE] = $resolve;
         }
 
         curl_setopt_array($ch, $options);
 
-        $response = curl_exec($ch);
+        curl_exec($ch);
         $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $errno = curl_errno($ch);
         $error = curl_error($ch);
 
-        if ($error) {
+        if ($errno !== 0 || $error !== '') {
+            error_log('CashuPayServer: webhook delivery to ' . (string)parse_url($url, PHP_URL_HOST)
+                . ' failed: ' . $error);
             return [
                 'status_code' => 0,
-                'response' => 'cURL error: ' . $error,
+                'response' => $errno === CURLE_OPERATION_TIMEDOUT ? 'timed out' : 'connection failed',
             ];
         }
 
-        // Do not persist the full response body (it could contain data fetched from an
-        // internal target if the URL check were ever bypassed). Store only a short,
-        // length-capped marker for debugging.
+        // Do not persist the response body (it could contain data fetched from an
+        // internal target if the URL check were ever bypassed), nor its size.
         return [
             'status_code' => $statusCode,
-            'response' => 'delivered (HTTP ' . (int)$statusCode . ', ' . strlen((string)$response) . ' bytes)',
+            'response' => 'delivered (HTTP ' . (int)$statusCode . ')',
         ];
     }
 
