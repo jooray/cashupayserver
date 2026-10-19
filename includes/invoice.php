@@ -1735,6 +1735,13 @@ class Invoice {
             foreach (Config::getStoreWalletAccounts($store['id']) as $account) {
                 $label = $store['id'] . '|' . $account['mint_url'] . '|' . $account['unit'];
                 try {
+                    // Nothing journaled here: don't contact the mint. Asking every mint of
+                    // every store on each run got backup mints to rate-limit us.
+                    $local = new Wallet($account['mint_url'], $account['unit'], Database::getDbPath(),
+                        Config::getStore($store['id'])['wallet_account_id']);
+                    if ($local->getStorage()->getPendingOperations() === []) {
+                        continue;
+                    }
                     $wallet = self::getWalletForStore($store['id'], $account['mint_url'], $account['unit']);
                     $melts = $wallet->recoverPendingMelts();
                     $swaps = $wallet->recoverPendingSwaps();

@@ -180,8 +180,14 @@ function cashupay_diagnostics(?string $storeId): array {
                 break;
             }
         }
-        $unreachableAccounts[] = ['mint' => $mint, 'primary' => $isPrimary];
+        // Several stores can share a mint; one line per mint is enough.
+        $unreachableAccounts[rtrim($mint, '/')] = [
+            'mint' => $mint,
+            'primary' => $isPrimary,
+            'error' => is_string($error) ? $error : null,
+        ];
     }
+    $unreachableAccounts = array_values($unreachableAccounts);
 
     // Accounts still scanning the seed's history at a mint (after a mint change, an
     // imported seed or a new backup mint). A primary one means new payments wait for it.
@@ -5263,6 +5269,10 @@ $isWp = Urls::isWordPress();
                     ? 'Background tasks have never run. Settlement, auto-withdrawal and webhook delivery depend on them — add the cron job shown during setup.'
                     : `Background tasks last ran ${Math.round(bg.secondsAgo / 60)} min ago.`);
             }
+            const sentence = text => {
+                const t = String(text).trim();
+                return t.charAt(0).toUpperCase() + t.slice(1) + (/[.!?]$/.test(t) ? '' : '.');
+            };
             (diag.pendingTransfers || []).forEach(t => {
                 const amount = `${t.amount} ${(t.unit || 'sat').toUpperCase()}`;
                 if (t.type === 'token_export') {
@@ -5272,13 +5282,15 @@ $isWp = Urls::isWordPress();
                         + 'Under Transfers you can show it again, check whether it has been '
                         + 'used, or take the money back.');
                 } else if (t.type === 'donation') {
-                    items.push(`A donation of ${amount} has not gone through`
-                        + (t.detail ? ` — ${t.detail}` : '')
-                        + '. It keeps retrying; you can also take the money back under Transfers.');
+                    // The detail is the server's own full sentence (it may say the donation
+                    // can never arrive), so it replaces the generic advice.
+                    items.push(`A donation of ${amount} has not gone through. `
+                        + (t.detail ? sentence(t.detail)
+                            : 'It keeps retrying; you can also take the money back under Transfers.'));
                 } else {
-                    items.push(`A withdrawal of ${amount} has not finished yet`
-                        + (t.detail ? ` — ${t.detail}` : '')
-                        + '. Do not send it again; it will resolve on its own.');
+                    items.push(`A withdrawal of ${amount} has not finished yet. `
+                        + (t.detail ? sentence(t.detail) + ' ' : '')
+                        + 'Do not send it again; it will resolve on its own.');
                 }
             });
             (diag.pendingWalletOperations || []).forEach(op => {
@@ -5293,12 +5305,17 @@ $isWp = Urls::isWordPress();
             });
             (diag.unreachableAccounts || []).forEach(a => {
                 const host = (() => { try { return new URL(a.mint).host; } catch (e) { return a.mint; } })();
+                // Only operations left unfinished at this mint bring us here.
+                const busy = /rate limit|too many requests|\b429\b/i.test(a.error || '');
+                const problem = busy
+                    ? `is asking us to slow down (too many requests)`
+                    : `could not be reached on the last check`;
                 items.push(a.primary
-                    ? `Your mint (${host}) could not be reached on the last check. `
-                      + 'While it is down, payments cannot be completed and money cannot be '
-                      + 'withdrawn. Nothing is lost — it resumes when the mint is back.'
-                    : `A backup mint (${host}) could not be reached. Nothing is stored there, `
-                      + 'so this is only worth knowing; remove it under Stores if it stays down.');
+                    ? `Your mint (${host}) ${problem}. `
+                      + 'While this lasts, payments cannot be completed and money cannot be '
+                      + 'withdrawn. Nothing is lost — it resumes on its own.'
+                    : `A backup mint (${host}) ${problem}, so an unfinished operation there `
+                      + 'waits. It is retried automatically; nothing is lost.');
             });
 
             (diag.recoveringAccounts || []).forEach(a => {
