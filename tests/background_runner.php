@@ -43,8 +43,8 @@ check($status['secondsAgo'] !== null && $status['secondsAgo'] < 60, 'the heartbe
 check(is_array($status['taskHealth']) && !empty($status['taskHealth']), 'per-task health survives a round trip');
 check(is_array($status['lastResult']), 'the last result survives a round trip');
 
-$firstTask = array_key_first($status['taskHealth']);
-check(isset($status['taskHealth'][$firstTask]['last_ok']), 'a successful task records last_ok');
+// clean_cache needs no network (update_check, which runs first, fetches the manifest).
+check(isset($status['taskHealth']['clean_cache']['last_ok']), 'a successful task records last_ok');
 
 // Health from earlier runs must accumulate, not be wiped each cycle.
 Config::clearCache();
