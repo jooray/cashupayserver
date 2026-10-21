@@ -45,6 +45,11 @@ if ($setupComplete && $mode !== 'add_store' && ($_POST['step'] ?? '') !== '7') {
     header('Location: ' . Urls::admin());
     exit;
 }
+// add_store adds a store to a finished installation. Before setup is complete there is
+// nothing to add to, so the normal wizard runs (and its password step is not skipped).
+if (!$setupComplete && $mode === 'add_store') {
+    $mode = '';
+}
 
 // Initialize database if needed
 if (!Database::isInitialized()) {
@@ -100,10 +105,32 @@ if (is_string($requestedStep) && ctype_digit($requestedStep)) {
 if (!in_array($step, [1, 2, 4, 5, 6, 7], true)) {
     $step = $mode === 'add_store' ? 4 : 1;
 }
+// Why the requested step was replaced, shown instead of running the replacement step's
+// handler with fields that were posted for another one.
+$stepRefusal = null;
+// A finished installation (and add_store) only runs the store steps. Step 2 sets the admin
+// password with no current-password check and no session revocation; after setup the
+// password changes only through the dashboard (Auth::changeAdminPassword) (C4/H-1).
+if (($mode === 'add_store' || $setupComplete) && $step < 4) {
+    $step = 4;
+    $stepRefusal = 'That step is only part of the first setup. To change the admin password,'
+        . ' open the dashboard and go to Settings.';
+}
+// Standalone setup must not reach the store steps (and above all must not finish) without
+// an admin password: the result would be an installation nobody can log in to, with the
+// recovery code already deleted (L-6).
+if (!$setupComplete && !$isWordPressSetup && $step >= 4 && Config::getAdminPasswordHash() === null) {
+    $step = 2;
+    $stepRefusal = 'Choose an admin password first. Without one, nobody could log in to this server after setup.';
+}
 // A visitor who does not hold the installation only ever sees the first step.
 if ($setupTokenRequired) {
     $step = 1;
+    $stepRefusal = null;
 }
+// Set when the address the browser reports for this server is on another host than the
+// one the request came to; step 1 then asks for an explicit confirmation (M-2).
+$baseUrlOtherHost = null;
 
 $error = null;
 $success = null;
@@ -180,6 +207,10 @@ if ($isPost) {
         exit;
     }
 
+    if ($error === null && $stepRefusal !== null) {
+        $error = $stepRefusal;
+    }
+
     if ($error === null) try {
         switch ($step) {
             case 1: // Welcome + Security (merged step)
@@ -197,24 +228,44 @@ if ($isPost) {
                 if (!$securityPassed && !in_array($probe['status'], ['protected', 'outside'], true)) {
                     throw new Exception('Please verify that your database is protected');
                 }
+                // Pin the canonical origin now, while a verified operator is here. Without
+                // it the base URL is derived from HTTP_HOST, and background self-requests
+                // that carry the internal key have no trusted destination.
+                $pinBaseUrl = null;
+                if (!Config::get('base_url')) {
+                    $detectedBaseUrl = trim(setupField('detected_base_url'));
+                    if ($detectedBaseUrl !== '' && Security::isSafeAppBaseUrl($detectedBaseUrl)) {
+                        // An address on another host would receive the background key and
+                        // every payment link. Ask first, as the dashboard's save_base_url does.
+                        $requestHost = strtolower((string)preg_replace('/:\d+$/', '', (string)($_SERVER['HTTP_HOST'] ?? '')));
+                        $pinnedHost = strtolower((string)parse_url($detectedBaseUrl, PHP_URL_HOST));
+                        if ($requestHost !== '' && $pinnedHost !== $requestHost && setupField('confirm_other_host') !== '1') {
+                            $baseUrlOtherHost = ['pinned' => $pinnedHost, 'request' => $requestHost];
+                            throw new Exception("Your browser shows this server as {$pinnedHost}, but the server"
+                                . " received the request for {$requestHost}. Payment links and background tasks"
+                                . " will use {$pinnedHost}. If that is really the address of this server (for"
+                                . ' example behind a proxy), tick the box below and press the button again.');
+                        }
+                        $pinBaseUrl = rtrim($detectedBaseUrl, '/');
+                    }
+                }
                 $detectedUrlMode = setupField('detected_url_mode');
                 if (in_array($detectedUrlMode, ['direct', 'router'], true)) {
                     Config::set('url_mode', $detectedUrlMode);
                 }
-                // Pin the canonical origin now, while a verified operator is here. Without
-                // it the base URL is derived from HTTP_HOST, and background self-requests
-                // that carry the internal key have no trusted destination.
-                if (!Config::get('base_url')) {
-                    $detectedBaseUrl = trim(setupField('detected_base_url'));
-                    if ($detectedBaseUrl !== '' && Security::isSafeAppBaseUrl($detectedBaseUrl)) {
-                        Config::set('base_url', rtrim($detectedBaseUrl, '/'));
-                    }
+                if ($pinBaseUrl !== null) {
+                    Config::set('base_url', $pinBaseUrl);
                 }
                 // Go to password step (standalone) or create store step (WordPress)
                 $step = Urls::isWordPress() ? 4 : 2;
                 break;
 
             case 2: // Password setup
+                // After setup the password changes only through the dashboard, which checks
+                // the current one and ends every other session (C4/H-1).
+                if ($setupComplete && Config::getAdminPasswordHash() !== null) {
+                    throw new Exception('The admin password is already set. To change it, open the dashboard and go to Settings.');
+                }
                 $password = setupField('password');
                 $confirm = setupField('confirm_password');
 
@@ -242,14 +293,15 @@ if ($isPost) {
                     [$storeName]
                 );
                 if ($existingStore) {
-                    // The operator's own half-finished store (a reload, a new tab, or a
-                    // browser that took over with the recovery code): continue it rather
-                    // than dead-ending on "already exists" (SPB-UI-005). A store with a
-                    // wallet seed is finished and is never taken over from here.
+                    // The operator's own half-finished store (a reload or a new tab): continue
+                    // it rather than dead-ending on "already exists" (SPB-UI-005). Only a store
+                    // this session started: one left by an earlier setup claimant comes with
+                    // that claimant's mint (M-3); a new claim deletes those anyway. A store
+                    // with a wallet seed is finished and is never taken over from here.
                     $createdHere = in_array($existingStore['id'], $_SESSION['setup_created_stores'] ?? [], true)
                         || ($_SESSION['setup_store_id'] ?? null) === $existingStore['id'];
                     $unfinished = empty($existingStore['seed_phrase']);
-                    if ($unfinished && ($createdHere || !$setupComplete)) {
+                    if ($unfinished && $createdHere) {
                         $_SESSION['setup_store_id'] = $existingStore['id'];
                         $step = empty($existingStore['mint_url']) ? 5 : 6;
                         break;
@@ -342,6 +394,10 @@ if ($isPost) {
                     $mnemonic = \Cashu\Mnemonic::generate();
                     $_SESSION['temp_seed'] = $mnemonic;
                 } elseif ($action === 'confirm') {
+                    // Never finish a standalone setup nobody could log in to (L-6).
+                    if (!$isWordPressSetup && $mode !== 'add_store' && Config::getAdminPasswordHash() === null) {
+                        throw new Exception('Choose an admin password first. Without one, nobody could log in to this server after setup.');
+                    }
                     if (!isset($_POST['seed_confirmed'])) {
                         throw new Exception('Please confirm you have saved your seed phrase');
                     }
@@ -444,6 +500,10 @@ if ($isPost) {
     }
 }
 
+if (!$isPost && $error === null && $stepRefusal !== null) {
+    $error = $stepRefusal;
+}
+
 // Clear mint session data when navigating to step 5 via GET (e.g. "Change Mint" button)
 if ($step === 5 && $_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['step'])) {
     unset($_SESSION['mint_url_temp'], $_SESSION['mint_units']);
@@ -501,87 +561,130 @@ function setupCheckMintUrl(string $mintUrl): string {
 }
 
 /**
+ * The URL paths under which the web server might serve the data directory.
+ *
+ * Two mappings: filesystem path minus DOCUMENT_ROOT, and the URL space this script is
+ * served from. Under an nginx/Apache `alias` or a ~userdir layout the first names the
+ * wrong URL (or none at all, so the data looked "outside"), while the second is where the
+ * data folder next to setup.php really is (N-1). The second is only added when the data
+ * directory sits inside this script's folder: a relocated data directory has no URL there.
+ *
+ * @return string[] URL paths without a trailing slash, deduplicated
+ */
+function setupDataDirUrlPaths(): array {
+    $paths = [];
+    $docPath = getDataDirHttpPath();
+    if ($docPath !== null) {
+        $paths[] = $docPath;
+    }
+    $dataDir = str_replace('\\', '/', realpath(Database::getDataDir()) ?: Database::getDataDir());
+    $scriptFile = (string)($_SERVER['SCRIPT_FILENAME'] ?? '');
+    $appDir = $scriptFile !== '' ? str_replace('\\', '/', realpath(dirname($scriptFile)) ?: '') : '';
+    if ($appDir !== '' && str_starts_with($dataDir, rtrim($appDir, '/') . '/')) {
+        $scriptDir = str_replace('\\', '/', dirname((string)($_SERVER['SCRIPT_NAME'] ?? '/')));
+        $paths[] = ($scriptDir === '.' ? '' : rtrim($scriptDir, '/')) . '/' . substr($dataDir, strlen(rtrim($appDir, '/')) + 1);
+    }
+    return array_values(array_unique(array_map(fn($p) => '/' . trim($p, '/'), $paths)));
+}
+
+/**
  * Ask this web server, from the server itself, whether the database files can be
  * downloaded: a ranged GET (some servers answer HEAD from a rule a real GET would not
- * hit) for the database and its -wal/-shm sidecars, the same probe as the dashboard's.
+ * hit) for the database and its -wal/-shm sidecars, the same probe as the dashboard's,
+ * under every URL the data directory might have (setupDataDirUrlPaths()).
  *
- * The connection is pinned to this server's own address (SERVER_ADDR), so the Host
- * header a visitor sends only names the virtual host, never a destination.
+ * Every connection is pinned to this server's own address (SERVER_ADDR:SERVER_PORT) with
+ * a wildcard CONNECT_TO entry, so the Host header a visitor sends only names the virtual
+ * host, never a destination. A host-keyed entry missed whenever libcurl rewrote the host
+ * (numeric IPv4 forms such as 2130706433 or 127.1) and curl then connected wherever the
+ * Host pointed (C9); the primary IP/port check afterwards catches any other miss.
  *
- * @return array{status: string, exposed: string[]} status is 'outside' (data not under
- *         the web root), 'protected', 'exposed' or 'inconclusive' (could not check).
+ * @return array{status: string, exposed: string[]} status is 'outside' (data has no URL),
+ *         'protected' (every file under every URL refused), 'exposed' or 'inconclusive'.
  */
 function setupProbeDataExposure(): array {
     static $result = null;
     if ($result !== null) {
         return $result;
     }
-    if (Database::isDataDirOutsideWebroot()) {
+    $urlPaths = setupDataDirUrlPaths();
+    if ($urlPaths === []) {
         return $result = ['status' => 'outside', 'exposed' => []];
     }
     $inconclusive = ['status' => 'inconclusive', 'exposed' => []];
-    $dataPath = getDataDirHttpPath();
     $host = (string)($_SERVER['HTTP_HOST'] ?? '');
     $serverAddr = (string)($_SERVER['SERVER_ADDR'] ?? '');
     $serverPort = (int)($_SERVER['SERVER_PORT'] ?? 0);
     // PHP's built-in server handles one request at a time and cannot answer itself.
-    if ($dataPath === null || PHP_SAPI === 'cli-server' || !function_exists('curl_init')
-        || !preg_match('/^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?$/', $host, $hm)
+    if (PHP_SAPI === 'cli-server' || !function_exists('curl_init')
+        || !preg_match('/^(\[[0-9a-fA-F:.]+\]|[A-Za-z0-9.-]+)(?::(\d{1,5}))?$/', $host)
         || !filter_var($serverAddr, FILTER_VALIDATE_IP) || $serverPort <= 0
         || !Security::checkRateLimit('setup_exposure_probe', Security::getClientIp(), 10)) {
         return $result = $inconclusive;
     }
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off');
     $scheme = $https ? 'https' : 'http';
-    $hostName = $hm[1];
-    $hostPort = isset($hm[2]) ? (int)$hm[2] : ($https ? 443 : 80);
-    $connectTo = $hostName . ':' . $hostPort . ':'
-        . (str_contains($serverAddr, ':') ? '[' . $serverAddr . ']' : $serverAddr) . ':' . $serverPort;
-    $encodedPath = implode('/', array_map('rawurlencode', explode('/', $dataPath)));
+    // Empty host and port match every URL, whatever form libcurl gives the host.
+    $connectTo = '::' . (str_contains($serverAddr, ':') ? '[' . $serverAddr . ']' : $serverAddr) . ':' . $serverPort;
+    $serverAddrBin = inet_pton($serverAddr);
 
     require_once __DIR__ . '/includes/http.php';
     $exposed = [];
-    $answered = 0;
-    foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $name) {
-        $body = '';
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $scheme . '://' . $host . $encodedPath . '/' . $name,
-            CURLOPT_CONNECT_TO => [$connectTo],
-            CURLOPT_RANGE => '0-15',
-            CURLOPT_TIMEOUT => 3,
-            CURLOPT_CONNECTTIMEOUT => 2,
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_SSL_VERIFYPEER => false,
-            CURLOPT_SSL_VERIFYHOST => 0,
-            // Read a few bytes and hang up, even if the server ignores the Range header.
-            CURLOPT_WRITEFUNCTION => function ($ch, string $chunk) use (&$body): int {
-                $body .= $chunk;
-                return strlen($body) >= 16 ? -1 : strlen($chunk);
-            },
-        ] + cashupay_curl_protocol_options());
-        curl_exec($ch);
-        $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $type = strtolower((string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
-        if ($code === 0) {
-            continue; // no answer at all: this file was not checked
-        }
-        $answered++;
-        if ($code >= 200 && $code < 300) {
-            // A host that answers every path with a 200 page is not serving the database;
-            // only the real file content counts as proof of exposure.
-            $isFile = $name === 'cashupay.sqlite'
-                ? str_starts_with($body, 'SQLite format 3')
-                : (!str_contains($type, 'text/html') && !str_starts_with(ltrim($body), '<'));
-            if ($isFile) {
-                $exposed[] = $name;
+    $refused = 0;
+    $total = 0;
+    foreach ($urlPaths as $dataPath) {
+        $encodedPath = implode('/', array_map('rawurlencode', explode('/', $dataPath)));
+        foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $name) {
+            $total++;
+            $body = '';
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $scheme . '://' . $host . $encodedPath . '/' . $name,
+                CURLOPT_CONNECT_TO => [$connectTo],
+                CURLOPT_RANGE => '0-15',
+                CURLOPT_TIMEOUT => 3,
+                CURLOPT_CONNECTTIMEOUT => 2,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                // Read a few bytes and hang up, even if the server ignores the Range header.
+                CURLOPT_WRITEFUNCTION => function ($ch, string $chunk) use (&$body): int {
+                    $body .= $chunk;
+                    return strlen($body) >= 16 ? -1 : strlen($chunk);
+                },
+            ] + cashupay_curl_protocol_options());
+            curl_exec($ch);
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $type = strtolower((string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+            $primaryIp = (string)curl_getinfo($ch, CURLINFO_PRIMARY_IP);
+            $primaryPort = (int)curl_getinfo($ch, CURLINFO_PRIMARY_PORT);
+            if ($code === 0) {
+                continue; // no answer at all: this file was not checked
             }
+            if ($primaryPort !== $serverPort || $primaryIp === '' || @inet_pton($primaryIp) !== $serverAddrBin) {
+                continue; // somebody else answered: this file was not checked
+            }
+            if ($code >= 200 && $code < 300) {
+                // A host that answers every path with a 200 page is not serving the database;
+                // only the real file content counts as proof of exposure.
+                $isFile = $name === 'cashupay.sqlite'
+                    ? str_starts_with($body, 'SQLite format 3')
+                    : (!str_contains($type, 'text/html') && !str_starts_with(ltrim($body), '<'));
+                if ($isFile) {
+                    $exposed[] = $name;
+                } else {
+                    $refused++;
+                }
+            } elseif (in_array($code, [401, 403, 404], true)) {
+                $refused++;
+            }
+            // Anything else (a redirect, a server error) proves nothing either way.
         }
     }
     if ($exposed) {
-        return $result = ['status' => 'exposed', 'exposed' => $exposed];
+        return $result = ['status' => 'exposed', 'exposed' => array_values(array_unique($exposed))];
     }
-    return $result = $answered === 3 ? ['status' => 'protected', 'exposed' => []] : $inconclusive;
+    return $result = $refused === $total ? ['status' => 'protected', 'exposed' => []] : $inconclusive;
 }
 ?>
 <!DOCTYPE html>
@@ -933,6 +1036,13 @@ function setupProbeDataExposure(): array {
 </head>
 <body>
     <div class="container">
+        <?php
+        // If an older shared folder may hold this shop's wallet (its site address
+        // changed), say so before the wizard offers to create a new one.
+        if (Urls::isWordPress() && function_exists('cashupay_foreign_data_dir_notice')) {
+            cashupay_foreign_data_dir_notice();
+        }
+        ?>
         <div class="card">
             <div class="logo">&#9889;</div>
             <?php if ($mode === 'add_store'): ?>
@@ -1053,10 +1163,7 @@ function setupProbeDataExposure(): array {
                     // *.sqlite leaves them downloadable. (The recovery-code file has a random
                     // name now, so there is no fixed URL to probe for it.)
                     $testPaths = [];
-                    $candidateDirs = [];
-                    if ($dataPath !== null) {
-                        $candidateDirs[] = $dataPath;
-                    }
+                    $candidateDirs = setupDataDirUrlPaths();
                     $candidateDirs[] = '/data';
                     $scriptPath = $_SERVER['SCRIPT_NAME'] ?? '';
                     $appDir = dirname($scriptPath);
@@ -1097,7 +1204,7 @@ function setupProbeDataExposure(): array {
                             <code>wp-config.php</code> file, above the line that says
                             <em>&ldquo;That's all, stop editing!&rdquo;</em>, with a folder outside your website:
                         </p>
-                        <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.5rem;">define('CASHUPAY_DATA_DIR', '<?php echo htmlspecialchars(dirname(rtrim(ABSPATH, '/'))); ?>/cashupay-data');</pre>
+                        <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.5rem;">define('CASHUPAY_DATA_DIR', '<?php echo htmlspecialchars(rtrim(dirname(rtrim(ABSPATH, '/')), '/') . '/cashupay-data-' . substr(hash('sha256', ABSPATH), 0, 12)); ?>');</pre>
                         <p style="color: #a0aec0; font-size: 0.85rem; margin-bottom: 0;">
                             Then reload this page. Do not put this line in the plugin's own files: plugin updates replace them.
                         </p>
@@ -1303,6 +1410,15 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <input type="text" id="setup_token" name="setup_token" required
                                    autocomplete="off" spellcheck="false" autocapitalize="characters"
                                    placeholder="A1B2C3D4E5">
+                        </div>
+                        <?php endif; ?>
+
+                        <?php if ($baseUrlOtherHost !== null): ?>
+                        <div class="checkbox-group" style="margin: 1.5rem 0;">
+                            <input type="checkbox" id="confirm_other_host" name="confirm_other_host" value="1">
+                            <label for="confirm_other_host">
+                                Yes, <?php echo htmlspecialchars($baseUrlOtherHost['pinned']); ?> is the address of this server
+                            </label>
                         </div>
                         <?php endif; ?>
 
@@ -1833,7 +1949,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         // one: the WooCommerce gateway refetches the invoice on
                         // InvoiceSettled and refuses to mark the order paid if that
                         // lookup fails, so it needs canviewinvoices as well.
-                        $apiKey = Auth::createApiKey(
+                        $createdKey = Auth::createApiKey(
                             $storeId,
                             'WooCommerce (auto-configured)',
                             [
@@ -1845,10 +1961,16 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                 'btcpay.store.webhooks.canmodifywebhooks',
                             ],
                             'woocommerce'
-                        )['key'];
+                        );
+                        $apiKey = $createdKey['key'];
 
                         $configResult = cashupay_configure_btcpay_plugin($storeId, $apiKey);
                         $wooConfigured = $configResult['success'] ?? false;
+                        if (!$wooConfigured) {
+                            // The guard refused (a real BTCPay Server is configured), so the
+                            // key just minted would otherwise stay live and invisible.
+                            Auth::deleteApiKey((string)($createdKey['id'] ?? ''));
+                        }
                     }
                 }
                 ?>

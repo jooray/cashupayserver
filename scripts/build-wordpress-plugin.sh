@@ -5,6 +5,30 @@ set -e
 
 cd "$(dirname "$0")/.."
 
+# A release must be built from the commit that was reviewed and tagged; see
+# build-standalone.sh for the rationale (MINIMAX 4.13).
+if [ "${CASHUPAY_ALLOW_DIRTY_BUILD:-0}" != "1" ]; then
+    if [ -n "$(git status --porcelain --untracked-files=normal 2>/dev/null)" ]; then
+        echo "Refusing to build: the working tree has uncommitted or untracked files." >&2
+        git status --short --untracked-files=normal >&2
+        echo "Commit them, or set CASHUPAY_ALLOW_DIRTY_BUILD=1 for a throwaway build." >&2
+        exit 1
+    fi
+    if git submodule status --recursive 2>/dev/null | grep -Eq '^[+-U]'; then
+        echo "Refusing to build: a submodule is not at the committed revision." >&2
+        git submodule status --recursive >&2
+        exit 1
+    fi
+    if [ -n "${CASHUPAY_RELEASE_TAG:-}" ]; then
+        tag_commit="$(git rev-parse "${CASHUPAY_RELEASE_TAG}^{commit}" 2>/dev/null || true)"
+        head_commit="$(git rev-parse HEAD)"
+        if [ "$tag_commit" != "$head_commit" ]; then
+            echo "Refusing to build: $CASHUPAY_RELEASE_TAG is not HEAD ($head_commit)." >&2
+            exit 1
+        fi
+    fi
+fi
+
 BUILD_DIR="build/cashupay"
 rm -rf build/cashupay build/cashupay-wordpress.zip
 
@@ -50,6 +74,8 @@ make_zip() {
     echo "$sum" >> build/SHA256SUMS.tmp
     LC_ALL=C sort -k2 build/SHA256SUMS.tmp > build/SHA256SUMS
     rm -f build/SHA256SUMS.tmp
+    # What the bytes above were built from, so a checksum can be tied to a commit and tag.
+    printf 'commit=%s\ntag=%s\n' "$(git rev-parse HEAD)" "${CASHUPAY_RELEASE_TAG:-}" > build/SHA256SUMS.commit
     echo "SHA-256: $sum"
 }
 

@@ -20,3 +20,9 @@ FABLE-*.md
 GPT-56-*.md
 KIMI-AUDIT.md
 includes/data-location.txt
+includes/config.local.php
+version.json.new
+version.json.rehearsal
+
+# Local audit session transcripts
+20*-security-audit-*.txt

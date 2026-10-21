@@ -55,6 +55,11 @@ function handleCreateInvoice(array $auth, array $params, array $body): void {
     if ($checkout !== null && !is_array($checkout)) {
         errorResponse('validation-error', 'Checkout must be an object');
     }
+    if (is_array($checkout) && strlen((string) json_encode($checkout)) > 4096) {
+        // The object is stored with the invoice. The request body is already capped, but
+        // this field should not be able to fill the money database with junk (MINIMAX 4.22).
+        errorResponse('validation-error', 'Checkout must be an object of at most 4 KiB');
+    }
 
     // `redirectURL` becomes an anchor href and a `window.location` assignment after
     // settlement. HTML-escaping does not neutralize `javascript:`, so an integration with

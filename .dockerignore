@@ -1,0 +1,13 @@
+# The build context is the whole checkout; keep local state and secrets out of it.
+# Docker does not read .gitignore, so this has to be a separate file (MINIMAX N4).
+.git/
+.gitignore
+.dockerignore
+build/
+data/
+mint-discovery/node_modules/
+**/*.local.php
+includes/config.local.php
+includes/data-location.txt
+.DS_Store
+._*

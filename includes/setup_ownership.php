@@ -290,11 +290,36 @@ class Setup {
     }
 
     private static function assignClaim(): void {
+        // A session id the browser arrived with may have been planted (cookie tossing from
+        // a sibling subdomain): the claim must not be granted to an id someone else knows
+        // (N-4). The session data, CSRF token included, carries over to the new id.
+        if (session_status() === PHP_SESSION_ACTIVE && !headers_sent()) {
+            session_regenerate_id(true);
+        }
+        self::resetWizardState();
         $secret = bin2hex(random_bytes(32));
         $hash = hash('sha256', $secret);
         Config::set('setup_claim', ['hash' => $hash, 'at' => time(), 'seen' => time()]);
         self::sendClaimCookie($secret);
         $_SESSION[self::SESSION_KEY] = $hash;
+    }
+
+    /**
+     * Forget what a previous claimant left in the wizard (M-2, M-3).
+     *
+     * A claim is only ever (re)assigned before setup completes: on the first claim, after an
+     * idle claim was released, or on a recovery-code takeover. Whatever an earlier holder
+     * chose must not carry over to the new one: the pinned origin (checkout links, pairing
+     * and cron URLs, the X-Cron-Key destination), the URL mode, and stores they started but
+     * never finished (their mint would be adopted silently). A store with a wallet seed is
+     * finished and is never touched here.
+     */
+    private static function resetWizardState(): void {
+        Config::delete('base_url');
+        Config::delete('url_mode');
+        Database::delete('stores', "seed_phrase IS NULL OR seed_phrase = ''");
+        unset($_SESSION['setup_created_stores'], $_SESSION['setup_store_id'],
+            $_SESSION['mint_url_temp'], $_SESSION['mint_units']);
     }
 
     /** Record that the holder is still active, so an idle-claim timeout restarts. */

@@ -141,42 +141,60 @@ class Transfer {
         return (int)($row['cnt'] ?? 0) > 0;
     }
 
-    /** Settle an operation opened with open(). */
+    /**
+     * Settle an operation opened with open().
+     *
+     * Only a row that is still pending may move to a terminal state. A later check of a
+     * token the operator already took back must not rewrite that history (MINIMAX 4.18).
+     */
     public static function complete(
         ?string $id,
         int $amount,
         int $fee = 0,
         ?string $detail = null,
         ?string $token = null
-    ): void {
-        self::update($id, [
+    ): bool {
+        return self::update($id, [
             'status' => self::STATUS_COMPLETED,
             'amount' => $amount,
             'fee' => $fee,
         ] + ($detail !== null ? ['detail' => mb_substr($detail, 0, 500)] : [])
-          + ($token !== null ? ['token' => $token] : []));
+          + ($token !== null ? ['token' => $token] : []), true);
     }
 
     /** Annotate a pending operation without changing its status. */
-    public static function note(?string $id, string $detail): void {
-        self::update($id, ['detail' => mb_substr($detail, 0, 500)]);
+    public static function note(?string $id, string $detail): bool {
+        return self::update($id, ['detail' => mb_substr($detail, 0, 500)], true);
     }
 
-    public static function fail(?string $id, ?string $detail = null): void {
-        self::update($id, [
+    public static function fail(?string $id, ?string $detail = null): bool {
+        return self::update($id, [
             'status' => self::STATUS_FAILED,
-        ] + ($detail !== null ? ['detail' => mb_substr($detail, 0, 500)] : []));
+        ] + ($detail !== null ? ['detail' => mb_substr($detail, 0, 500)] : []), true);
     }
 
-    private static function update(?string $id, array $fields): void {
+    /**
+     * @return bool Whether the row was changed. False when the id is unknown or the row
+     *              already reached a terminal state.
+     */
+    private static function update(?string $id, array $fields, bool $onlyPending = false): bool {
         if ($id === null) {
-            return;
+            return false;
         }
         try {
             $fields['updated_at'] = Database::timestamp();
-            Database::update('transfers', $fields, 'id = ?', [$id]);
+            if ($onlyPending) {
+                return Database::update(
+                    'transfers',
+                    $fields,
+                    'id = ? AND status = ?',
+                    [$id, self::STATUS_PENDING]
+                ) > 0;
+            }
+            return Database::update('transfers', $fields, 'id = ?', [$id]) > 0;
         } catch (Throwable $e) {
             error_log('Transfer::update failed: ' . $e->getMessage());
+            return false;
         }
     }
 

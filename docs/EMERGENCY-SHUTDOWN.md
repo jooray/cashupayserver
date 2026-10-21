@@ -62,6 +62,13 @@ familiar.
    ```bash
    php scripts/emergency-shutdown.php --check
    ```
+
+   The live manifest is read over **HTTPS only** (plain HTTP is allowed only for the
+   loopback test fixture), redirects are refused, and only the fields installs actually
+   read are carried into the new file — a field the tool did not author is never
+   republished. If the live file cannot be fetched, the tool **stops**: uploading then
+   would erase the version, release link and notes every install reads. Pass
+   `--allow-missing-manifest` only when you deliberately want to replace the whole file.
 4. Publish the fixed release and an advisory. Affected installs shut down at their next
    update check, within about six hours; the operators land on the upgrade link.
 5. Optional, for transparency: publish the same event to Nostr relays

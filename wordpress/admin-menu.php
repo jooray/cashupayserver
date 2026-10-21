@@ -13,9 +13,14 @@ add_action('admin_menu', 'cashupay_admin_menu');
 add_action('admin_notices', 'cashupay_admin_notice');
 add_action('admin_notices', 'cashupay_startup_error_notice');
 add_action('admin_notices', 'cashupay_data_exposure_notice');
+add_action('admin_notices', 'cashupay_foreign_data_dir_notice');
+add_action('admin_notices', 'cashupay_network_data_dir_notice');
 add_action('admin_init', 'cashupay_handle_exposure_recheck');
 
 function cashupay_admin_menu(): void {
+    if (!cashupay_current_user_can_manage()) {
+        return; // On a network, subsite administrators get no CashuPay menu.
+    }
     $hook = add_submenu_page(
         'tools.php',
         'CashuPay',
@@ -80,7 +85,7 @@ function cashupay_admin_page(): void {
 }
 
 function cashupay_admin_notice(): void {
-    if (!current_user_can('manage_options')) {
+    if (!cashupay_current_user_can_manage()) {
         return;
     }
 
@@ -104,7 +109,7 @@ function cashupay_admin_notice(): void {
  * keeps working; only admins are told, in words a shop owner can act on.
  */
 function cashupay_startup_error_notice(): void {
-    if (!current_user_can('manage_options')) {
+    if (!cashupay_current_user_can_manage()) {
         return;
     }
 
@@ -141,7 +146,7 @@ function cashupay_startup_error_notice(): void {
  * (not under WordPress, wp-content or the document root).
  */
 function cashupay_data_dir_public_url(): ?string {
-    $dir = realpath(CASHUPAY_DATA_DIR) ?: rtrim(CASHUPAY_DATA_DIR, '/');
+    $dir = realpath(cashupay_data_dir()) ?: rtrim(cashupay_data_dir(), '/');
 
     $roots = [
         [WP_CONTENT_DIR, content_url()],
@@ -190,11 +195,14 @@ function cashupay_data_exposure(): ?array {
     // the main file leaves them downloadable. Only existing files are probed, so a
     // "soft 404" page answering 200 for everything is not mistaken for an exposure.
     $names = ['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'];
-    foreach (glob(CASHUPAY_DATA_DIR . '/setup-token*.txt') ?: [] as $tokenFile) {
+    foreach (glob(cashupay_data_dir() . '/setup-token*.txt') ?: [] as $tokenFile) {
         $names[] = basename($tokenFile); // The setup recovery code, a takeover credential.
     }
+    foreach (glob(cashupay_data_dir() . '/backup-*.sqlite') ?: [] as $backupFile) {
+        $names[] = basename($backupFile); // A complete copy of the wallet if one was left behind.
+    }
     foreach ($names as $name) {
-        if (!is_file(CASHUPAY_DATA_DIR . '/' . $name)) {
+        if (!is_file(cashupay_data_dir() . '/' . $name)) {
             continue;
         }
         $response = wp_remote_get($url . $name, [
@@ -226,7 +234,7 @@ function cashupay_data_exposure(): ?array {
 }
 
 function cashupay_handle_exposure_recheck(): void {
-    if (empty($_GET['cashupay_recheck_data']) || !current_user_can('manage_options')) {
+    if (empty($_GET['cashupay_recheck_data']) || !cashupay_current_user_can_manage()) {
         return;
     }
     check_admin_referer('cashupay_recheck_data');
@@ -241,7 +249,7 @@ function cashupay_handle_exposure_recheck(): void {
  * the normal outcome there unless a rule was added by hand.
  */
 function cashupay_data_exposure_notice(): void {
-    if (!current_user_can('manage_options')) {
+    if (!cashupay_current_user_can_manage()) {
         return;
     }
     $exposure = cashupay_data_exposure();
@@ -252,25 +260,114 @@ function cashupay_data_exposure_notice(): void {
     $path = (string) (wp_parse_url($exposure['url'], PHP_URL_PATH) ?: '/');
     $regexPath = preg_replace('/[.\\\\+*?\\[\\]^$(){}|]/', '\\\\$0', $path);
     $nginxRule = 'location ~* ^' . $regexPath . ' { deny all; }';
-    $suggested = rtrim(dirname(rtrim(ABSPATH, '/')), '/') . '/cashupay-data';
+    // This installation's own name (bootstrap.php), so the moved folder cannot collide
+    // with a neighbouring site's.
+    $suggested = rtrim(dirname(rtrim(ABSPATH, '/')), '/') . '/cashupay-data-' . substr(hash('sha256', ABSPATH), 0, 12);
     $wpConfigLine = "define('CASHUPAY_DATA_DIR', '" . $suggested . "');";
+    // wp-config.php is shared by every site of a network and its folder holds the other
+    // sites' wallets too, so moving one site's folder is not something to do by hand.
+    $canMove = !(function_exists('is_multisite') && is_multisite());
     $recheck = wp_nonce_url(add_query_arg('cashupay_recheck_data', '1'), 'cashupay_recheck_data');
 
     echo '<div class="notice notice-error"><p><strong>'
         . esc_html__('CashuPay: anyone on the internet can download your wallet right now.', 'cashupay') . '</strong></p>';
     echo '<p>' . esc_html(sprintf(
         __('CashuPay keeps the money your shop has received, and the secret words that control it, in the folder %s. Your web server hands out the files in that folder to anyone who asks for them: we just downloaded the start of %s. A stranger who downloads them can take the money.', 'cashupay'),
-        CASHUPAY_DATA_DIR,
+        cashupay_data_dir(),
         implode(', ', $exposure['exposed'])
     )) . '</p>';
-    echo '<p>' . esc_html__('Fix it today, in one of these two ways:', 'cashupay') . '</p><ol>';
+    echo '<p>' . ($canMove
+        ? esc_html__('Fix it today, in one of these two ways:', 'cashupay')
+        : esc_html__('Fix it today:', 'cashupay')) . '</p><ol>';
     echo '<li><p>' . esc_html__('Block the folder. Send this to your hosting provider (or whoever runs your server). If the server runs nginx, the rule below goes inside the site\'s server { } block, above the other "location" lines, followed by an nginx reload:', 'cashupay') . '</p>'
         . '<pre style="white-space:pre-wrap">' . esc_html($nginxRule) . '</pre></li>';
-    echo '<li><p>' . esc_html(sprintf(
-        __('Or move the folder out of the website. Move the whole folder %1$s, with every file in it, to a place that is not part of the website, for example %2$s. Then add the line below to wp-config.php, above the line "That\'s all, stop editing!". Do both together and in that order. If CashuPay then asks to be set up again, it cannot find the moved files: do not set up a new wallet, correct the folder in that line instead. The money is still in the files you moved.', 'cashupay'),
-        CASHUPAY_DATA_DIR,
-        $suggested
-    )) . '</p><pre style="white-space:pre-wrap">' . esc_html($wpConfigLine) . '</pre></li>';
+    if ($canMove) {
+        echo '<li><p>' . esc_html(sprintf(
+            __('Or move the folder out of the website. Move the whole folder %1$s, with every file in it, to a place that is not part of the website, for example %2$s. Then add the line below to wp-config.php, above the line "That\'s all, stop editing!". Do both together and in that order. If CashuPay then asks to be set up again, it cannot find the moved files: do not set up a new wallet, correct the folder in that line instead. The money is still in the files you moved.', 'cashupay'),
+            cashupay_data_dir(),
+            $suggested
+        )) . '</p><pre style="white-space:pre-wrap">' . esc_html($wpConfigLine) . '</pre></li>';
+    }
     echo '</ol><p><a class="button" href="' . esc_url($recheck) . '">'
         . esc_html__('I fixed it, check again', 'cashupay') . '</a></p></div>';
+}
+
+/**
+ * bootstrap.php found the shared cashupay-data folder an older version used, but it
+ * belongs to another WordPress site next to this one, so this site uses its own folder.
+ * Shown until this site's CashuPay is set up, because the one mistake to prevent is an
+ * owner whose wallet really is in that folder (the site's address changed) setting up
+ * a new wallet instead of pointing CashuPay at the old one.
+ */
+function cashupay_foreign_data_dir_notice(): void {
+    $foreign = $GLOBALS['cashupay_foreign_data_dir'] ?? null;
+    if (!is_string($foreign) || $foreign === '' || !cashupay_current_user_can_manage()
+        || !empty($GLOBALS['cashupay_startup_error'])) {
+        return;
+    }
+    try {
+        require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+        require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
+        if (Database::isInitialized() && Config::isSetupComplete()) {
+            return;
+        }
+    } catch (Throwable $e) {
+        // Say it anyway.
+    }
+
+    echo '<div class="notice notice-warning"><p><strong>'
+        . esc_html__('CashuPay: this site has its own wallet folder.', 'cashupay') . '</strong></p><p>'
+        . esc_html(sprintf(
+            __('The folder %1$s holds the CashuPay wallet of another WordPress site on this server, so this site does not use it. This site keeps its CashuPay wallet in %2$s instead. Nothing in the other folder was changed.', 'cashupay'),
+            $foreign,
+            cashupay_data_dir()
+        )) . '</p><p>'
+        . esc_html__('If that folder in fact holds this shop\'s wallet (for example because the address of this site changed), do not set up a new wallet. Add the line below to wp-config.php, above the line "That\'s all, stop editing!", and reload this page. Your money is still in that folder.', 'cashupay')
+        . '</p><pre style="white-space:pre-wrap">' . esc_html("define('CASHUPAY_DATA_DIR', '" . $foreign . "');") . '</pre></div>';
+}
+
+/**
+ * On a network, this site keeps its wallet in site-<id> inside the network's folder,
+ * while older versions gave every site the wallet in that folder itself. That wallet
+ * stays with the site whose address it remembers (bootstrap.php), so a shop that took
+ * payments on this site before may find CashuPay asking to be set up. Shown, to super
+ * admins, until this site's CashuPay is set up, and only when that folder really holds
+ * a set-up wallet: setting up a new one by mistake is what this prevents.
+ */
+function cashupay_network_data_dir_notice(): void {
+    $base = $GLOBALS['cashupay_network_data_dir'] ?? null;
+    if (!is_string($base) || $base === '' || !cashupay_current_user_can_manage()
+        || !empty($GLOBALS['cashupay_startup_error'])) {
+        return;
+    }
+    if (cashupay_data_dir_setting($base, 'setup_complete') !== true) {
+        return;
+    }
+    try {
+        require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+        require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
+        if (Database::isInitialized() && Config::isSetupComplete()) {
+            return;
+        }
+    } catch (Throwable $e) {
+        // Say it anyway.
+    }
+    $sharedUrl = cashupay_data_dir_setting($base, 'base_url');
+
+    echo '<div class="notice notice-warning"><p><strong>'
+        . esc_html__('CashuPay: this site now has its own wallet.', 'cashupay') . '</strong></p><p>'
+        . esc_html(sprintf(
+            __('Each site of this WordPress network now keeps its CashuPay wallet in a folder of its own. This site\'s wallet is in %1$s. Before this update, the sites of the network shared one wallet, in the folder %2$s.', 'cashupay'),
+            cashupay_data_dir(),
+            $base
+        ));
+    if (is_string($sharedUrl) && $sharedUrl !== '') {
+        echo ' ' . esc_html(sprintf(
+            __('That wallet was set up for %s and stays with that site. Nothing in it was changed.', 'cashupay'),
+            $sharedUrl
+        ));
+    }
+    echo '</p><p>'
+        . esc_html__('If this shop took payments with CashuPay before this update, do not set up a new wallet here: its money is in that shared folder. Ask whoever looks after this WordPress network for help before you go on.', 'cashupay')
+        . '</p></div>';
 }

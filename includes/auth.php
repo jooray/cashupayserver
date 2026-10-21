@@ -13,6 +13,10 @@ require_once __DIR__ . '/urls.php';
 class Auth {
     private const SESSION_NAME = 'cashupay_session';
     private const CSRF_TOKEN_NAME = 'csrf_token';
+    /** An admin session ends after this long without a request (DS41 L-10). */
+    private const IDLE_TIMEOUT = 3600;
+    /** ...and in any case this long after login. */
+    private const ABSOLUTE_TIMEOUT = 86400;
 
     /**
      * Initialize session
@@ -40,16 +44,33 @@ class Auth {
                 'path'     => '/',
             ]);
             session_name(self::SESSION_NAME);
+            // Refuse session IDs this server never issued: a cookie planted from a
+            // sibling subdomain must not become the ID the operator then logs in with.
+            ini_set('session.use_strict_mode', '1');
             session_start();
 
-            // Absolute session timeout (24h) using the stored login_time.
-            if (isset($_SESSION['admin_logged_in'], $_SESSION['login_time'])
-                && (time() - (int)$_SESSION['login_time']) > 86400) {
-                $_SESSION = [];
-                session_destroy();
-                session_start();
+            // Absolute timeout (24 h after login) and idle timeout (1 h without a
+            // request). last_seen is refreshed by isLoggedIn() on every authenticated
+            // request; sessions from before it existed count from login_time.
+            if (isset($_SESSION['admin_logged_in'], $_SESSION['login_time'])) {
+                $now = time();
+                $lastSeen = (int)($_SESSION['last_seen'] ?? $_SESSION['login_time']);
+                if ($now - (int)$_SESSION['login_time'] > self::ABSOLUTE_TIMEOUT
+                    || $now - $lastSeen > self::IDLE_TIMEOUT) {
+                    $_SESSION = [];
+                    session_destroy();
+                    session_start();
+                }
             }
         }
+    }
+
+    /** True on a WordPress multisite network when the user is not a super admin. */
+    private static function isMultisiteNonSuperAdmin(): bool {
+        // One wallet serves the whole network; a subsite admin's manage_options must
+        // not reach it (OPUS C6).
+        return function_exists('is_multisite') && is_multisite()
+            && !(function_exists('is_super_admin') && is_super_admin());
     }
 
     /**
@@ -57,6 +78,9 @@ class Auth {
      */
     public static function isLoggedIn(): bool {
         if (defined('CASHUPAY_WORDPRESS') && CASHUPAY_WORDPRESS) {
+            if (self::isMultisiteNonSuperAdmin()) {
+                return false;
+            }
             return function_exists('current_user_can')
                 && current_user_can('manage_options');
         }
@@ -69,6 +93,11 @@ class Auth {
         if (!hash_equals(self::passwordVersion(), (string)($_SESSION['password_version'] ?? ''))) {
             $_SESSION = []; // may run mid-page, so no session_regenerate_id() here
             return false;
+        }
+        // The dashboard's timed refresh marks itself; it must not count as activity, or a
+        // dashboard left open on the counter would never time out.
+        if (($_SERVER['HTTP_X_CASHUPAY_BACKGROUND'] ?? '') !== '1') {
+            $_SESSION['last_seen'] = time();
         }
         return true;
     }
@@ -91,6 +120,7 @@ class Auth {
             self::initSession();
             $_SESSION['admin_logged_in'] = true;
             $_SESSION['login_time'] = time();
+            $_SESSION['last_seen'] = time();
             $_SESSION['password_version'] = self::passwordVersion();
             session_regenerate_id(true);
             return true;
@@ -112,7 +142,8 @@ class Auth {
      */
     public static function attemptLogin(string $password, ?string $clientIp = null): string {
         $clientIp = $clientIp ?? Security::getClientIp();
-        if (!Security::reserveLoginAttempt($clientIp)) {
+        // Password sign-in also spends the address-independent budget (MINIMAX 4.7).
+        if (!Security::reserveLoginAttempt($clientIp, true)) {
             return 'locked';
         }
         if (self::login($password)) {
@@ -131,9 +162,21 @@ class Auth {
     public static function verifyAdminPassword(string $password): bool {
         $hash = Config::getAdminPasswordHash();
         if ($hash === null) {
-            // WordPress mode has no standalone password; manage_options is the gate.
-            return Urls::isWordPress() && function_exists('current_user_can')
-                && current_user_can('manage_options');
+            // WordPress mode has no standalone password, so the session capability alone
+            // is not a fresh proof: an unattended or stolen WordPress admin session could
+            // otherwise export the seed and the whole database (MINIMAX 4.1). Ask for the
+            // WordPress password and check it against the signed-in user's own hash.
+            if (!Urls::isWordPress() || self::isMultisiteNonSuperAdmin()) {
+                return false;
+            }
+            if ($password === '' || !function_exists('wp_get_current_user') || !function_exists('wp_check_password')) {
+                return false;
+            }
+            $user = wp_get_current_user();
+            if (!is_object($user) || empty($user->ID) || !isset($user->user_pass) || (string)$user->user_pass === '') {
+                return false;
+            }
+            return (bool)wp_check_password($password, (string)$user->user_pass, (int)$user->ID);
         }
         return password_verify($password, $hash);
     }
@@ -144,6 +187,19 @@ class Auth {
     public static function logout(): void {
         self::initSession();
         $_SESSION = [];
+        // Expire the cookie in the browser too, with the attributes it was set with;
+        // session_destroy() only removes the server-side file.
+        if (!headers_sent()) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', [
+                'expires' => time() - 42000,
+                'path' => $params['path'],
+                'domain' => $params['domain'],
+                'secure' => $params['secure'],
+                'httponly' => $params['httponly'],
+                'samesite' => $params['samesite'] ?: 'Lax',
+            ]);
+        }
         session_destroy();
     }
 

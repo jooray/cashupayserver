@@ -85,6 +85,12 @@ function cashupay_protect_data_dir(string $dataDir): void {
         }
         @file_put_contents($path, $content);
     }
+
+    // Records which installation (and which site of a network) the folder belongs to,
+    // so another WordPress site next to this one never adopts it (bootstrap.php).
+    if (!file_exists($dataDir . '/.owner')) {
+        @file_put_contents($dataDir . '/.owner', cashupay_data_dir_owner(CASHUPAY_BLOG_ID));
+    }
 }
 
 /**
@@ -95,10 +101,10 @@ function cashupay_maybe_upgrade_data_protection(): void {
     if (get_option('cashupay_data_protection_version') === CASHUPAY_DATA_PROTECTION_VERSION) {
         return;
     }
-    if (!is_dir(CASHUPAY_DATA_DIR)) {
+    if (!is_dir(cashupay_data_dir())) {
         return; // Activation (or setup) creates it; nothing to upgrade yet.
     }
-    cashupay_protect_data_dir(CASHUPAY_DATA_DIR);
+    cashupay_protect_data_dir(cashupay_data_dir());
     update_option('cashupay_data_protection_version', CASHUPAY_DATA_PROTECTION_VERSION);
 }
 
@@ -133,8 +139,12 @@ function cashupay_activate(): void {
 }
 
 function cashupay_activate_unguarded(): void {
+    if (!empty($GLOBALS['cashupay_refuse_site'])) {
+        throw new RuntimeException((string) $GLOBALS['cashupay_startup_error']);
+    }
+
     // Create data directory with protection files
-    cashupay_protect_data_dir(CASHUPAY_DATA_DIR);
+    cashupay_protect_data_dir(cashupay_data_dir());
     update_option('cashupay_data_protection_version', CASHUPAY_DATA_PROTECTION_VERSION);
     delete_transient('cashupay_data_exposure');
 
@@ -143,8 +153,15 @@ function cashupay_activate_unguarded(): void {
     require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
     Database::initialize();
 
-    // Set base_url config
-    Config::set('base_url', site_url('/cashupay'));
+    // Pin base_url to this site, unless the database already belongs to another site:
+    // overwriting it broke that site's payment and webhook links. The same site after a
+    // switch between http and https is updated.
+    $existing = Config::get('base_url');
+    if (!is_string($existing) || $existing === '' || cashupay_same_site_url($existing, site_url('/cashupay'))) {
+        Config::set('base_url', site_url('/cashupay'));
+    } else {
+        error_log('CashuPay activation: base_url ' . $existing . ' belongs to another site; left unchanged.');
+    }
 
     // Schedule WP cron (every minute)
     if (!wp_next_scheduled('cashupay_poll_quotes')) {

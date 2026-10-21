@@ -130,6 +130,18 @@ function handleUpdateWebhook(array $auth, array $params, array $body): void {
         Database::update('webhooks', $updates, 'id = ?', [$webhookId]);
     }
 
+    // Queued deliveries carry the old URL and secret: a repointed, re-keyed or
+    // switched-off webhook must not keep receiving them (DS41 L-9).
+    $changed = false;
+    foreach (['url', 'secret', 'enabled'] as $field) {
+        if (array_key_exists($field, $updates) && (string)$updates[$field] !== (string)$webhook[$field]) {
+            $changed = true;
+        }
+    }
+    if ($changed) {
+        WebhookSender::cancelPending($webhookId);
+    }
+
     $webhook = Database::fetchOne("SELECT * FROM webhooks WHERE id = ? AND deleted_at IS NULL", [$webhookId]);
     jsonResponse(formatWebhookForApi($webhook, false));
 }
@@ -151,14 +163,15 @@ function handleDeleteWebhook(array $auth, array $params, array $body): void {
         errorResponse('not-found', 'Webhook not found', 404);
     }
 
-    // Keep the row as a tombstone so its foreign-key-linked committed outbox events
-    // remain deliverable using their snapshotted URL and signing secret.
+    // Keep the row as a tombstone so the delivery history stays linked to it, but
+    // nothing queued for it is sent any more: deleting a webhook means "stop" (DS41 L-9).
     Database::update(
         'webhooks',
         ['enabled' => 0, 'deleted_at' => Database::timestamp()],
         'id = ?',
         [$webhookId]
     );
+    WebhookSender::cancelPending($webhookId);
 
     http_response_code(200);
     exit;
@@ -333,7 +346,7 @@ function handleRedeliverWebhook(array $auth, array $params, array $body): void {
     $delivery = Database::fetchOne(
         "SELECT d.id FROM webhook_deliveries d
          JOIN webhooks w ON w.id = d.webhook_id
-         WHERE d.id = ? AND d.webhook_id = ? AND w.store_id = ?",
+         WHERE d.id = ? AND d.webhook_id = ? AND w.store_id = ? AND w.deleted_at IS NULL",
         [$params['deliveryId'], $params['webhookId'], $storeId]
     );
     if ($delivery === null) {

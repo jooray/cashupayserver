@@ -145,7 +145,21 @@ function pubkeyOf(string $secHex): string {
 }
 
 function fetchManifest(string $url): ?array {
-    $ctx = stream_context_create(['http' => ['timeout' => 10, 'header' => "Cache-Control: no-cache\r\n"]]);
+    // The live manifest is copied into what we sign and publish, so its transport must
+    // be authenticated. Plain HTTP is allowed only for the loopback test fixture.
+    $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+    $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+    if ($scheme !== 'https' && !($scheme === 'http' && in_array($host, ['127.0.0.1', 'localhost', '::1', '[::1]'], true))) {
+        fail('Refusing to read the live manifest over ' . ($scheme !== '' ? $scheme : 'an unknown scheme') . '://. Use its https:// address.');
+    }
+    $ctx = stream_context_create(['http' => [
+        'timeout' => 10,
+        'header' => "Cache-Control: no-cache\r\n",
+        // A redirect is another origin answering; do not let it become the base of
+        // the document this tool signs and uploads (MINIMAX N3).
+        'follow_location' => 0,
+        'max_redirects' => 0,
+    ]]);
     $body = @file_get_contents($url . (str_contains($url, '?') ? '&' : '?') . 'nocache=' . time(), false, $ctx);
     if ($body === false) {
         return null;
@@ -154,9 +168,79 @@ function fetchManifest(string $url): ?array {
     return is_array($data) ? $data : null;
 }
 
+/**
+ * Keep only the fields installs read, and refuse to republish one that is malformed.
+ *
+ * Everything else in the fetched document is dropped: we did not author it, so it must
+ * not ride into a manifest we sign and host (MINIMAX N3).
+ */
+function cleanManifest(array $live): array {
+    $out = [];
+    $versionPattern = '/^[0-9]+(\.[0-9]+){0,3}(-[A-Za-z0-9.]{1,20})?$/';
+    if (isset($live['version'])) {
+        $version = trim((string) $live['version']);
+        if (!preg_match($versionPattern, $version)) {
+            fail('The live manifest has an invalid version field. Fix it by hand before using this tool.');
+        }
+        $out['version'] = $version;
+    }
+    if (isset($live['released'])) {
+        $released = trim((string) $live['released']);
+        if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $released)) {
+            fail('The live manifest has an invalid released field. Fix it by hand before using this tool.');
+        }
+        $out['released'] = $released;
+    }
+    if (isset($live['url'])) {
+        $url = trim((string) $live['url']);
+        if (!preg_match('#^https://github\.com/jooray/cashupayserver/releases(/|$)#', $url)) {
+            fail('The live manifest points somewhere other than this project\'s GitHub releases. Fix it by hand before using this tool.');
+        }
+        $out['url'] = $url;
+    }
+    if (isset($live['severity'])) {
+        $severity = strtolower(trim((string) $live['severity']));
+        if (!in_array($severity, ['normal', 'important', 'security'], true)) {
+            fail('The live manifest has an unknown severity. Fix it by hand before using this tool.');
+        }
+        $out['severity'] = $severity;
+    }
+    if (isset($live['min_supported'])) {
+        $min = trim((string) $live['min_supported']);
+        if (!preg_match($versionPattern, $min)) {
+            fail('The live manifest has an invalid min_supported field. Fix it by hand before using this tool.');
+        }
+        $out['min_supported'] = $min;
+    }
+    if (isset($live['notes'])) {
+        $notes = trim((string) $live['notes']);
+        if (strlen($notes) > 2000) {
+            fail('The live manifest notes are longer than 2000 characters. Fix it by hand before using this tool.');
+        }
+        $out['notes'] = $notes;
+    }
+    // Kept for --lift, which needs to see the current notice; create mode overwrites it
+    // with this tool's own signed event.
+    if (isset($live['safe_mode']) && is_array($live['safe_mode'])) {
+        $out['safe_mode'] = $live['safe_mode'];
+    }
+    return $out;
+}
+
 /** Describe what the manifest's notice does, as installs would see it. */
 function describe(array $manifest): void {
     out('  latest version : ' . ($manifest['version'] ?? '(none)'));
+    foreach ([
+        'released' => 'released',
+        'severity' => 'severity',
+        'min_supported' => 'oldest supported',
+        'url' => 'release link',
+        'notes' => 'notes',
+    ] as $field => $label) {
+        if (isset($manifest[$field])) {
+            out('  ' . str_pad($label, 15) . ': ' . $manifest[$field]);
+        }
+    }
     if (!isset($manifest['safe_mode'])) {
         out('  emergency notice: none. Installs run normally.');
         return;
@@ -228,6 +312,8 @@ for ($i = 0; $i < count($args); $i++) {
     $a = $args[$i];
     if ($a === '--rehearse') {
         continue;
+    } elseif ($a === '--allow-missing-manifest') {
+        $opts['allow-missing-manifest'] = true;
     } elseif (in_array($a, ['--check', '--lift', '--print-pubkey'], true)) {
         $mode = substr($a, 2);
     } elseif (in_array($a, ['--manifest-url', '--out', '--upload'], true)) {
@@ -262,10 +348,23 @@ out('=================================');
 out('Live manifest: ' . $opts['manifest-url']);
 $live = fetchManifest($opts['manifest-url']);
 if ($live === null) {
-    out('  Could not fetch it. You can still continue; the new manifest will contain only');
-    out('  what you enter below plus the notice.');
+    out('  Could not fetch it.');
+    if (empty($opts['allow-missing-manifest'])) {
+        fail("Refusing to publish: without the live manifest the upload would erase the version,\n"
+            . "release link and notes every install reads. Fix the address, or pass\n"
+            . '--allow-missing-manifest if you are certain the live file should be replaced.');
+    }
+    out('  Continuing because --allow-missing-manifest was given: the new manifest will');
+    out('  contain only what you enter below plus the notice.');
     $live = [];
 } else {
+    $live = cleanManifest($live);
+    if ((!isset($live['version']) || !isset($live['url'])) && empty($opts['allow-missing-manifest'])) {
+        // A readable but incomplete document (for example "{}") would otherwise be
+        // republished with only the notice, erasing the update prompt for every install.
+        fail("The live manifest is missing its version or release link. Fix it by hand, or pass\n"
+            . '--allow-missing-manifest if you are certain it should be replaced.');
+    }
     describe($live);
 }
 out();

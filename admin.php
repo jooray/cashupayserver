@@ -304,6 +304,9 @@ function cashupay_diagnostics(?string $storeId): array {
 
 // Security headers (admin SPA needs Nostr relays + CDNs, so a tuned CSP is used).
 Security::setSecurityHeaders(Security::adminCsp());
+// Every response here is operator-only (balances, invoices, seed reveals, backups);
+// no browser or proxy cache may keep a copy.
+header('Cache-Control: no-store');
 
 // Check setup
 if (!Database::isInitialized() || !Config::isSetupComplete()) {
@@ -321,45 +324,82 @@ if (Auth::isLoggedIn() && Background::shouldSync()) {
 
 /**
  * H5: Check if data directory is protected from HTTP access
+ *
+ * Every URL the data directory might have is probed (cashupay_data_dir_urls()), and
+ * the database counts as exposed when any of them serves it. Only the real file
+ * content counts: a host that answers every path with a 200 page is not serving it.
  */
 function checkDataDirectoryProtection(): ?string {
-    // A database kept outside the webroot has no HTTP path to probe.
-    if (Database::isDataDirOutsideWebroot()) {
+    $dataUrls = cashupay_data_dir_urls();
+    if ($dataUrls === []) {
         return null;
     }
-    $dataUrl = cashupay_data_dir_url();
-    if ($dataUrl === null) {
-        return null;
-    }
+
+    // Pin every connection to this server's own address when it is known, the same way
+    // the setup probe does: a wildcard CONNECT_TO entry matches whatever form libcurl
+    // gives the host, and the primary IP/port check afterwards catches any other miss.
+    $serverAddr = (string)($_SERVER['SERVER_ADDR'] ?? '');
+    $serverPort = (int)($_SERVER['SERVER_PORT'] ?? 0);
+    $pin = filter_var($serverAddr, FILTER_VALIDATE_IP) && $serverPort > 0;
+    $connectTo = $pin
+        ? '::' . (str_contains($serverAddr, ':') ? '[' . $serverAddr . ']' : $serverAddr) . ':' . $serverPort
+        : null;
+    $serverAddrBin = $pin ? inet_pton($serverAddr) : null;
 
     // Probe the WAL sidecars too: they hold recently written proofs, and a rule that
-    // only denies the main file leaves them downloadable.
+    // only denies the main file leaves them downloadable. Leftover backup snapshots are
+    // complete copies of the wallet, so they count as exposures as well.
+    $names = ['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'];
+    foreach (glob(Database::getDataDir() . '/backup-*.sqlite') ?: [] as $backupFile) {
+        $names[] = basename($backupFile);
+    }
     $exposed = [];
-    foreach (['cashupay.sqlite', 'cashupay.sqlite-wal', 'cashupay.sqlite-shm'] as $name) {
-        $ch = curl_init();
-        curl_setopt_array($ch, [
-            CURLOPT_URL => $dataUrl . '/' . $name,
-            CURLOPT_RETURNTRANSFER => true,
-            // A ranged GET, not HEAD: some servers answer HEAD from a rule that a real
-            // GET would not hit, and one byte is enough to prove readability.
-            CURLOPT_RANGE => '0-0',
-            CURLOPT_TIMEOUT => 3,
-            CURLOPT_CONNECTTIMEOUT => 2,
-            CURLOPT_FOLLOWLOCATION => false,
-            CURLOPT_SSL_VERIFYPEER => false,
-        ] + cashupay_curl_protocol_options());
+    foreach ($dataUrls as $dataUrl) {
+        foreach ($names as $name) {
+            $body = '';
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $dataUrl . '/' . $name,
+                // A ranged GET, not HEAD: some servers answer HEAD from a rule that a real
+                // GET would not hit, and a few bytes are enough to prove readability.
+                CURLOPT_RANGE => '0-15',
+                CURLOPT_TIMEOUT => 3,
+                CURLOPT_CONNECTTIMEOUT => 2,
+                CURLOPT_FOLLOWLOCATION => false,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                // Read a few bytes and hang up, even if the server ignores the Range header.
+                CURLOPT_WRITEFUNCTION => function ($ch, string $chunk) use (&$body): int {
+                    $body .= $chunk;
+                    return strlen($body) >= 16 ? -1 : strlen($chunk);
+                },
+            ] + ($connectTo !== null ? [CURLOPT_CONNECT_TO => [$connectTo]] : []) + cashupay_curl_protocol_options());
 
-        curl_exec($ch);
-        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        // Note: curl_close() not needed since PHP 8.0 - handle auto-closes
+            curl_exec($ch);
+            $httpCode = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $type = strtolower((string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE));
+            // Note: curl_close() not needed since PHP 8.0 - handle auto-closes
+            if ($pin) {
+                $primaryIp = (string)curl_getinfo($ch, CURLINFO_PRIMARY_IP);
+                if ((int)curl_getinfo($ch, CURLINFO_PRIMARY_PORT) !== $serverPort
+                    || $primaryIp === '' || @inet_pton($primaryIp) !== $serverAddrBin) {
+                    continue; // somebody else answered: proves nothing about this server
+                }
+            }
 
-        if ($httpCode === 200 || $httpCode === 206) {
-            $exposed[] = $name;
+            if ($httpCode === 200 || $httpCode === 206) {
+                $isFile = ($name === 'cashupay.sqlite' || str_starts_with($name, 'backup-'))
+                    ? str_starts_with($body, 'SQLite format 3')
+                    : (!str_contains($type, 'text/html') && !str_starts_with(ltrim($body), '<'));
+                if ($isFile) {
+                    $exposed[] = $name;
+                }
+            }
         }
     }
 
     if (!empty($exposed)) {
-        return 'Your wallet database can be downloaded from the internet (' . implode(', ', $exposed)
+        return 'Your wallet database can be downloaded from the internet (' . implode(', ', array_unique($exposed))
             . '). Anyone who downloads it can take your money. Ask your hosting provider to block'
             . ' the "' . basename(Database::getDataDir()) . '" folder from the web, or move it'
             . ' outside the website folder.';
@@ -369,31 +409,49 @@ function checkDataDirectoryProtection(): ?string {
 }
 
 /**
- * Where the data directory is reachable over HTTP, if it is inside the document root.
+ * Every URL under which the web server might serve the data directory.
  *
  * Derived from the filesystem, not assumed to be "<base>/data": the WordPress plugin
  * keeps it under wp-content, and probing a path that does not exist reported "safe".
+ * Two mappings, as in setup.php's setupDataDirUrlPaths(): the path below
+ * DOCUMENT_ROOT, and, for a data directory inside this app's folder, the app's own URL
+ * (base_url) plus the path inside it. Under an nginx/Apache `alias` or a ~userdir
+ * layout the first names the wrong URL or none at all, so the folder looked
+ * "outside the website" while being served (N-1).
+ *
+ * @return string[] URLs without a trailing slash
  */
-function cashupay_data_dir_url(): ?string {
+function cashupay_data_dir_urls(): array {
     $dataDir = realpath(Database::getDataDir());
     $docRoot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
     $base = Config::getBaseUrl();
     $scheme = parse_url($base, PHP_URL_SCHEME);
     $host = parse_url($base, PHP_URL_HOST);
     if (!$dataDir || !$scheme || !$host) {
-        return null;
+        return [];
     }
+    $dataDir = str_replace(DIRECTORY_SEPARATOR, '/', $dataDir);
     $port = parse_url($base, PHP_URL_PORT);
     $origin = $scheme . '://' . $host . ($port ? ':' . $port : '');
-    if ($docRoot && str_starts_with($dataDir . '/', rtrim($docRoot, '/') . '/')) {
-        $path = substr($dataDir, strlen(rtrim($docRoot, '/')));
-        return $origin . str_replace(DIRECTORY_SEPARATOR, '/', $path);
+    $encode = fn(string $path) => implode('/', array_map('rawurlencode', explode('/', '/' . trim($path, '/'))));
+
+    $urls = [];
+    if ($docRoot) {
+        $docRoot = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', $docRoot), '/');
+        if (str_starts_with($dataDir . '/', $docRoot . '/')) {
+            $urls[] = $origin . $encode(substr($dataDir, strlen($docRoot)));
+        }
     }
-    if (!$docRoot && !Urls::isWordPress()) {
-        // No document root (CLI): the standalone default layout is <app>/data.
-        return rtrim($base, '/') . '/data';
+    if (!Urls::isWordPress()) {
+        // base_url is this app's folder (WordPress serves /cashupay from rewrite rules,
+        // not from the plugin folder, so there it names nothing).
+        $appDir = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', realpath(__DIR__) ?: __DIR__), '/');
+        if (str_starts_with($dataDir . '/', $appDir . '/')) {
+            $basePath = trim((string)parse_url($base, PHP_URL_PATH), '/');
+            $urls[] = $origin . $encode($basePath . substr($dataDir, strlen($appDir)));
+        }
     }
-    return null;
+    return array_values(array_unique(array_map(fn($u) => rtrim($u, '/'), $urls)));
 }
 
 /**
@@ -628,6 +686,12 @@ if (isset($_GET['api'])) {
             echo json_encode(array_map([Invoice::class, 'formatForApi'], $invoices));
             break;
 
+        case 'data_folder':
+            // Not printed into the page itself: the shell is served before login, and
+            // the absolute path tells a stranger where the wallet lives on disk.
+            echo json_encode(['path' => (string)(realpath(Database::getDataDir()) ?: Database::getDataDir())]);
+            break;
+
         case 'proxy_settings':
             $proxies = Config::get('trusted_proxies');
             echo json_encode([
@@ -749,7 +813,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // guesses cannot slip past the lockout.
         $outcome = Auth::attemptLogin($password, $clientIp);
         if ($outcome === 'locked') {
-            $remaining = Security::getLockoutRemaining($clientIp);
+            $remaining = Security::getLockoutRemaining($clientIp, true);
             http_response_code(429);
             echo json_encode(['error' => "Too many failed attempts. Try again in {$remaining} seconds."]);
             exit;
@@ -885,6 +949,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 @set_time_limit(0);
                 $snapshot = Database::getDataDir() . '/backup-' . date('Ymd-His') . '-' . bin2hex(random_bytes(4)) . '.sqlite';
+                // If the browser disconnects mid-download, PHP stops the script and the
+                // unlink at the end never runs, leaving a complete unencrypted copy of the
+                // wallet (every unspent proof, every seed) in the data folder (MINIMAX 4.2).
+                // The shutdown hook removes it on every way out; the background task also
+                // sweeps older leftovers.
+                register_shutdown_function(static function () use ($snapshot): void {
+                    if (is_file($snapshot)) {
+                        @unlink($snapshot);
+                    }
+                });
                 Database::getInstance()->exec('VACUUM INTO ' . Database::getInstance()->quote($snapshot));
                 @chmod($snapshot, 0600);
 
@@ -916,14 +990,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     if ($raw === '') {
                         continue;
                     }
-                    $entry = Security::normalizeProxyEntry($raw);
-                    if ($entry === null) {
-                        throw new Exception("\"{$raw}\" is not an address like 203.0.113.5 or a range like 10.0.0.0/8.");
+                    $problem = Security::proxyEntryProblem($raw);
+                    if ($problem !== null) {
+                        throw new Exception($problem);
                     }
-                    $entries[] = $entry;
+                    $entries[] = Security::normalizeProxyEntry($raw);
                 }
                 Config::set('proxy_mode', $mode);
-                Config::set('trusted_proxies', array_values(array_unique($entries)));
+                // Only "Only these proxies" uses the list. Keeping a stale range in the
+                // other modes hides it from the operator while it is still in force.
+                Config::set('trusted_proxies', $mode === 'custom' ? array_values(array_unique($entries)) : []);
                 Config::set('behind_cloudflare', ($_POST['behind_cloudflare'] ?? '') === '1');
                 Config::clearCache();
                 echo json_encode(['success' => true, 'seen' => Security::describeClientIp()]);
@@ -996,6 +1072,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!$row) {
                     http_response_code(404);
                     echo json_encode(['error' => 'Transfer not found']);
+                    break;
+                }
+                if (($row['status'] ?? '') !== Transfer::STATUS_PENDING) {
+                    // A finished row is history. Re-checking a token the operator already
+                    // took back must not flip it to completed again (MINIMAX 4.18).
+                    echo json_encode([
+                        'status' => $row['status'],
+                        'message' => 'This transfer is already finished. Nothing was changed.',
+                    ]);
                     break;
                 }
                 // Only token-style transfers carry proof secrets in `reference`; a
@@ -1738,6 +1823,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Validate Lightning address format if provided
                 if (!empty($address) && !preg_match('/^[a-zA-Z0-9._-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/', $address)) {
                     throw new Exception('Invalid Lightning address format');
+                }
+                if ($threshold < 1) {
+                    // A zero or negative threshold made the automatic withdrawal fire on
+                    // any balance above zero instead of the amount the operator chose.
+                    throw new Exception('Enter a withdrawal amount of at least 1.');
+                }
+                if ($enabled === 1 && $address === '') {
+                    throw new Exception('Enter a Lightning address before switching automatic withdrawals on.');
                 }
 
                 Database::update('stores', [
@@ -2542,11 +2635,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             break;
 
         case 'export_stranded_funds':
-            // Serialize a stranded namespace's unspent proofs into a claimable
-            // token. Read-only (proofs stay UNSPENT locally until the operator
-            // confirms the claim via mark_stranded_recovered), so a lost token
-            // can be re-exported. No mint contact.
+            // Serialize a stranded namespace's proofs into a claimable token. The proofs
+            // are reserved as EXPORTED first, so this is the only live copy and the money
+            // leaves the balance while the token circulates (MINIMAX 4.9). A lost token
+            // can be shown again; mark_stranded_recovered writes it off once claimed.
             @set_time_limit(0);
+            $strandedLock = null;
             try {
                 $mintUrl = trim($_POST['mint_url'] ?? '');
                 $unit = strtolower(trim($_POST['unit'] ?? 'sat'));
@@ -2566,15 +2660,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                     $account = $resolved['account'];
                 }
+                $strandedLock = cashupay_acquire_lock('stranded_' . substr(hash('sha256', $mintUrl . '|' . $unit . '|' . (string)$account), 0, 16));
+                if (!$strandedLock) {
+                    throw new Exception('Another export of these funds is in progress. Try again in a moment.');
+                }
                 $result = Invoice::exportNamespaceAsToken($mintUrl, $unit, $account);
                 if ($result['token'] === null) {
-                    throw new Exception('No unspent funds found in that namespace.');
+                    throw new Exception('No funds found in that namespace.');
                 }
-                // Remember exactly which proofs this token carries; "mark recovered"
-                // may only write those off.
-                $_SESSION['stranded_export'][$result['wallet_id']] = $result['secrets'];
+                // One id per export, so "mark recovered" writes off exactly the token the
+                // operator is looking at — not a later export that includes a payment
+                // which arrived in between (MINIMAX 4.20).
+                $exportId = bin2hex(random_bytes(8));
+                $_SESSION['stranded_export'][$exportId] = [
+                    'wallet_id' => $result['wallet_id'],
+                    'secrets' => $result['secrets'],
+                    'at' => time(),
+                ];
+                foreach ($_SESSION['stranded_export'] as $oldId => $entry) {
+                    if ($oldId !== $exportId && (int)($entry['at'] ?? 0) < time() - 86400) {
+                        unset($_SESSION['stranded_export'][$oldId]);
+                    }
+                }
                 echo json_encode([
                     'success' => true,
+                    'export_id' => $exportId,
                     'token' => $result['token'],
                     'amount' => $result['amount'],
                     'count' => $result['count'],
@@ -2586,6 +2696,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
+            } finally {
+                cashupay_release_lock($strandedLock);
             }
             break;
 
@@ -2600,12 +2712,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Mint URL required');
                 }
                 $wid = \Cashu\WalletStorage::deriveWalletId(rtrim($mintUrl, '/'), $unit, $account);
-                $secrets = $_SESSION['stranded_export'][$wid] ?? null;
-                if (!is_array($secrets)) {
+                $exportId = (string)($_POST['export_id'] ?? '');
+                $entry = $exportId !== '' ? ($_SESSION['stranded_export'][$exportId] ?? null) : null;
+                if (!is_array($entry) || ($entry['wallet_id'] ?? '') !== $wid) {
                     throw new Exception('Create the recovery token again first, then confirm it was claimed.');
                 }
+                $secrets = $entry['secrets'];
                 $n = Invoice::markNamespaceRecovered($mintUrl, $unit, $account, $secrets);
-                unset($_SESSION['stranded_export'][$wid]);
+                unset($_SESSION['stranded_export'][$exportId]);
                 echo json_encode(['success' => true, 'marked' => $n]);
             } catch (Throwable $e) {
                 http_response_code(400);
@@ -3809,7 +3923,7 @@ $isWp = Urls::isWordPress();
                         </div>
                         <p class="form-help" style="margin-top: 0.75rem;">
                             Data folder on the server (keep it when you upgrade, copy it for a full backup):
-                            <code style="word-break: break-all;"><?php echo htmlspecialchars((string)(realpath(Database::getDataDir()) ?: Database::getDataDir())); ?></code>
+                            <code style="word-break: break-all;" id="data-folder-path">&hellip;</code>
                         </p>
                         <div id="seed-reveal-box" style="display: none; margin-top: 1rem; padding: 1rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px;">
                             <p style="color: var(--danger); font-size: 0.85rem; margin-bottom: 0.5rem;">
@@ -3953,6 +4067,12 @@ $isWp = Urls::isWordPress();
                     <a href="<?php echo htmlspecialchars($cpsUpdate['url'] ?: 'https://github.com/jooray/cashupayserver/releases', ENT_QUOTES); ?>"
                        target="_blank" rel="noopener"
                        style="color: var(--text-secondary); text-decoration: none;"><?php echo $cpsUpdate['outdated'] ? 'How to upgrade' : 'Releases'; ?></a>
+                    <?php $updateUrlProblem = UpdateCheck::endpointProblem(); ?>
+                    <?php if ($updateUrlProblem !== null): ?>
+                        <div style="margin-top: 0.6rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: rgba(246,173,85,0.12); color: #f6ad55; font-size: 0.8rem; text-align: left;">
+                            <?php echo htmlspecialchars($updateUrlProblem, ENT_QUOTES); ?>
+                        </div>
+                    <?php endif; ?>
                     <div style="margin-top: 0.6rem; display: flex; gap: 0.4rem; align-items: flex-start; justify-content: center; text-align: left; max-width: 34rem; margin-left: auto; margin-right: auto;">
                         <input type="checkbox" id="update-check-enabled" <?php echo UpdateCheck::enabled() ? 'checked' : ''; ?>
                                onchange="saveUpdateCheck(this.checked)" style="width: 16px; height: 16px; margin-top: 0.15rem; flex: 0 0 auto;">
@@ -4692,6 +4812,7 @@ $isWp = Urls::isWordPress();
             if (view === 'settings') {
                 storeSelector.style.display = 'none';
                 if (document.getElementById('proxy-card')) loadProxySettings();
+                loadDataFolder();
             } else {
                 storeSelector.style.display = 'flex';
             }
@@ -4854,7 +4975,7 @@ $isWp = Urls::isWordPress();
                 // A backgrounded tab does not need to keep polling; the visibility
                 // handler below catches it up the moment the operator returns.
                 if (document.hidden) return;
-                loadDashboard();
+                loadDashboard({ background: true });
             }, 20000);
         }
 
@@ -4865,7 +4986,7 @@ $isWp = Urls::isWordPress();
             loadDashboard();
         });
 
-        async function loadDashboard() {
+        async function loadDashboard(options = {}) {
             try {
                 // Fetch with store_id if one is selected
                 let url = adminUrl + '?api=dashboard';
@@ -4873,7 +4994,10 @@ $isWp = Urls::isWordPress();
                     url += `&store_id=${encodeURIComponent(currentStoreId)}`;
                 }
 
-                const response = await fetch(url);
+                // The timed refresh is not the operator doing something: marked, it does
+                // not keep an unattended dashboard's session alive (DS41 L-10).
+                const response = await fetch(url, options.background === true
+                    ? { headers: { 'X-CashuPay-Background': '1' } } : {});
 
                 // The PIN gate is a convenience lock, not authentication. After the
                 // absolute session timeout it "unlocks" into a dashboard whose every
@@ -5397,6 +5521,17 @@ $isWp = Urls::isWordPress();
                     + 'If the address above is not yours, choose Automatic.';
             }
             box.textContent = text;
+        }
+
+        async function loadDataFolder() {
+            try {
+                const response = await fetch(`${adminUrl}?api=data_folder`);
+                if (!response.ok) return;
+                const data = await response.json();
+                document.getElementById('data-folder-path').textContent = data.path || '';
+            } catch (e) {
+                // The path simply stays unknown.
+            }
         }
 
         async function loadProxySettings() {
@@ -6535,7 +6670,9 @@ $isWp = Urls::isWordPress();
                         showToast('Select a store first', 'error');
                         return;
                     }
-                    const password = prompt('Re-enter your admin password to show the seed phrase:');
+                    const password = prompt(isWordPressMode
+                        ? 'Enter your WordPress password to show the seed phrase:'
+                        : 'Re-enter your admin password to show the seed phrase:');
                     if (!password) return;
 
                     const response = await postWithCsrf(
@@ -6562,7 +6699,9 @@ $isWp = Urls::isWordPress();
 
             if (backupBtn) {
                 backupBtn.addEventListener('click', async () => {
-                    const password = prompt('Re-enter your admin password to download a backup:');
+                    const password = prompt(isWordPressMode
+                        ? 'Enter your WordPress password to download a backup:'
+                        : 'Re-enter your admin password to download a backup:');
                     if (!password) return;
 
                     // The response is a file, so post a real form rather than fetch().
@@ -7231,7 +7370,7 @@ $isWp = Urls::isWordPress();
                             <button class="btn btn-secondary" id="copy-stranded-${index}" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">Copy</button>
                             <button class="btn btn-danger" id="recovered-stranded-${index}" style="padding: 0.3rem 0.7rem; font-size: 0.8rem;">I've claimed it — mark recovered</button>
                         </div>
-                        <p class="form-help" style="margin: 0.5rem 0 0;">The proofs stay saved until you mark them recovered, so you can re-export if you lose the token.</p>
+                        <p class="form-help" style="margin: 0.5rem 0 0;">This money is now marked as exported, so it no longer counts in your balance. If you lose the token, open this screen again to see the same one; marking it recovered writes it off.</p>
                     </div>`;
                 const copyBtn = document.getElementById(`copy-stranded-${index}`);
                 if (copyBtn) copyBtn.addEventListener('click', () => {
@@ -7249,6 +7388,7 @@ $isWp = Urls::isWordPress();
             try {
                 let params = `action=mark_stranded_recovered&mint_url=${encodeURIComponent(entry.mint_url)}&unit=${encodeURIComponent(entry.unit || 'sat')}`;
                 params += `&account=${encodeURIComponent(entry.account == null ? '' : entry.account)}`;
+                params += `&export_id=${encodeURIComponent(entry.export_id || '')}`;
                 const response = await postWithCsrf(adminUrl, params);
                 const result = await response.json().catch(() => ({}));
                 if (!response.ok) throw new Error(result.error || 'Failed');

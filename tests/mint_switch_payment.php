@@ -87,6 +87,8 @@ $mintA = startMint('a');
 $mintB = startMint('b');
 Database::initialize();
 Config::set('setup_complete', '1');
+// The mock mint listens on 127.0.0.1; the connect guard refuses that unless allowed.
+Config::set('allow_private_mints', true);
 
 echo "Admin mint change readies the new account\n";
 newStore('s1', $mintA, 'half depart obvious quality work element tank gorilla view sugar picture humble');

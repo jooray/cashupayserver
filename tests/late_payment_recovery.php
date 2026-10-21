@@ -63,6 +63,8 @@ function pay(string $mintUrl, string $quoteId): void {
 
 Database::initialize();
 Config::set('setup_complete', '1');
+// The mock mint listens on 127.0.0.1; the connect guard refuses that unless allowed.
+Config::set('allow_private_mints', true);
 Database::insert('stores', [
     'id' => 's1', 'name' => 's1', 'wallet_account_id' => Database::generateWalletAccountId(),
     'mint_url' => $mint, 'mint_unit' => 'sat',

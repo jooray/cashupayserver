@@ -65,6 +65,7 @@ class BackgroundRunner {
         'sync_proofs' => ['name' => 'Checking your balance with the mint', 'impact' => 'Your balance may be shown higher than what you can actually spend.'],
         'rotate_keyset_proofs' => ['name' => 'Refreshing ecash the mint is retiring', 'impact' => 'Some of your balance may become harder to spend if the mint retires it.'],
         'clean_cache' => ['name' => 'Cleaning up temporary files', 'impact' => 'Temporary files are piling up. Nothing urgent.'],
+        'cleanup_sessions' => ['name' => 'Removing old login sessions', 'impact' => 'Old login session files are piling up in the data folder. Nothing urgent.'],
         'expire_old_invoices' => ['name' => 'Expiring very old invoices', 'impact' => 'Very old unpaid invoices stay open. Nothing urgent.'],
         'cleanup_invoices' => ['name' => 'Removing old invoices', 'impact' => 'Old invoices are not being cleaned up. Nothing urgent.'],
         'cleanup_pending_ops' => ['name' => 'Clearing finished wallet records', 'impact' => 'Old wallet records are not being cleaned up. Nothing urgent.'],
@@ -133,12 +134,17 @@ class BackgroundRunner {
                 return 'success';
             },
             'expire_old_invoices' => function () {
-                $veryOld = Database::query(
-                    "UPDATE invoices SET status = 'Expired'
-                     WHERE status = 'New' AND created_at < ?",
-                    [time() - 30 * 24 * 3600]
-                )->rowCount();
+                // Through the same path as expire_invoices, so the shop gets InvoiceExpired.
+                $veryOld = Invoice::expireInvoicesCreatedBefore(time() - 30 * 24 * 3600);
                 return "expired {$veryOld} old invoices";
+            },
+            'cleanup_sessions' => function () {
+                $sessions = self::cleanupSessions();
+                $backups = self::cleanupBackups();
+                $parts = [];
+                if ($sessions > 0) { $parts[] = "removed {$sessions} old sessions"; }
+                if ($backups > 0) { $parts[] = "removed {$backups} leftover backups"; }
+                return $parts === [] ? 'none' : implode(', ', $parts);
             },
             'cleanup_invoices' => fn() => self::cleanupInvoices(),
             'cleanup_pending_ops' => fn() => self::cleanupPendingOperations(),
@@ -173,6 +179,15 @@ class BackgroundRunner {
         if ($lease === null) {
             return ['timestamp' => time(), 'skipped' => 'another run holds the lease', 'tasks' => []];
         }
+
+        // A fatal error (memory exhaustion, max_execution_time) is not a Throwable: the
+        // finally below never runs and the lease stays held for its full term, so every
+        // later tick says "another run holds the lease" (MINIMAX 4.8/4.10). The shutdown
+        // hook runs on that path; releaseLease() checks the token, so it cannot release
+        // a lease another run now owns.
+        register_shutdown_function(static function () use ($lease): void {
+            self::releaseLease($lease);
+        });
 
         $started = microtime(true);
         $results = ['timestamp' => time(), 'tasks' => []];
@@ -382,6 +397,50 @@ class BackgroundRunner {
             'failing' => $failing,
             'lastResult' => is_array($lastResult) ? $lastResult : null,
         ];
+    }
+
+    /** Session files older than this are dead: logins expire after 24 h at the latest. */
+    const SESSION_FILE_MAX_AGE = 25 * 3600;
+
+    /**
+     * Delete stale session files from the data folder's sessions directory.
+     *
+     * Every visitor gets a session file there, and PHP's own garbage collection is off
+     * on many hosts (Debian/Ubuntu ship session.gc_probability = 0 and clean only the
+     * system session path from cron), so without this they pile up forever.
+     */
+    public static function cleanupSessions(?int $now = null): int {
+        $now = $now ?? time();
+        $removed = 0;
+        foreach (glob(Database::getDataDir() . '/sessions/sess_*') ?: [] as $file) {
+            $mtime = @filemtime($file);
+            if (is_file($file) && $mtime !== false && $mtime < $now - self::SESSION_FILE_MAX_AGE && @unlink($file)) {
+                $removed++;
+            }
+        }
+        return $removed;
+    }
+
+    /** How long an interrupted backup snapshot may stay in the data folder. */
+    const BACKUP_FILE_MAX_AGE = 2 * 3600;
+
+    /**
+     * Delete leftover database-backup snapshots.
+     *
+     * The download handler removes its snapshot on every normal exit, including a
+     * shutdown hook, but a killed worker or a host restart can still leave one. A
+     * snapshot is a complete unencrypted wallet (MINIMAX 4.2), so it must not sit there.
+     */
+    public static function cleanupBackups(?int $now = null): int {
+        $now = $now ?? time();
+        $removed = 0;
+        foreach (glob(Database::getDataDir() . '/backup-*.sqlite') ?: [] as $file) {
+            $mtime = @filemtime($file);
+            if (is_file($file) && $mtime !== false && $mtime < $now - self::BACKUP_FILE_MAX_AGE && @unlink($file)) {
+                $removed++;
+            }
+        }
+        return $removed;
     }
 
     // --- lease ------------------------------------------------------------
@@ -665,6 +724,18 @@ class BackgroundRunner {
             // a small donation cost more to redeem than it is worth, and then no amount of
             // retrying will ever deliver it. Say so once and stop, instead of retrying for
             // as long as the server runs.
+            // The operator's switch stops pending retries too, not only new donations.
+            if (!defined('CASHUPAY_DONATION_PERCENT') || (float)CASHUPAY_DONATION_PERCENT <= 0) {
+                if (!str_contains((string)($row['detail'] ?? ''), 'Donations are switched off')) {
+                    Transfer::note(
+                        $row['id'],
+                        'Donations are switched off, so this one was not sent again. '
+                        . 'The ecash is still yours — you can take it back under Transfers.'
+                    );
+                }
+                return 'still_pending';
+            }
+
             if (self::isBelowMintFee((string)$row['token'])) {
                 Transfer::note(
                     $row['id'],

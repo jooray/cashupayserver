@@ -11,7 +11,17 @@ require_once __DIR__ . '/config.php';
 class Security {
     private const RATE_LIMIT_WINDOW = 60; // seconds
     private const MAX_LOGIN_ATTEMPTS = 5;
+    // Address-independent ceiling, so a caller who can choose the address that keys the
+    // per-address counter (a botnet, or a forged forwarded header) cannot get an
+    // unlimited number of password checks. Small enough to still be useful, large enough
+    // that a shared office address does not trip it.
+    private const MAX_GLOBAL_LOGIN_ATTEMPTS = 20;
     private const LOCKOUT_DURATION = 300; // 5 minutes
+
+    // A trusted proxy is a hop, not the internet. Ranges wider than these would let
+    // every visitor choose their own address for the login and request limits.
+    private const MIN_PROXY_PREFIX_V4 = 8;
+    private const MIN_PROXY_PREFIX_V6 = 32;
 
     /**
      * Check rate limit for an action
@@ -62,14 +72,53 @@ class Security {
      * the same count and get its password checked. Returns false when the identifier is
      * locked out (nothing is counted then). On success call clearLoginAttempts(); on a
      * wrong password do nothing more — the attempt is already counted.
+     *
+     * When the current client's identity came from forwarded headers, attempts are also
+     * counted per direct peer. A client that reaches a trusted hop directly (a LAN or VPN
+     * neighbour in "auto" mode, or a proxy that leaves a client-sent X-Forwarded-For
+     * alone) can pick a new identity per request, but not a new peer address (DS41 L-11,
+     * OPUS N5). That count only warns: behind a real reverse proxy every visitor shares
+     * the peer address, so refusing on it would let anyone lock the operator out.
+     *
+     * Password sign-in also counts a global budget ($countGlobal). Without it, an
+     * attacker who rotates addresses gets five guesses per address with no ceiling
+     * (MINIMAX 4.7). It is opt-in so the authenticated re-authentication prompts do not
+     * let one visitor burn the operator's sign-in budget.
      */
-    public static function reserveLoginAttempt(string $identifier): bool {
-        $key = "login_attempts_{$identifier}";
+    public static function reserveLoginAttempt(string $identifier, bool $countGlobal = false): bool {
+        $key = self::lockoutKey($identifier);
+        $peerKey = self::forwardedPeerLockoutKey();
         try {
-            return self::withWriteLock(function () use ($key): bool {
+            return self::withWriteLock(function () use ($key, $peerKey, $countGlobal): bool {
                 $data = self::getCache($key) ?? ['count' => 0, 'first_attempt' => time()];
-                if (self::lockoutEnd($data) > time()) {
+                if (self::lockoutEnd($data, self::MAX_LOGIN_ATTEMPTS) > time()) {
                     return false;
+                }
+                if ($countGlobal) {
+                    $globalKey = self::globalLockoutKey();
+                    $global = self::getCache($globalKey) ?? ['count' => 0, 'first_attempt' => time()];
+                    if (self::lockoutEnd($global, self::MAX_GLOBAL_LOGIN_ATTEMPTS) > time()) {
+                        return false;
+                    }
+                    if ((int)($global['count'] ?? 0) >= self::MAX_GLOBAL_LOGIN_ATTEMPTS) {
+                        // The previous global lockout has run out: start a fresh budget.
+                        $global = ['count' => 0, 'first_attempt' => time()];
+                    }
+                    $global['count'] = (int)($global['count'] ?? 0) + 1;
+                    $global['last_attempt'] = time();
+                    self::setCache($globalKey, $global, self::LOCKOUT_DURATION);
+                }
+                if ($peerKey !== null) {
+                    $peer = self::getCache($peerKey) ?? ['count' => 0, 'first_attempt' => time()];
+                    $peer['count'] = (int)($peer['count'] ?? 0) + 1;
+                    $peer['last_attempt'] = time();
+                    self::setCache($peerKey, $peer, self::LOCKOUT_DURATION);
+                    if ($peer['count'] === self::MAX_PEER_LOGIN_ATTEMPTS) {
+                        error_log('CashuPayServer: ' . self::MAX_PEER_LOGIN_ATTEMPTS . ' login attempts in '
+                            . (self::LOCKOUT_DURATION / 60) . ' minutes arrived through ' . ($_SERVER['REMOTE_ADDR'] ?? '?')
+                            . ' with changing forwarded addresses. If visitors reach this server directly (no proxy),'
+                            . ' set Settings > Visitor addresses to "Visitors connect directly".');
+                    }
                 }
                 if (($data['count'] ?? 0) >= self::MAX_LOGIN_ATTEMPTS) {
                     // The previous lockout has run out: start a fresh budget.
@@ -87,6 +136,35 @@ class Security {
         }
     }
 
+    /** Forwarded-identity login attempts per direct peer after which a warning is logged. */
+    private const MAX_PEER_LOGIN_ATTEMPTS = 30;
+
+    /**
+     * Cache key of an identifier's login counter. IPv6 clients usually hold a whole
+     * /64, so one address per guess would give them billions of fresh budgets.
+     */
+    private static function lockoutKey(string $identifier): string {
+        $ip = self::normalizeIp($identifier);
+        if ($ip !== null && str_contains($ip, ':')) {
+            $prefix = substr((string)inet_pton($ip), 0, 8) . str_repeat("\0", 8);
+            $identifier = inet_ntop($prefix) . '/64';
+        }
+        return "login_attempts_{$identifier}";
+    }
+
+    /**
+     * Key of the direct peer's counter, or null when the client identity is the peer
+     * itself (no forwarded header was believed): then the per-client counter is the
+     * peer's counter already.
+     */
+    private static function forwardedPeerLockoutKey(): ?string {
+        $peer = self::normalizeIp((string)($_SERVER['REMOTE_ADDR'] ?? ''));
+        if ($peer === null || self::getClientIp() === $peer) {
+            return null;
+        }
+        return 'login_peer_' . substr(self::lockoutKey($peer), strlen('login_attempts_'));
+    }
+
     /**
      * Record failed login attempt.
      *
@@ -95,7 +173,7 @@ class Security {
      * both counts a wrong password twice.
      */
     public static function recordFailedLogin(string $identifier): void {
-        $key = "login_attempts_{$identifier}";
+        $key = self::lockoutKey($identifier);
         try {
             self::withWriteLock(function () use ($key): void {
                 $data = self::getCache($key) ?? ['count' => 0, 'first_attempt' => time()];
@@ -112,29 +190,49 @@ class Security {
      * Check if identifier is locked out
      */
     public static function isLockedOut(string $identifier): bool {
-        $data = self::getCache("login_attempts_{$identifier}");
-        return $data !== null && self::lockoutEnd($data) > time();
+        $data = self::getCache(self::lockoutKey($identifier));
+        return $data !== null && self::lockoutEnd($data, self::MAX_LOGIN_ATTEMPTS) > time();
     }
 
     /**
      * Clear login attempts on successful login
+     *
+     * The peer counter is left alone: a proxy shared with an attacker who rotates
+     * forwarded addresses must not get a fresh budget whenever the operator logs in.
+     * The global budget is cleared: the person who just proved the password is the
+     * operator, and leaving it spent would lock them out for no reason.
      */
     public static function clearLoginAttempts(string $identifier): void {
-        $key = "login_attempts_{$identifier}";
-        self::deleteCache($key);
+        self::deleteCache(self::lockoutKey($identifier));
+        self::deleteCache(self::globalLockoutKey());
     }
 
     /**
      * Get remaining lockout time
      */
-    public static function getLockoutRemaining(string $identifier): int {
-        $data = self::getCache("login_attempts_{$identifier}");
-        return $data === null ? 0 : max(0, self::lockoutEnd($data) - time());
+    public static function getLockoutRemaining(string $identifier, bool $includeGlobal = false): int {
+        $remaining = 0;
+        $data = self::getCache(self::lockoutKey($identifier));
+        if ($data !== null) {
+            $remaining = max(0, self::lockoutEnd($data, self::MAX_LOGIN_ATTEMPTS) - time());
+        }
+        if ($includeGlobal) {
+            $global = self::getCache(self::globalLockoutKey());
+            if ($global !== null) {
+                $remaining = max($remaining, max(0, self::lockoutEnd($global, self::MAX_GLOBAL_LOGIN_ATTEMPTS) - time()));
+            }
+        }
+        return $remaining;
     }
 
-    /** When a lockout ends, or 0 when the counter is below the limit. */
-    private static function lockoutEnd(array $data): int {
-        if ((int)($data['count'] ?? 0) < self::MAX_LOGIN_ATTEMPTS) {
+    /** Cache key of the address-independent sign-in budget. */
+    private static function globalLockoutKey(): string {
+        return 'login_attempts_global';
+    }
+
+    /** When a lockout ends for the given limit, or 0 when the counter is below it. */
+    private static function lockoutEnd(array $data, int $limit): int {
+        if ((int)($data['count'] ?? 0) < $limit) {
             return 0;
         }
         return (int)($data['last_attempt'] ?? time()) + self::LOCKOUT_DURATION;
@@ -267,6 +365,9 @@ class Security {
         }
 
         $host = $parts['host'];
+        if (!self::isPlainHostSyntax($host)) {
+            return null;
+        }
         $port = (int)($parts['port'] ?? ($scheme === 'http' ? 80 : 443));
         $literal = trim($host, '[]');
         if (filter_var($literal, FILTER_VALIDATE_IP)) {
@@ -288,6 +389,40 @@ class Security {
             'ips' => $ips,
             'resolve' => [$host . ':' . $port . ':' . implode(',', $pinned)],
         ];
+    }
+
+    /**
+     * Whether a URL host is an LDH name or an IP literal, written the way libcurl will
+     * use it.
+     *
+     * libcurl percent-decodes the host and converts non-ASCII names to punycode before
+     * it looks up its CURLOPT_RESOLVE entries. A pin keyed on the raw `l%6fcalhost` then
+     * never matches, and cURL resolves the decoded name on its own, unvetted (OPUS N6).
+     * Only hosts that need no such conversion are accepted, so the name checked here is
+     * the name cURL connects to. Numeric forms other than dotted quads (`2130706433`,
+     * `0x7f.1`) are refused for the same reason: cURL rewrites them to an address.
+     */
+    private static function isPlainHostSyntax(string $host): bool {
+        if (str_starts_with($host, '[')) {
+            return str_ends_with($host, ']')
+                && filter_var(substr($host, 1, -1), FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) !== false;
+        }
+        if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+            return true;
+        }
+        if (strlen($host) > 253) {
+            return false;
+        }
+        $labels = explode('.', $host);
+        foreach ($labels as $label) {
+            // '_' is not valid in DNS hostnames but is common in Docker/Umbrel service
+            // names (http://cashu_mint:3338); libcurl does not rewrite it, so the pin holds.
+            if (!preg_match('/^[A-Za-z0-9_](?:[A-Za-z0-9_-]{0,61}[A-Za-z0-9_])?$/D', $label)) {
+                return false; // empty label, '%', backslash, non-ASCII, leading or trailing '-'
+            }
+        }
+        // A numeric last label makes the whole host an IPv4 address to URL parsers.
+        return !preg_match('/^(?:[0-9]+|0x[0-9a-f]*)$/iD', (string)end($labels));
     }
 
     /**
@@ -321,6 +456,7 @@ class Security {
         '198.18.0.0/15', '198.51.100.0/24', '203.0.113.0/24', '224.0.0.0/4', '240.0.0.0/4',
         '::/128', '::1/128', '64:ff9b::/96', '64:ff9b:1::/48', '100::/64', '2001::/23',
         '2001:db8::/32', '2002::/16', 'fc00::/7', 'fe80::/10', 'fec0::/10', 'ff00::/8',
+        '::ffff:0:0:0/96', // SIIT IPv4-translated (RFC 6145): embeds an IPv4 address
     ];
 
     /**
@@ -440,6 +576,14 @@ class Security {
             return false;
         }
         if (isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
+            return false;
+        }
+        // Links are built as path + '/admin.php' and so on. A path starting with '//'
+        // makes them protocol-relative (another host), a backslash is a slash to
+        // browsers, and quotes or angle brackets have no business in an origin we
+        // print into pages (DS41 M-2).
+        $path = (string)($parts['path'] ?? '');
+        if (str_starts_with($path, '//') || preg_match('/[\\\\"\'<>\x00-\x1F\x7F]/', $url)) {
             return false;
         }
         return in_array(strtolower($parts['scheme']), ['http', 'https'], true);
@@ -607,7 +751,9 @@ class Security {
 
     /** Private-network ranges a host's own load balancer or cache connects from. */
     private const PRIVATE_PROXY_RANGES = [
-        '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '100.64.0.0/10', 'fc00::/7',
+        '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7',
+        // Not 100.64.0.0/10: carrier-grade NAT and VPN overlays (Tailscale) hand those
+        // addresses to clients, not to a host's own proxies (DS41 L-11).
     ];
 
     /**
@@ -631,7 +777,7 @@ class Security {
         ];
     }
 
-    /** Validate one trusted-proxy entry (an IP or CIDR range); null if invalid. */
+    /** Validate one trusted-proxy entry (an IP or CIDR range); null if invalid or too wide. */
     public static function normalizeProxyEntry(string $entry): ?string {
         $entry = trim($entry);
         if (strtolower($entry) === 'cloudflare') {
@@ -643,10 +789,51 @@ class Security {
             if ($ip === null || !ctype_digit($bits)) {
                 return null;
             }
-            $max = str_contains($ip, ':') ? 128 : 32;
-            return (int)$bits <= $max ? $ip . '/' . (int)$bits : null;
+            $isV6 = str_contains($ip, ':');
+            $max = $isV6 ? 128 : 32;
+            $min = $isV6 ? self::MIN_PROXY_PREFIX_V6 : self::MIN_PROXY_PREFIX_V4;
+            $bits = (int)$bits;
+            // Private IPv6 networks are legitimate proxies even when their prefix is
+            // wider than the /32 default: fc00::/7 (unique local) and fe80::/10
+            // (link local). A global /7 would still be refused.
+            $narrowPrivateV6 = $isV6 && (
+                ($ip === 'fc00::' && $bits >= 7)
+                || ($ip === 'fd00::' && $bits >= 8)
+                || ($ip === 'fe80::' && $bits >= 10)
+            );
+            // A range that covers the internet would let every visitor choose the
+            // address that keys the login lockout and the request limits (MINIMAX 4.3).
+            return (($bits >= $min || $narrowPrivateV6) && $bits <= $max) ? $ip . '/' . $bits : null;
         }
         return self::normalizeIp($entry);
+    }
+
+    /**
+     * Why a trusted-proxy entry was refused, in the operator's words; null when valid.
+     *
+     * Separate from normalizeProxyEntry() so the dashboard can say what is wrong
+     * instead of the same generic sentence for a typo and for a range that is too wide.
+     */
+    public static function proxyEntryProblem(string $entry): ?string {
+        $entry = trim($entry);
+        if (self::normalizeProxyEntry($entry) !== null) {
+            return null;
+        }
+        if (str_contains($entry, '/')) {
+            [$ip, $bits] = explode('/', $entry, 2);
+            $ip = self::normalizeIp($ip);
+            if ($ip !== null && ctype_digit($bits)) {
+                $isV6 = str_contains($ip, ':');
+                $min = $isV6 ? self::MIN_PROXY_PREFIX_V6 : self::MIN_PROXY_PREFIX_V4;
+                if ((int)$bits < $min) {
+                    return "The range \"{$entry}\" covers too many addresses. A proxy is one server or a small network, so enter its own range (for example 10.0.0.0/8), not the whole internet.";
+                }
+                if ((int)$bits > ($isV6 ? 128 : 32)) {
+                    return "\"{$entry}\" is not a valid range: the number after the slash is too large.";
+                }
+            }
+        }
+        return "\"{$entry}\" is not an address like 203.0.113.5 or a range like 10.0.0.0/8.";
     }
 
     /** Whether an address is a proxy whose forwarding headers we believe. */
@@ -681,7 +868,13 @@ class Security {
         return self::trustsCloudflare() && self::isCloudflareIp($ip);
     }
 
-    /** @return string[] operator-configured proxy addresses and CIDR ranges */
+    /**
+     * @return string[] operator-configured proxy addresses and CIDR ranges
+     *
+     * Entries are re-validated on read, not only when the dashboard saves them: a value
+     * stored before the width rule existed (CASHUPAY_TRUSTED_PROXIES, or a row written by
+     * an older release) must stop trusting the internet after the upgrade too.
+     */
     private static function trustedProxyRanges(): array {
         $ranges = [];
         foreach ([self::configValue('trusted_proxies'), defined('CASHUPAY_TRUSTED_PROXIES') ? CASHUPAY_TRUSTED_PROXIES : null] as $value) {
@@ -690,13 +883,29 @@ class Security {
             }
             if (is_array($value)) {
                 foreach ($value as $entry) {
-                    if (is_string($entry) && trim($entry) !== '') {
-                        $ranges[] = trim($entry);
+                    if (!is_string($entry) || trim($entry) === '') {
+                        continue;
                     }
+                    $normalized = self::normalizeProxyEntry($entry);
+                    if ($normalized === null) {
+                        self::warnOnceAboutProxyEntry(trim($entry));
+                        continue;
+                    }
+                    $ranges[] = $normalized;
                 }
             }
         }
         return $ranges;
+    }
+
+    /** One log line per refused entry per request, so a bad stored value is visible. */
+    private static function warnOnceAboutProxyEntry(string $entry): void {
+        static $warned = [];
+        if (isset($warned[$entry])) {
+            return;
+        }
+        $warned[$entry] = true;
+        error_log('CashuPayServer: ignoring trusted proxy entry "' . $entry . '" because it is not a valid proxy address or covers too many addresses.');
     }
 
     private static function behindCloudflare(): bool {

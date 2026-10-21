@@ -78,6 +78,8 @@ check($up, 'mock mint responds on /v1/info');
 // --- Bootstrap CashuPayServer ---------------------------------------------
 Database::initialize();
 Config::set('setup_complete', '1');
+// The mock mint listens on 127.0.0.1; the connect guard refuses that unless allowed.
+Config::set('allow_private_mints', true);
 
 $mnemonic = 'half depart obvious quality work element tank gorilla view sugar picture humble';
 $storeId = 'store_v2test';
@@ -108,7 +110,7 @@ check($wallet->getInputFeePpk('00deadbeefcafe12') === 100, 'legacy v1 keyset fee
 echo "invoice flow:\n";
 $invoice = Invoice::create($storeId, ['amount' => 21, 'currency' => 'sat']);
 check(!empty($invoice['id']) && !empty($invoice['quote_id']), 'invoice created with mint quote');
-check(str_starts_with((string)$invoice['bolt11'], 'lnbcmock'), 'lightning invoice returned');
+check(str_starts_with((string)$invoice['bolt11'], 'lnbc210n1mock'), 'lightning invoice returned');
 
 // New-style quote (no `state` field) must read as unpaid before payment.
 Invoice::pollSingleQuote($invoice['id'], true);
@@ -321,9 +323,16 @@ $resolved = Invoice::resolveNamespaceForMint($oldMint, 'sat');
 check($resolved['found'] && $resolved['amount'] === $balBefore && $resolved['account'] === $storeAccount,
     'manual mint resolution finds the stranded namespace and its account');
 
-// Export is read-only: the funds are still there until explicitly marked recovered.
+// The export reserves the proofs: the same money is shown again, but it is the same
+// token, not a second live one, and the namespace stays visible until marked recovered.
 $exp2 = Invoice::exportNamespaceAsToken($oldMint, 'sat', $storeAccount);
-check($exp2['amount'] === $balBefore, 're-export before marking recovered still yields the funds (read-only)');
+check($exp2['amount'] === $balBefore && $exp2['secrets'] === $exp['secrets'],
+    're-export before marking recovered shows the same proofs, not a second copy');
+$stillListed = false;
+foreach (Invoice::scanStrandedNamespaces() as $s) {
+    if ($s['wallet_id'] === $exp['wallet_id']) { $stillListed = true; }
+}
+check($stillListed, 'an exported stranded namespace stays on the recovery screen until it is marked recovered');
 
 $marked = Invoice::markNamespaceRecovered($oldMint, 'sat', $storeAccount, $exp['secrets']);
 check($marked === $exp['count'], "mark recovered marks all {$exp['count']} exported proofs");

@@ -42,7 +42,7 @@ $permissionDescriptions = [
     'btcpay.store.canmodifyinvoices' => 'Modify invoices',
     'btcpay.store.canmanageinvoicestatus' => 'Change an invoice\'s status (for example, cancel it)',
     'btcpay.store.webhooks.canmodifywebhooks' => 'Manage webhooks (how your shop hears about payments)',
-    'btcpay.store.canviewstoresettings' => 'View store settings',
+    'btcpay.store.canviewstoresettings' => 'View store settings, and read all invoices (amounts, payment requests and order details)',
     'btcpay.store.canmodifystoresettings' => 'Full control of the store, including deleting it',
     'btcpay.store.cancreatenonapprovedpullpayments' => 'Create pull payments (refunds; not supported here, has no effect)',
 ];
@@ -136,8 +136,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $result = Auth::attemptLogin($password);
             if ($result === 'ok') {
-                // Redirect to same page to show approval form
-                header('Location: ' . $_SERVER['REQUEST_URI']);
+                // Redirect to same page to show approval form. Rebuilt as a
+                // root-relative path: under router.php a request for
+                // //evil.example/api-keys/authorize reaches this page, and the raw
+                // REQUEST_URI would send the freshly logged-in operator to that host
+                // (OPUS C8). Urls::pairing() is no help: it depends on base_url and
+                // url_mode, and its router.php form does not match the cli-server route.
+                $selfPath = (string)(parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?? '/');
+                $selfPath = '/' . ltrim($selfPath, "/\\");
+                $queryString = (string)($_SERVER['QUERY_STRING'] ?? '');
+                header('Location: ' . $selfPath . ($queryString !== '' ? '?' . $queryString : ''));
                 exit;
             }
             $error = $result === 'locked'

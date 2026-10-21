@@ -67,6 +67,8 @@ $mintUrl = "http://127.0.0.1:$mintPort";
 
 Database::initialize();
 Config::set('setup_complete', true);
+// The mock mint listens on 127.0.0.1; the connect guard refuses that unless allowed.
+Config::set('allow_private_mints', true);
 Database::insert('stores', [
     'id' => 'store_1', 'name' => 'Shop', 'wallet_account_id' => Database::generateWalletAccountId(),
     'mint_url' => $mintUrl, 'mint_unit' => 'sat',

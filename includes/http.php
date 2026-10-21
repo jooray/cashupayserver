@@ -32,7 +32,13 @@ if (!function_exists('cashupay_curl_protocol_options')) {
 if (!function_exists('cashupay_is_trusted_release_link')) {
     /**
      * A link the operator can safely be sent to "to upgrade": this project's GitHub
-     * releases, or a plain path on the manifest's own host.
+     * releases, or a plain path on $ownHost.
+     *
+     * $ownHost must be a fixed host the caller vouches for (the signed safe-mode notice
+     * passes cashupayserver.org), never one taken from the update manifest's URL: the
+     * update manifest is not signed, so a compromised manifest host could point the
+     * "Security update available" link at itself (DS41 L-5). Update links pass null and
+     * are GitHub releases only.
      *
      * Matched on the raw string, never after parsing: a prefix check on the parsed path
      * accepted /jooray/cashupayserver/../../someone/fork, which a browser normalises to

@@ -5,6 +5,7 @@
  * Handles routing for PHP built-in server and servers without mod_rewrite.
  */
 
+require_once __DIR__ . '/../includes/entrypoint_guard.php';
 require_once __DIR__ . '/../includes/database.php';
 require_once __DIR__ . '/../includes/config.php';
 require_once __DIR__ . '/../includes/urls.php';

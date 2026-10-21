@@ -138,10 +138,17 @@ class PaymentRequest {
      *            token, or it never got that far.
      * 'pending'  a swap journal still holds them, or the picture is mixed: wait.
      *
+     * Only rows created at or after $since (the claim's receiving_since) count. A token
+     * the wallet already held before this claim (a donation, or the payment for another
+     * request) left its inputs SPENT long ago; counting those marked a request paid with
+     * no new funds (C3/M-1). storeProofs() and preparePendingSpend() never overwrite an
+     * existing row's created_at, so such secrets stay invisible here.
+     *
      * @param string[] $secrets
+     * @param int      $since   receiving_since of the claim bound to these secrets
      * @return array{state: string, amount: int}
      */
-    public static function receiptState(\Cashu\Wallet $wallet, array $secrets): array {
+    public static function receiptState(\Cashu\Wallet $wallet, array $secrets, int $since): array {
         $storage = $wallet->getStorage();
         $reserved = array_flip($storage->getReservedInputSecrets());
         foreach ($secrets as $secret) {
@@ -151,8 +158,8 @@ class PaymentRequest {
         }
         $in = implode(',', array_fill(0, count($secrets), '?'));
         $rows = Database::fetchAll(
-            "SELECT secret, state FROM cashu_proofs WHERE wallet_id = ? AND secret IN ($in)",
-            array_merge([$storage->getWalletId()], $secrets)
+            "SELECT secret, state FROM cashu_proofs WHERE wallet_id = ? AND created_at >= ? AND secret IN ($in)",
+            array_merge([$storage->getWalletId(), $since], $secrets)
         );
         if (empty($rows)) {
             return ['state' => 'released', 'amount' => 0];
@@ -169,6 +176,31 @@ class PaymentRequest {
             return ['state' => 'released', 'amount' => 0];
         }
         return ['state' => 'pending', 'amount' => 0];
+    }
+
+    /**
+     * Whether the wallet already knows any of these secrets (a stored proof row, or a
+     * swap journal holding it). Asked right after a fresh claim: a token this shop has
+     * already received can never be the payment for a new request (C3/M-1). Asked only
+     * on a fresh bind, never on a retry of the same claim, so a lost response is still
+     * answered from the wallet.
+     *
+     * @param string[] $secrets
+     */
+    public static function secretsKnown(\Cashu\Wallet $wallet, array $secrets): bool {
+        $storage = $wallet->getStorage();
+        $reserved = array_flip($storage->getReservedInputSecrets());
+        foreach ($secrets as $secret) {
+            if (isset($reserved[$secret])) {
+                return true;
+            }
+        }
+        $in = implode(',', array_fill(0, count($secrets), '?'));
+        $row = Database::fetchOne(
+            "SELECT 1 AS known FROM cashu_proofs WHERE wallet_id = ? AND secret IN ($in) LIMIT 1",
+            array_merge([$storage->getWalletId()], $secrets)
+        );
+        return !empty($row);
     }
 
     /**
@@ -193,7 +225,7 @@ class PaymentRequest {
                 }
                 $wallet = Invoice::getWalletForStore((string)$request['store_id'], (string)$request['mint_url'], (string)$request['unit']);
                 $wallet->loadMint();
-                $state = self::receiptState($wallet, $secrets);
+                $state = self::receiptState($wallet, $secrets, (int)($request['receiving_since'] ?? PHP_INT_MAX));
                 if ($state['state'] === 'paid') {
                     $response = [
                         'success' => true,

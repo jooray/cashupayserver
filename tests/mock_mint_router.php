@@ -273,7 +273,9 @@ if ($uri === '/v1/mint/quote/bolt11' && $method === 'POST') {
     $quoteId = bin2hex(random_bytes(16));
     $quote = [
         'quote' => $quoteId,
-        'request' => 'lnbcmock' . $quoteId,
+        // A BOLT11-shaped request whose amount matches (10 nano-BTC = 1 sat): the
+        // wallet refuses quotes whose invoice amount differs from the request.
+        'request' => 'lnbc' . (max(1, (int)($body['amount'] ?? 0)) * 10) . 'n1mock' . $quoteId,
         'amount' => (int)($body['amount'] ?? 0),
         'unit' => MOCK_UNIT,
         'expiry' => time() + 900,

@@ -66,6 +66,7 @@ final class StubProvider implements PriceProvider {
     public function __construct(private string $name, private ?float $rate) {}
     public function getName(): string { return $this->name; }
     public function getBtcPrice(string $currency): ?float { $this->calls++; return $this->rate; }
+    public function supports(string $currency): bool { return true; }
 }
 function useProviders(StubProvider ...$stubs): void {
     $prop = new ReflectionProperty(ExchangeRates::class, 'providers');
@@ -73,8 +74,12 @@ function useProviders(StubProvider ...$stubs): void {
     foreach ($stubs as $s) { $map[$s->getName()] = $s; }
     $prop->setValue(null, $map);
 }
-$expire = fn(string $cur, float $rate, int $age) =>
+// The cached rate plus the anchor two providers confirmed (C2: the band is measured
+// against the anchor, never against the possibly single-source cache).
+$expire = function (string $cur, float $rate, int $age): void {
     Config::set("rate_$cur", ['rate' => $rate, 'timestamp' => time() - $age, 'provider' => 'test']);
+    Config::set("rate_anchor_$cur", ['rate' => $rate, 'timestamp' => time() - $age]);
+};
 
 $expire('eur', 50000.0, 600); // expired (older than 5 min), but a recent reference
 useProviders($glitch = new StubProvider('glitch', 500000.0), $good = new StubProvider('good', 51000.0));
@@ -89,24 +94,26 @@ check(ExchangeRates::getBtcPrice('EUR', 'a', 'b') === 52000.0 && $b->calls === 0
     'a sane primary answer needs no second opinion');
 
 $expire('eur', 50000.0, 600);
-useProviders(new StubProvider('a', 20000.0), new StubProvider('b', 20500.0));
+useProviders(new StubProvider('a', 20000.0), new StubProvider('b', 20300.0));
 check(ExchangeRates::getBtcPrice('EUR', 'a', 'b') === 20000.0,
     'when two providers agree on a big move, the market moved: their rate is used');
 
 Config::set('rate_eur', null); // cold start, nothing to compare with
+Config::set('rate_anchor_eur', null);
 useProviders(new StubProvider('a', 500000.0), new StubProvider('b', 50000.0), new StubProvider('c', 50500.0));
 check(ExchangeRates::getBtcPrice('EUR', 'a', 'b') === 50000.0,
     'with no known rate, the answer two providers agree on wins over a lone outlier');
 
 Config::set('rate_eur', null);
+Config::set('rate_anchor_eur', null);
 useProviders(new StubProvider('a', 50000.0));
-check(ExchangeRates::getBtcPrice('EUR', 'a') === 50000.0, 'a single provider with nothing to compare is taken');
+check(ExchangeRates::getBtcPrice('EUR', 'a') === null, 'a single unconfirmed provider never prices invoices (C2)');
 
 $expire('eur', 50000.0, 2 * 3600); // too old for the stale fallback, still a reference
 useProviders(new StubProvider('a', 500000.0), new StubProvider('b', null));
 $msg = null;
 try { ExchangeRates::convertToMintUnit('10', 'EUR', 'SAT'); } catch (Exception $e) { $msg = $e->getMessage(); }
-check($msg === 'Prices are unavailable right now; try again in a few minutes.',
+check($msg === ExchangeRates::UNAVAILABLE_MESSAGE && !str_contains((string)$msg, 'Cannot get exchange rate'),
     'with no trustworthy rate the shop gets a plain message, not "Cannot get exchange rate" (' . $msg . ')');
 
 // One decimals rule for pricing, the dashboard, the payment page and NUT-18 requests.

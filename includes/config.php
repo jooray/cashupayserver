@@ -10,7 +10,7 @@ require_once __DIR__ . '/database.php';
 // Version
 require_once __DIR__ . '/http.php';
 
-define('CASHUPAY_VERSION', '0.5.6-alpha');
+define('CASHUPAY_VERSION', '0.5.7-alpha');
 
 /**
  * The BTCPay Server version reported to Greenfield clients.
@@ -320,13 +320,19 @@ class Config {
                 $old = rtrim($old, '/');
                 $new = rtrim($new, '/');
             }
-            if ($old !== '' && $old !== $new && self::walletAccountIsInitialized($store)) {
-                // The seed is never changeable in place — a different seed can't
-                // derive the existing proofs' secrets and breaks recovery.
-                // The mint/unit MAY be changed with explicit operator consent
-                // ($allowMintChange): the old mint's funds are only stranded, not
-                // lost, and stay recoverable via Invoice::scanStrandedNamespaces().
-                if ($field === 'seed_phrase' || !$allowMintChange) {
+            if ($old !== '' && $old !== $new) {
+                // The seed is the store's recovery key and is never changeable in place,
+                // whether or not the current namespace happens to be initialized: a mint
+                // or unit change that could not reach its new mint leaves the namespace
+                // empty, and replacing the seed there would destroy the only key to the
+                // money still at the old mint (MINIMAX 4.24).
+                if ($field === 'seed_phrase') {
+                    throw new Exception('This store already has its recovery phrase, and it cannot be replaced. To use a different phrase, create a new store and move the money across.');
+                }
+                if (self::walletAccountIsInitialized($store) && !$allowMintChange) {
+                    // The mint/unit MAY be changed with explicit operator consent
+                    // ($allowMintChange): the old mint's funds are only stranded, not
+                    // lost, and stay recoverable via Invoice::scanStrandedNamespaces().
                     throw new Exception('Wallet seed, mint, and unit are immutable after wallet initialization. Create a new store wallet instead.');
                 }
             }
@@ -609,15 +615,40 @@ class Config {
         // Only allow http(s) mint URLs (blocks file:// and other schemes at the single
         // point every mint-URL entry path flows through). See FABLE-SECURITY-AUDIT (MED-2).
         require_once __DIR__ . '/security.php';
+        require_once __DIR__ . '/mint_helpers.php';
         if (Security::sanitizeUrl($mintUrl) === null) {
             return ['success' => false, 'error' => 'Mint URL must be a valid http(s) URL', 'info' => null];
+        }
+        // The private-address policy belongs here too, so no caller can skip it (OPUS C7).
+        try {
+            $mintUrl = MintHelpers::assertSafeMintUrl($mintUrl);
+        } catch (\InvalidArgumentException $e) {
+            return ['success' => false, 'error' => $e->getMessage(), 'info' => null];
         }
         try {
             $client = new \Cashu\MintClient(rtrim($mintUrl, '/'));
             $info = $client->get('info');
             return ['success' => true, 'error' => null, 'info' => $info];
         } catch (\Exception $e) {
-            return ['success' => false, 'error' => $e->getMessage(), 'info' => null];
+            // The raw cURL text tells an open port from a closed one; keep it in the log.
+            error_log('CashuPayServer: mint connection test failed: ' . $e->getMessage());
+            return [
+                'success' => false,
+                'error' => 'Could not reach the mint. Check the address, or try again in a few minutes.',
+                'info' => null,
+            ];
         }
     }
+}
+
+// Every outbound wallet request (mint API calls, LNURL lookups) goes through the
+// application's address policy: checked at connect time and pinned to the checked
+// addresses (OPUS N1, N2). Registered here because every entry point that touches the
+// wallet loads this file. The policy itself lives in MintHelpers::connectGuard().
+if (class_exists('Cashu\\ConnectGuard')) {
+    \Cashu\ConnectGuard::set(static function (string $url, string $purpose): array {
+        require_once __DIR__ . '/security.php';
+        require_once __DIR__ . '/mint_helpers.php';
+        return MintHelpers::connectGuard($url, $purpose);
+    });
 }

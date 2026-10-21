@@ -330,45 +330,100 @@ class Invoice {
     }
 
     /**
-     * Mark expired invoices without contacting the mint
+     * How long past its expiry a `New` invoice may stay open while the mint has not
+     * confirmed that it is unpaid. Expiring on the local clock alone gave a payment made
+     * just before expiry an InvoiceExpired followed by InvoiceSettled; past this, an
+     * unreachable mint no longer keeps the order open (late payments are still
+     * collected by recoverExpiredPaidInvoices()).
+     */
+    private const EXPIRY_CONFIRM_WINDOW = 3600;
+
+    /**
+     * How long after a mint quote expired before a definitely-unpaid answer lets us drop
+     * the quote id. A mint's watcher can lag; dropping the only link to a quote that was
+     * actually paid makes the money uncollectable (MINIMAX 4.25).
+     */
+    private const UNPAID_WRITE_OFF_DELAY = 7 * 86400;
+
+    /**
+     * Expire `New` invoices whose expiry the mint has confirmed, or that are long past it.
+     *
+     * An invoice is expired here only when a poll that started after its expiry saw the
+     * quote unpaid (normally the poller expires it itself), or when it is more than
+     * EXPIRY_CONFIRM_WINDOW past expiry. Fresh expiries are left to the pollers, which
+     * ask the mint first.
      *
      * @return int Number of invoices marked as expired
      */
     public static function markExpiredInvoices(): int {
         $now = time();
+        return self::expireNewInvoices(
+            "expiration_time < ? AND (expiration_time < ?
+                OR (last_polled_at >= expiration_time AND last_poll_error IS NULL
+                    AND UPPER(COALESCE(last_poll_state, '')) = 'UNPAID'))",
+            [$now, $now - self::EXPIRY_CONFIRM_WINDOW]
+        );
+    }
+
+    /**
+     * Expire `New` invoices created before the given time, whatever their expiry says.
+     * Same path as markExpiredInvoices(), so each one emits InvoiceExpired.
+     */
+    public static function expireInvoicesCreatedBefore(int $createdBefore): int {
+        return self::expireNewInvoices('created_at < ?', [$createdBefore]);
+    }
+
+    /**
+     * Move the `New` invoices matching $where to Expired, firing InvoiceExpired for each.
+     *
+     * @param string $where SQL condition on invoices (ANDed with status = 'New')
+     */
+    /** How many expiries one write transaction handles. */
+    private const EXPIRY_BATCH_SIZE = 100;
+
+    private static function expireNewInvoices(string $where, array $params): int {
         // Capture which invoices are transitioning so we can fire InvoiceExpired for each
         // (the bulk UPDATE alone emitted no webhook, so shops never learned of expiry).
         // See FABLE-CASHUPAYSERVER-AUDIT (C-WH-1). It reads before it writes, so it
         // must hold the write lock from the start (see beginWriteTransaction).
-        Database::beginWriteTransaction();
-        try {
-            // Select and update inside the transaction, and update exactly the ids
-            // selected: reading first and then updating a broader predicate expired
-            // invoices that were never in the list (and skipped events for them).
-            $expiring = Database::fetchAll(
-                "SELECT id, store_id FROM invoices WHERE status = 'New' AND expiration_time < ?",
-                [$now]
-            );
-
-            $count = 0;
-            foreach ($expiring as $row) {
-                $stmt = Database::query(
-                    "UPDATE invoices SET status = 'Expired' WHERE id = ? AND status = 'New'",
-                    [$row['id']]
+        //
+        // Bounded batches: an unbounded SELECT of a large backlog exhausted memory, and
+        // the fatal took every later background task with it (MINIMAX 4.8). Each batch
+        // is its own transaction, so the SQLite writer lock is held for a short time.
+        $count = 0;
+        while (true) {
+            Database::beginWriteTransaction();
+            try {
+                // Select and update inside the transaction, and update exactly the ids
+                // selected: reading first and then updating a broader predicate expired
+                // invoices that were never in the list (and skipped events for them).
+                $expiring = Database::fetchAll(
+                    "SELECT id, store_id FROM invoices WHERE status = 'New' AND ({$where}) ORDER BY id ASC LIMIT ?",
+                    array_merge($params, [self::EXPIRY_BATCH_SIZE])
                 );
-                if ($stmt->rowCount() === 0) {
-                    continue; // settled by another worker in the meantime
+
+                foreach ($expiring as $row) {
+                    $stmt = Database::query(
+                        "UPDATE invoices SET status = 'Expired' WHERE id = ? AND status = 'New'",
+                        [$row['id']]
+                    );
+                    if ($stmt->rowCount() === 0) {
+                        continue; // settled by another worker in the meantime
+                    }
+                    $count++;
+                    $invoice = self::getById($row['id']);
+                    if ($invoice) {
+                        WebhookSender::fireEvent($row['store_id'], 'InvoiceExpired', $invoice);
+                    }
                 }
-                $count++;
-                $invoice = self::getById($row['id']);
-                if ($invoice) {
-                    WebhookSender::fireEvent($row['store_id'], 'InvoiceExpired', $invoice);
-                }
+                Database::commit();
+            } catch (Throwable $e) {
+                Database::rollback();
+                throw $e;
             }
-            Database::commit();
-        } catch (Throwable $e) {
-            Database::rollback();
-            throw $e;
+            if (count($expiring) < self::EXPIRY_BATCH_SIZE) {
+                break;
+            }
         }
 
         return $count;
@@ -381,7 +436,8 @@ class Invoice {
      * @param int $batchLimit Maximum invoices to poll per call (default 10)
      */
     public static function pollPendingQuotes(int $minInterval = 30, int $batchLimit = 10): void {
-        // First, mark all expired invoices without contacting the mint
+        // First, expire the invoices the mint has already confirmed unpaid after their
+        // expiry, and those long past it (see markExpiredInvoices()).
         self::markExpiredInvoices();
 
         $now = time();
@@ -394,7 +450,8 @@ class Invoice {
         // Poll New invoices that aren't expired, PLUS any invoice stuck in Processing
         // (its mint() may have failed transiently and needs to be re-driven). Without the
         // Processing arm, a paid-but-unminted invoice could sit forever waiting for a page
-        // load. See FABLE-CASHUPAYSERVER-AUDIT (C5).
+        // load. See FABLE-CASHUPAYSERVER-AUDIT (C5). A New invoice that has just
+        // expired is polled once more, and expired only if the mint says it is unpaid.
         $pendingInvoices = Database::fetchAll(
             "SELECT * FROM invoices
              WHERE status IN ('New', 'Processing')
@@ -405,7 +462,7 @@ class Invoice {
                  CASE WHEN last_polled_at IS NULL THEN 0 ELSE 1 END,
                  last_polled_at ASC
              LIMIT ?",
-            [$now, $now - $minInterval, $batchLimit]
+            [$now - self::EXPIRY_CONFIRM_WINDOW, $now - $minInterval, $batchLimit]
         );
 
         if (empty($pendingInvoices)) {
@@ -430,6 +487,8 @@ class Invoice {
                     } else {
                         self::mintAndStoreTokens($invoice, $wallet);
                     }
+                } else {
+                    self::expireIfConfirmedUnpaid($invoice, $quoteStatus);
                 }
             } catch (Throwable $e) {
                 // Visible to the operator, not just to a log they cannot read.
@@ -799,9 +858,13 @@ class Invoice {
             return;
         }
 
-        // Check expiration (only for New invoices)
-        if ($invoice['status'] === 'New' && $invoice['expiration_time'] < time()) {
-            self::updateStatus($invoice['id'], 'Expired');
+        // An expired New invoice is not expired on the local clock alone: the mint is
+        // asked once below, and the invoice expires only when it says "unpaid". A
+        // payment made just before expiry used to get InvoiceExpired and then
+        // InvoiceSettled. Past the confirm window markExpiredInvoices() takes over.
+        if ($invoice['status'] === 'New'
+            && (int)$invoice['expiration_time'] < time() - self::EXPIRY_CONFIRM_WINDOW) {
+            self::updateStatus($invoice['id'], 'Expired', null, ['New']);
             return;
         }
 
@@ -837,6 +900,8 @@ class Invoice {
                 } elseif ($invoice['status'] === 'Processing') {
                     self::mintAndStoreTokens($invoice, $wallet);
                 }
+            } else {
+                self::expireIfConfirmedUnpaid($invoice, $quoteStatus);
             }
         } catch (Throwable $e) {
             // Record it where the operator can see it. This used to go only to the PHP
@@ -876,6 +941,14 @@ class Invoice {
             );
         } catch (Throwable $e) {
             // Ignore: this is only bookkeeping.
+        }
+    }
+
+    /** Expire a New invoice past its expiry once the mint has said its quote is unpaid. */
+    private static function expireIfConfirmedUnpaid(array $invoice, \Cashu\MintQuote $quote): void {
+        if ($invoice['status'] === 'New' && (int)$invoice['expiration_time'] < time()
+            && self::quoteIsDefinitelyUnpaid($quote)) {
+            self::updateStatus($invoice['id'], 'Expired', null, ['New']);
         }
     }
 
@@ -927,19 +1000,34 @@ class Invoice {
      * is PAID/ISSUED, re-drive mint() (recovers a mint interrupted after the mint signed).
      * See FABLE-CASHUPAYSERVER-AUDIT (C5, C-REC-1).
      */
-    public static function recoverOrphanedInvoices(): array {
-        $recovered = [];
+    /** How often one Processing invoice is re-asked about, and how many per pass. */
+    private const ORPHAN_POLL_INTERVAL = 300;
+    private const ORPHAN_BATCH_LIMIT = 50;
 
+    public static function recoverOrphanedInvoices(int $batchLimit = self::ORPHAN_BATCH_LIMIT): array {
+        $recovered = [];
+        $now = time();
+
+        // Bounded and rate-limited: it used to load and re-poll every Processing row on
+        // every pass, which grows without limit and can exhaust memory while holding the
+        // cron lease (MINIMAX 4.10).
         $stuck = Database::fetchAll(
-            "SELECT * FROM invoices WHERE status = 'Processing' AND created_at < ?",
-            [time() - 60]
+            "SELECT * FROM invoices
+             WHERE status = 'Processing' AND quote_id IS NOT NULL AND created_at < ?
+               AND (last_polled_at IS NULL OR last_polled_at <= ?)
+             ORDER BY created_at ASC
+             LIMIT ?",
+            [$now - 60, $now - self::ORPHAN_POLL_INTERVAL, $batchLimit]
         );
 
         foreach ($stuck as $invoice) {
             try {
-                if (!$invoice['quote_id']) {
-                    continue;
-                }
+                Database::update(
+                    'invoices',
+                    ['last_polled_at' => $now],
+                    "id = ? AND status = 'Processing'",
+                    [$invoice['id']]
+                );
                 $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null, $invoice['mint_unit'] ?? null);
                 if (!$wallet->hasStorage()) {
                     continue;
@@ -963,8 +1051,10 @@ class Invoice {
                         error_log("CashuPayServer: Re-minted orphaned invoice {$invoice['id']}");
                     }
                 }
-            } catch (Exception $e) {
-                error_log("CashuPayServer: Error recovering invoice {$invoice['id']}: " . $e->getMessage());
+            } catch (Throwable $e) {
+                // A malformed row must not abort the whole batch (TypeError/Error used to
+                // escape this guard). The cooldown prevents a hot loop on the same row.
+                error_log("CashuPayServer: Error recovering invoice {$invoice['id']}: " . get_class($e) . ': ' . $e->getMessage());
             }
         }
 
@@ -1028,14 +1118,24 @@ class Invoice {
                     if (self::getById($invoice['id'])['status'] === 'Settled') {
                         $recovered[] = $invoice['id'];
                     }
-                } elseif ($quoteStatus->expiry !== null && $quoteStatus->expiry < $now
+                } elseif ($quoteStatus->expiry !== null
+                          && $quoteStatus->expiry < $now - self::UNPAID_WRITE_OFF_DELAY
                           && self::quoteIsDefinitelyUnpaid($quoteStatus)) {
-                    // The mint's own quote has expired and the mint says plainly that
+                    // The mint's own quote has long expired and the mint says plainly that
                     // nothing was paid: this claim is resolved and the row may be cleaned
-                    // up by age from now on. Anything less than that plain answer (no
-                    // state, PENDING, an unknown word) keeps the quote: dropping the only
-                    // link to a payment is a one-way door.
-                    Database::update('invoices', ['quote_id' => null], 'id = ?', [$invoice['id']]);
+                    // up by age from now on. The delay gives a lagging mint watcher time to
+                    // report a payment made just before expiry. Anything less than that
+                    // plain answer (no state, PENDING, an unknown word) keeps the quote:
+                    // dropping the only link to a payment is a one-way door.
+                    Database::update(
+                        'invoices',
+                        [
+                            'quote_id' => null,
+                            'last_poll_state' => 'written_off_unpaid',
+                        ],
+                        "id = ? AND status IN ('Expired', 'Invalid') AND quote_id IS NOT NULL",
+                        [$invoice['id']]
+                    );
                 }
             } catch (Throwable $e) {
                 error_log("CashuPayServer: Error recovering expired invoice {$invoice['id']}: " . $e->getMessage());
@@ -1461,31 +1561,49 @@ class Invoice {
     // These helpers find and export those funds without contacting any mint.
 
     /**
-     * Export all UNSPENT proofs of a specific wallet namespace as a Cashu token.
+     * Export all proofs of a specific wallet namespace as a Cashu token.
      *
-     * Read-only: it does NOT change local proof state, so a lost token can be
-     * re-exported safely. No mint contact — pure local serialization. Call
-     * markNamespaceRecovered() after the token is confirmed claimed.
+     * The proofs are marked EXPORTED first, so this token is the only live copy: the
+     * balance stops counting them and the ordinary withdrawal path cannot spend them
+     * while the token circulates (MINIMAX 4.9). A lost token can be shown again — the
+     * same proofs serialize to the same token — and markNamespaceRecovered() writes
+     * them off once the recipient has claimed it.
      *
-     * @return array{token: ?string, amount: int, count: int, wallet_id: string}
+     * No mint contact — pure local serialization.
+     *
+     * @return array{token: ?string, amount: int, count: int, wallet_id: string, secrets: string[]}
      */
     public static function exportNamespaceAsToken(string $mintUrl, string $unit, ?string $account): array {
         self::assertNotLiveNamespace($mintUrl, $unit, $account);
         $wallet = new Wallet(rtrim($mintUrl, '/'), strtolower($unit), Database::getDbPath(), $account);
         $storage = $wallet->getStorage();
-        $unspent = $storage->getProofsAsObjects(ProofState::UNSPENT);
         $wid = $storage->getWalletId();
-        if (empty($unspent)) {
-            return ['token' => null, 'amount' => 0, 'count' => 0, 'wallet_id' => $wid];
+
+        $unspent = $storage->getProofsAsObjects(ProofState::UNSPENT);
+        if (!empty($unspent)) {
+            $secrets = array_map(fn($p) => $p->secret, $unspent);
+            $changed = $storage->transitionProofStates($secrets, ProofState::EXPORTED, [ProofState::UNSPENT]);
+            if ($changed !== count(array_unique($secrets))) {
+                // A concurrent spender took part of the set. The transition above is
+                // already durable, so the honest answer is the token over everything now
+                // EXPORTED, not an error that pretends nothing happened.
+                error_log('CashuPayServer: stranded export reserved ' . $changed . ' of ' . count($secrets)
+                    . ' proofs; returning the reserved set');
+            }
+        }
+
+        $exported = $storage->getProofsAsObjects(ProofState::EXPORTED);
+        if (empty($exported)) {
+            return ['token' => null, 'amount' => 0, 'count' => 0, 'wallet_id' => $wid, 'secrets' => []];
         }
         return [
-            'token' => $wallet->serializeToken($unspent),
-            'amount' => Wallet::sumProofs($unspent),
-            'count' => count($unspent),
+            'token' => $wallet->serializeToken($exported),
+            'amount' => Wallet::sumProofs($exported),
+            'count' => count($exported),
             'wallet_id' => $wid,
             // Server-side only: which proofs this token carries, so "mark recovered"
             // touches exactly these and not a payment that arrived afterwards.
-            'secrets' => array_map(fn($p) => $p->secret, $unspent),
+            'secrets' => array_map(fn($p) => $p->secret, $exported),
         ];
     }
 
@@ -1518,8 +1636,10 @@ class Invoice {
             return 0;
         }
         $storage = new WalletStorage(Database::getDbPath(), rtrim($mintUrl, '/'), strtolower($unit), $account);
-        // Only the proofs that went into the claimed token, and only while still unspent.
-        return $storage->transitionProofStates($secrets, ProofState::SPENT, [ProofState::UNSPENT]);
+        // Only the proofs that went into the claimed token. They are EXPORTED while the
+        // token circulates; a namespace exported before the reservation existed still has
+        // them UNSPENT, so accept both.
+        return $storage->transitionProofStates($secrets, ProofState::SPENT, [ProofState::UNSPENT, ProofState::EXPORTED]);
     }
 
     /**
@@ -1537,8 +1657,8 @@ class Invoice {
     public static function scanStrandedNamespaces(): array {
         $rows = Database::fetchAll(
             "SELECT wallet_id, COUNT(*) c, COALESCE(SUM(amount),0) s
-             FROM cashu_proofs WHERE state = ? GROUP BY wallet_id",
-            [ProofState::UNSPENT]
+             FROM cashu_proofs WHERE state IN (?, ?) GROUP BY wallet_id",
+            [ProofState::UNSPENT, ProofState::EXPORTED]
         );
         if (empty($rows)) {
             return [];
@@ -1618,8 +1738,8 @@ class Invoice {
         foreach ($accounts as $a) {
             $wid = WalletStorage::deriveWalletId($mintUrl, $unit, $a);
             $row = Database::fetchOne(
-                "SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM cashu_proofs WHERE wallet_id = ? AND state = ?",
-                [$wid, ProofState::UNSPENT]
+                "SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM cashu_proofs WHERE wallet_id = ? AND state IN (?, ?)",
+                [$wid, ProofState::UNSPENT, ProofState::EXPORTED]
             );
             if ($row && (int)$row['c'] > 0) {
                 return ['found' => true, 'account' => $a, 'wallet_id' => $wid, 'amount' => (int)$row['s']];

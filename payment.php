@@ -18,6 +18,9 @@ ignore_user_abort(true);
 
 // Security headers (customer page: strict CSP, scripts from this server only).
 Security::setSecurityHeaders();
+// The page and its status poll show live payment state (and the Lightning invoice):
+// a cached copy must never stand in for it, in the browser or in a shared proxy.
+header('Cache-Control: no-store');
 
 // Check setup
 if (!Database::isInitialized() || !Config::isSetupComplete()) {

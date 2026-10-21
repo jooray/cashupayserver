@@ -60,6 +60,27 @@ class UpdateCheck
     }
 
     /**
+     * Why this endpoint may not be used, in plain words; null when it is fine.
+     *
+     * The manifest carries the signed emergency notice and the update prompt. Over plain
+     * HTTP anyone on the path can suppress or replace it (MINIMAX N2). A loopback address
+     * is allowed so the test fixture can serve one without TLS.
+     */
+    public static function endpointProblem(): ?string
+    {
+        $url = self::endpoint();
+        $scheme = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        $host = strtolower((string) parse_url($url, PHP_URL_HOST));
+        if ($scheme === 'https') {
+            return null;
+        }
+        if ($scheme === 'http' && in_array($host, ['127.0.0.1', 'localhost', '::1', '[::1]'], true)) {
+            return null;
+        }
+        return 'This update address does not start with https://, so update news and the emergency notice could be changed by anyone on the way. Ask whoever set up this server to use an https address.';
+    }
+
+    /**
      * What the admin UI should say, from cache alone. Never fetches, never blocks.
      *
      * @return array{outdated: bool, current: string, latest: ?string, url: ?string,
@@ -180,11 +201,16 @@ class UpdateCheck
      *
      * The URL in the response becomes a link an operator is invited to click while
      * being told to upgrade, so a compromised or mistyped endpoint must not be able
-     * to point them anywhere it likes. It has to be HTTPS, and on the host serving
-     * the manifest or on the release host.
+     * to point them anywhere it likes. Only this project's GitHub releases qualify:
+     * the manifest is not signed (only its safe_mode notice is), so its own host is
+     * no more trustworthy than anything else it says.
      */
     private static function fetch(string $url, int $timeout = 8): ?array
     {
+        if (self::endpointProblem() !== null) {
+            error_log('CashuPayServer: update check skipped: ' . self::endpointProblem());
+            return null;
+        }
         $ch = curl_init($url);
         if ($ch === false) {
             return null;
@@ -235,7 +261,7 @@ class UpdateCheck
 
         $out = ['latest' => $latest];
 
-        if (isset($data['url']) && self::acceptableLink((string)$data['url'], $url)) {
+        if (isset($data['url']) && self::acceptableLink((string)$data['url'])) {
             $out['url'] = (string)$data['url'];
         }
         $severity = isset($data['severity']) ? strtolower(trim((string)$data['severity'])) : 'normal';
@@ -260,9 +286,9 @@ class UpdateCheck
         return $out;
     }
 
-    /** HTTPS, and either the manifest's own host or this project's GitHub releases. */
-    private static function acceptableLink(string $link, string $manifestUrl): bool
+    /** This project's GitHub releases page or one release tag on it, nothing else. */
+    private static function acceptableLink(string $link): bool
     {
-        return cashupay_is_trusted_release_link($link, (string)(parse_url($manifestUrl)['host'] ?? ''));
+        return cashupay_is_trusted_release_link($link, null);
     }
 }

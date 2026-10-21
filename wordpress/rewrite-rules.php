@@ -90,6 +90,12 @@ function cashupay_handle_request(): void {
     $setup = get_query_var('cashupay_setup');
     $cron = get_query_var('cashupay_cron');
     $authorize = get_query_var('cashupay_authorize');
+    $receive = get_query_var('cashupay_receive');
+
+    if (!empty($GLOBALS['cashupay_refuse_site']) && ($api || $payment || $admin || $setup || $cron || $receive || $authorize)) {
+        // bootstrap.php found no wallet folder of this site's own; see the admin notice.
+        wp_die(esc_html__('CashuPay is not available on this site.', 'cashupay'), '', ['response' => 503]);
+    }
 
     if ($api) {
         // API requests: set PATH_INFO for the API router
@@ -106,7 +112,7 @@ function cashupay_handle_request(): void {
     }
 
     if ($admin) {
-        if (!current_user_can('manage_options')) {
+        if (!cashupay_current_user_can_manage()) {
             wp_die('Access denied');
         }
         require CASHUPAY_PLUGIN_DIR . '/admin.php';
@@ -114,7 +120,7 @@ function cashupay_handle_request(): void {
     }
 
     if ($setup) {
-        if (!current_user_can('manage_options')) {
+        if (!cashupay_current_user_can_manage()) {
             wp_die('Access denied');
         }
         require CASHUPAY_PLUGIN_DIR . '/setup.php';
@@ -126,7 +132,6 @@ function cashupay_handle_request(): void {
         exit;
     }
 
-    $receive = get_query_var('cashupay_receive');
     if ($receive) {
         require CASHUPAY_PLUGIN_DIR . '/receive.php';
         exit;

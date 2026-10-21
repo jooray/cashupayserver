@@ -435,9 +435,15 @@ class LightningAddress {
                 $meltAmountInMintUnit,
                 $mintUnit,
                 $store['price_provider_primary'] ?? null,
-                $store['price_provider_secondary'] ?? null
+                $store['price_provider_secondary'] ?? null,
+                // The invoice path adds the operator's conversion fee; a payout deducts it,
+                // so the same setting cannot silently disappear on the way out (MINIMAX 4.5).
+                (float)($store['exchange_fee_percent'] ?? 0)
             );
         }
+
+        $convertedSats = $meltAmountSats;
+        $ratePerSat = $convertedSats > 0 ? $meltAmountInMintUnit / $convertedSats : 0.0;
 
         // Account for Lightning fee reserve - mints charge fees on top of invoice amount
         // Use 1% fee buffer (min 2 sats, max 100 sats) to ensure we have enough for fees
@@ -473,13 +479,19 @@ class LightningAddress {
             $donation = Donation::sendToDonationSink($store['id'], $donationAmount, $account);
         }
 
-        error_log("Auto-melt: Sent {$meltAmountSats} sats (~{$meltAmountInMintUnit} {$mintUnit}) from store {$store['name']} ({$account['mint_url']}) to {$store['auto_melt_address']}");
+        error_log("Auto-melt: sent {$meltAmountSats} sats for {$meltAmountInMintUnit} {$mintUnit} "
+            . '(rate ' . number_format($ratePerSat, 8, '.', '') . " {$mintUnit}/sat) from store {$store['name']} "
+            . "({$account['mint_url']}) to {$store['auto_melt_address']}");
 
         return [
             'mint_url' => $account['mint_url'],
             'amount' => $meltAmountSats,
             'amountMintUnit' => $meltAmountInMintUnit,
             'mintUnit' => $mintUnit,
+            // What the rate was and how many sats it produced, so the operator can audit
+            // the payout instead of reconstructing it from a log line.
+            'rate' => $ratePerSat,
+            'convertedSats' => $convertedSats,
             'donation' => ($donation['success'] ?? false) ? $donationAmount : 0,
             'success' => true,
         ];

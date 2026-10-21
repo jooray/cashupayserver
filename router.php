@@ -43,6 +43,13 @@ foreach ($blockedPatterns as $pattern) {
     }
 }
 
+// A path starting with '//' or '/\' is read as a host by parse_url() and by browsers,
+// so a page reached that way could redirect to another site (C8). No real route has it.
+if (preg_match('#^/[/\\\\]#', $requestUri)) {
+    http_response_code(400);
+    die('Bad request');
+}
+
 // =============================================================================
 // ROUTING
 // =============================================================================

@@ -17,6 +17,10 @@ header('Content-Type: application/json');
 
 // Minimal hardening for the JSON API (no CSP needed for JSON).
 header('X-Content-Type-Options: nosniff');
+// Responses differ only by the Authorization header. A shared cache must not store one
+// merchant's answer and hand it to another (MINIMAX needs-validation).
+header('Cache-Control: no-store');
+header('Vary: Authorization');
 
 // Handle CORS for API clients.
 // NOTE: wildcard is acceptable because the API authenticates with a bearer token
@@ -168,11 +172,20 @@ function matchRoute(string $method, string $path, array $routes): ?array {
  * Get JSON request body
  */
 function getRequestBody(): array {
-    $body = file_get_contents('php://input');
+    // Cap the body before decoding: post_max_size does not limit php://input, and
+    // json_decode of a large body with colliding integer keys costs quadratic CPU (N8).
+    $max = 65536;
+    if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $max) {
+        errorResponse('payload-too-large', 'Request body is larger than 64 KiB', 413);
+    }
+    $body = file_get_contents('php://input', false, null, 0, $max + 1);
     if (empty($body)) {
         return [];
     }
-    $data = json_decode($body, true);
+    if (strlen($body) > $max) {
+        errorResponse('payload-too-large', 'Request body is larger than 64 KiB', 413);
+    }
+    $data = json_decode($body, true, 64);
     return is_array($data) ? $data : [];
 }
 

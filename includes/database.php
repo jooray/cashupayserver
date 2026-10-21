@@ -39,8 +39,12 @@ class Database {
      */
     public static function getDataDir(): string {
         if (self::$dataDir === null) {
-            // Check for custom path
-            if (defined('CASHUPAY_DATA_DIR')) {
+            // Check for custom path. On a WordPress multisite blog other than the
+            // first, a wp-config CASHUPAY_DATA_DIR is the network's base and each
+            // blog keeps its own wallet below it (wordpress/bootstrap.php).
+            if (defined('CASHUPAY_DATA_DIR_FOR_SITE')) {
+                self::$dataDir = rtrim(CASHUPAY_DATA_DIR_FOR_SITE, '/');
+            } elseif (defined('CASHUPAY_DATA_DIR')) {
                 self::$dataDir = rtrim(CASHUPAY_DATA_DIR, '/');
             } elseif (($moved = self::relocatedDataDir()) !== null) {
                 self::$dataDir = $moved;

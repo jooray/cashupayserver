@@ -55,6 +55,36 @@ class MintHelpers {
         return $canonical;
     }
 
+    /**
+     * Address policy for the wallet library's own connections (Cashu\ConnectGuard).
+     *
+     * Every mint request is resolved and checked again at connect time and pinned to
+     * the checked addresses: assertSafeMintUrl() vets a URL once, but mint URLs are
+     * stored and used for months, and a mint's DNS can later answer 127.0.0.1 (OPUS N2).
+     * The LNURL callback a Lightning-address server names is held to the public-address
+     * rule with no opt-out (OPUS N1). .onion hosts are not special-cased: this server has
+     * no Tor proxy, so exempting them only created an unvetted path (MINIMAX 4.26).
+     *
+     * @return string[] CURLOPT_RESOLVE entries
+     * @throws \RuntimeException when the address must not be reached
+     */
+    public static function connectGuard(string $url, string $purpose): array {
+        if ($purpose === 'lnurl') {
+            $target = Security::resolvePublicTarget($url);
+            if ($target === null) {
+                throw new \RuntimeException('the payment server\'s address is private, local or could not be found');
+            }
+            return $target['resolve'];
+        }
+        $target = self::privateMintsAllowed()
+            ? Security::resolveTarget($url)
+            : Security::resolvePublicTarget($url);
+        if ($target === null) {
+            throw new \RuntimeException('the mint\'s address is private, local or could not be found');
+        }
+        return $target['resolve'];
+    }
+
     private static function privateMintsAllowed(): bool {
         if (defined('CASHUPAY_ALLOW_PRIVATE_MINTS') && CASHUPAY_ALLOW_PRIVATE_MINTS) {
             return true;

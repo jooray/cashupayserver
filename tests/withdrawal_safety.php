@@ -64,6 +64,8 @@ function freshRequest(): void {
 
 Database::initialize();
 Config::set('setup_complete', '1');
+// The mock mint listens on 127.0.0.1; the connect guard refuses that unless allowed.
+Config::set('allow_private_mints', true);
 
 $storeId = 'store_w';
 Database::insert('stores', [

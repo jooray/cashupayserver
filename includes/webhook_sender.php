@@ -374,6 +374,16 @@ class WebhookSender {
         return $attempted;
     }
 
+    /**
+     * Lease the next due row.
+     *
+     * Events for one invoice reach one webhook strictly in the order they happened: a
+     * row waits while an older row for the same webhook and invoice is still
+     * deliverable, even when its own retry is due first. Per-row backoff used to let a
+     * fresh InvoiceSettled overtake a failed InvoiceExpired, which then arrived last and
+     * could move a paid order back to "expired" (OPUS N7). Rows that are given up on
+     * (out of attempts, or cancelled) no longer hold anything back.
+     */
     private static function claimNextDelivery(): ?array {
         $now = time();
         $leaseToken = bin2hex(random_bytes(16));
@@ -384,9 +394,18 @@ class WebhookSender {
                   WHERE wd.delivered_at IS NULL AND wd.attempts < ? AND wd.next_attempt_at <= ?
                     AND (wd.leased_until IS NULL OR wd.leased_until < ?)
                     AND wd.target_url IS NOT NULL AND wd.signing_secret IS NOT NULL
-                 ORDER BY wd.next_attempt_at ASC, wd.created_at ASC LIMIT 1
+                    AND NOT EXISTS (
+                        SELECT 1 FROM webhook_deliveries older
+                         WHERE older.webhook_id = wd.webhook_id
+                           AND older.invoice_id = wd.invoice_id
+                           AND older.delivered_at IS NULL AND older.attempts < ?
+                           AND older.target_url IS NOT NULL AND older.signing_secret IS NOT NULL
+                           AND (older.created_at < wd.created_at
+                                OR (older.created_at = wd.created_at AND older.rowid < wd.rowid))
+                    )
+                 ORDER BY wd.next_attempt_at ASC, wd.created_at ASC, wd.rowid ASC LIMIT 1
              )",
-            [$now + self::LEASE_SECONDS, $leaseToken, self::MAX_ATTEMPTS, $now, $now]
+            [$now + self::LEASE_SECONDS, $leaseToken, self::MAX_ATTEMPTS, $now, $now, self::MAX_ATTEMPTS]
         );
         return Database::fetchOne(
             "SELECT wd.* FROM webhook_deliveries wd WHERE wd.lease_token = ?",
@@ -411,13 +430,38 @@ class WebhookSender {
      * delivered marker is cleared so the outbox picks the row up.
      */
     public static function requeueDelivery(string $deliveryId): void {
+        // Sent to where the webhook points now, signed with its current secret, as
+        // BTCPay does: the snapshot may hold a URL and secret the shop has since replaced.
         Database::query(
             "UPDATE webhook_deliveries
              SET delivered_at = NULL, attempts = 0, next_attempt_at = 0,
-                 leased_until = NULL, lease_token = NULL
+                 leased_until = NULL, lease_token = NULL,
+                 target_url = (SELECT w.url FROM webhooks w WHERE w.id = webhook_deliveries.webhook_id),
+                 signing_secret = (SELECT w.secret FROM webhooks w WHERE w.id = webhook_deliveries.webhook_id)
              WHERE id = ?",
             [$deliveryId]
         );
+    }
+
+    /**
+     * Give up on every undelivered row of a webhook.
+     *
+     * For a deleted webhook, or one whose URL, secret or enabled flag changed: queued
+     * rows carry a snapshot of the old URL and secret and would otherwise keep going
+     * there for days (DS41 L-9). Rows are kept as history, out of attempts and without
+     * a signing secret, so the outbox never picks them up again.
+     *
+     * @return int Number of rows cancelled
+     */
+    public static function cancelPending(string $webhookId): int {
+        return Database::query(
+            "UPDATE webhook_deliveries
+             SET attempts = ?, next_attempt_at = 0, signing_secret = NULL,
+                 leased_until = NULL, lease_token = NULL,
+                 response = 'cancelled: the webhook was deleted or changed'
+             WHERE webhook_id = ? AND delivered_at IS NULL",
+            [self::MAX_ATTEMPTS, $webhookId]
+        )->rowCount();
     }
 
     /**

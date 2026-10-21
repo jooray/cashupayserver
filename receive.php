@@ -88,6 +88,26 @@ function receivePayloadToken(array $payload): string {
     }
 }
 
+/**
+ * A refusal this endpoint raises itself. Its message is written for the payer and is
+ * shown to them as is; anything else thrown below (PDOException, Error, ...) may carry
+ * internals and is only logged.
+ */
+final class ReceiveRefusal extends Exception {}
+
+/** The message a stranger may see for a failure: our own refusals and the wallet library's. */
+function receivePublicMessage(Throwable $e, string $generic): string {
+    if ($e instanceof ReceiveRefusal || $e instanceof \Cashu\CashuException) {
+        return $e->getMessage();
+    }
+    error_log('CashuPayServer: receive.php ' . get_class($e) . ': ' . $e->getMessage()
+        . ' at ' . $e->getFile() . ':' . $e->getLine());
+    return $generic;
+}
+
+/** Most proofs one public receive may carry; each costs EC work and a mint round trip (C1). */
+const RECEIVE_MAX_PROOFS = 100;
+
 // Last line of defence for a public endpoint: anything uncaught becomes a plain error
 // answer, never PHP's fatal-error page (which, with display_errors on, prints the
 // absolute server path and a stack trace to a stranger).
@@ -131,10 +151,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // Cap the body before decoding it: post_max_size does not limit php://input, and
+    // json_decode of a large body with colliding integer keys costs quadratic CPU (N8).
+    // A token is at most MAX_TOKEN_LENGTH; the margin is for the JSON envelope.
+    $maxBody = \Cashu\TokenSerializer::MAX_TOKEN_LENGTH + 16384;
+    if ((int)($_SERVER['CONTENT_LENGTH'] ?? 0) > $maxBody) {
+        http_response_code(413);
+        echo json_encode(['error' => 'Request is too large']);
+        exit;
+    }
+    $input = (string)file_get_contents('php://input', false, null, 0, $maxBody + 1);
+    if (strlen($input) > $maxBody) {
+        http_response_code(413);
+        echo json_encode(['error' => 'Request is too large']);
+        exit;
+    }
+
     // Get JSON body. A JSON scalar ("x", 123) decodes to a non-array, and indexing it
     // used to throw outside any catch: refuse it. Non-JSON falls back to form fields.
-    $input = (string)file_get_contents('php://input');
-    $data = json_decode($input, true);
+    // The deepest legitimate body is payload > proofs > proof > dleq.
+    $data = json_decode($input, true, 16);
     if (json_last_error() === JSON_ERROR_NONE && $data !== null && !is_array($data)) {
         http_response_code(400);
         echo json_encode(['error' => 'Invalid request body']);
@@ -230,9 +266,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $parsed = \Cashu\TokenSerializer::deserialize($tokenString);
     } catch (Throwable $e) {
         http_response_code(400);
-        echo json_encode(['error' => 'Invalid token: ' . $e->getMessage()]);
+        echo json_encode(['error' => 'Invalid token: ' . receivePublicMessage($e, 'it could not be read')]);
         exit;
     }
+    // Refuse oversized and repeated tokens before any mint or EC work: one spent proof
+    // copied 1000 times used to cost ~13 s of CPU per request (C1).
+    if (count($parsed->proofs) > RECEIVE_MAX_PROOFS) {
+        http_response_code(400);
+        echo json_encode(['error' => 'This token has too many proofs (more than ' . RECEIVE_MAX_PROOFS
+            . '). Send it in smaller parts, or swap it in your wallet first.']);
+        exit;
+    }
+    $seenSecrets = [];
+    foreach ($parsed->proofs as $p) {
+        if (isset($seenSecrets[$p->secret])) {
+            http_response_code(400);
+            echo json_encode(['error' => 'This token contains the same proof more than once']);
+            exit;
+        }
+        $seenSecrets[$p->secret] = true;
+    }
+    unset($seenSecrets);
 
     $secrets = array_map(fn($p) => $p->secret, $parsed->proofs);
     $claim = null;
@@ -247,10 +301,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         // Reject a token for the wrong mint or unit before loading keysets from it.
         if (\Cashu\MintClient::canonicalizeMintUrl($parsed->mint) !== \Cashu\MintClient::canonicalizeMintUrl($mintUrl)) {
-            throw new Exception('Token is from a different mint');
+            throw new ReceiveRefusal('Token is from a different mint');
         }
         if (strtolower($parsed->unit) !== strtolower($unit)) {
-            throw new Exception("Token unit ({$parsed->unit}) does not match this store ({$unit})");
+            throw new ReceiveRefusal("Token unit ({$parsed->unit}) does not match this store ({$unit})");
         }
 
         $accountId = Config::getStoreWalletAccountId($storeId);
@@ -262,7 +316,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($paymentRequest !== null) {
             if (strtolower($paymentRequest['unit']) !== strtolower($unit)) {
-                throw new Exception('This payment request is for a different currency');
+                throw new ReceiveRefusal('This payment request is for a different currency');
             }
 
             // Bind the request to these proofs before anything moves, so a second token
@@ -287,7 +341,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (time() - (int)($current['receiving_since'] ?? 0) >= 120) {
                     $wallet->recoverPendingSwaps();
                 }
-                $state = PaymentRequest::receiptState($wallet, $secrets);
+                $state = PaymentRequest::receiptState($wallet, $secrets, (int)($current['receiving_since'] ?? PHP_INT_MAX));
                 if ($state['state'] === 'paid') {
                     $response = ['success' => true, 'id' => $paymentRequest['id'], 'amount' => $state['amount'], 'unit' => $unit];
                     PaymentRequest::markPaid($paymentRequest, $state['amount'], $response);
@@ -308,21 +362,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     echo json_encode(['error' => 'This payment request is already being paid. Do not pay again.']);
                     exit;
                 }
+            } elseif (PaymentRequest::secretsKnown($wallet, $secrets)) {
+                // A fresh bind to proofs this wallet already holds (or is swapping right
+                // now): a donation or another request's payment, replayed. It can never
+                // be a new payment for this request (C3/M-1).
+                PaymentRequest::release($paymentRequest, $secrets);
+                $claim = null;
+                http_response_code(400);
+                echo json_encode(['error' => 'This shop has already received this token, so it cannot pay this request. Pay with new ecash from your wallet.']);
+                exit;
             }
 
             // NUT-18: the requested amount is net of the mint's input fee (the payer adds
             // it). Wallets written before that rule send exactly the amount; accept those
             // too rather than refuse a customer, and note the few units the fee costs.
+            // "A few units" is bounded: at most the fee for the minimal power-of-two
+            // split of the requested amount. The payer picks the proof count (up to the
+            // cap above), so an unbounded shortfall let a request be paid ~10 % short (Obs 4).
             $gross = $parsed->getAmount();
             $net = $gross - $wallet->calculateFee($parsed->proofs);
             $requested = (int)$paymentRequest['amount'];
             if ($gross < $requested) {
-                throw new Exception(
+                throw new ReceiveRefusal(
                     'This token is for ' . $gross . ' ' . $unit
                     . ', but the request asks for ' . $requested . ' ' . $unit
                 );
             }
             if ($net < $requested) {
+                $feePpk = 0;
+                foreach ($parsed->proofs as $p) {
+                    $feePpk = max($feePpk, $wallet->getInputFeePpk($p->id));
+                }
+                $minimalProofs = substr_count(decbin($requested), '1');
+                $allowedShortfall = intdiv($minimalProofs * $feePpk + 999, 1000);
+                if ($requested - $net > $allowedShortfall) {
+                    throw new ReceiveRefusal(
+                        'This token is worth ' . $net . ' ' . $unit . ' after the mint\'s fee, but the request asks for '
+                        . $requested . ' ' . $unit . '. Send a token that covers the amount plus the mint\'s fee.'
+                    );
+                }
                 error_log("CashuPayServer: payment request {$paymentRequest['id']}: sender did not add the mint fee "
                     . "({$net} of {$requested} {$unit} after fees); accepted");
             }
@@ -359,7 +437,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Did the money move? Only a refused token frees the request; a swap left
             // in flight keeps it bound so the payer is told not to pay again.
             try {
-                $state = PaymentRequest::receiptState($wallet, $secrets);
+                $current = PaymentRequest::getById($paymentRequest['id']);
+                $state = PaymentRequest::receiptState($wallet, $secrets, (int)($current['receiving_since'] ?? PHP_INT_MAX));
             } catch (Throwable $stateError) {
                 $state = ['state' => 'pending', 'amount' => 0];
             }
@@ -373,8 +452,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 PaymentRequest::release($paymentRequest, $secrets);
             }
         }
-        http_response_code(400);
-        echo json_encode(['error' => $e->getMessage()]);
+        $public = $e instanceof ReceiveRefusal || $e instanceof \Cashu\CashuException;
+        http_response_code($public ? 400 : 500);
+        echo json_encode(['error' => receivePublicMessage($e, 'Something went wrong while receiving this token. Please try again in a minute.')]);
     }
     exit;
 }

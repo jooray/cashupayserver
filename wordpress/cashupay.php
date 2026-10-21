@@ -2,9 +2,9 @@
 /**
  * Plugin Name: CashuPay - Lightning Payments via Cashu
  * Plugin URI: https://github.com/jooray/cashupayserver
- * Update URI: https://cashupayserver.org/wordpress-plugin/
+ * Update URI: https://github.com/jooray/cashupayserver/releases
  * Description: Accept Lightning payments through a Cashu mint. BTCPay Server API compatible.
- * Version: 0.5.6-alpha
+ * Version: 0.5.7-alpha
  * Requires PHP: 8.1
  * Author: CashuPayServer
  * License: MIT
@@ -53,6 +53,9 @@ add_action('plugins_loaded', static function (): void {
     // This runs on every request of the whole site: storefront, wp-admin, cron. An
     // exception escaping it would take the shop down and lock the merchant out of
     // wp-admin, so CashuPay switches itself off instead and says why to admins only.
+    if (!empty($GLOBALS['cashupay_refuse_site'])) {
+        return; // bootstrap.php switched CashuPay off on this site; leave the wallet alone.
+    }
     try {
         cashupay_maybe_upgrade_data_protection();
         require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';

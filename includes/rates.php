@@ -15,6 +15,8 @@ require_once __DIR__ . '/config.php';
 interface PriceProvider {
     public function getBtcPrice(string $currency): ?float;
     public function getName(): string;
+    /** Whether this provider can price BTC in $currency at all (no network call). */
+    public function supports(string $currency): bool;
 }
 
 /**
@@ -25,6 +27,10 @@ class CoinGeckoProvider implements PriceProvider {
 
     public function getName(): string {
         return 'coingecko';
+    }
+
+    public function supports(string $currency): bool {
+        return true; // CoinGecko quotes BTC in every fiat currency we offer
     }
 
     public function getBtcPrice(string $currency): ?float {
@@ -79,6 +85,10 @@ class BinanceProvider implements PriceProvider {
         return 'binance';
     }
 
+    public function supports(string $currency): bool {
+        return isset(self::CURRENCY_MAP[strtolower($currency)]);
+    }
+
     public function getBtcPrice(string $currency): ?float {
         $currency = strtolower($currency);
 
@@ -127,6 +137,10 @@ class KrakenProvider implements PriceProvider {
 
     public function getName(): string {
         return 'kraken';
+    }
+
+    public function supports(string $currency): bool {
+        return isset(self::PAIR_MAP[strtolower($currency)]);
     }
 
     public function getBtcPrice(string $currency): ?float {
@@ -228,6 +242,15 @@ class ExchangeRates {
 
         // Build provider order
         $providers = self::getProviders();
+
+        // Binance and Kraken quote only a handful of currencies. For anything else
+        // (CZK, PLN, HUF, ...) one provider is the only source, so two can never agree.
+        // Price those through the confirmed BTC/USD rate and that provider's own FX rate.
+        $supporting = array_values(array_filter($providers, fn($p) => $p->supports($currency)));
+        if ($currency !== 'usd' && count($supporting) === 1) {
+            return self::singleSourcePrice($currency, $supporting[0], $primary, $secondary);
+        }
+
         $order = [];
 
         if ($primary && isset($providers[$primary])) {
@@ -245,10 +268,12 @@ class ExchangeRates {
 
         // Try each provider. A positive number is not enough: one bad answer (a decimal
         // slip, a wrong field, a hijacked response) would price every invoice for minutes
-        // to an hour (SPB-OPS-011, OPUS-019). A rate is accepted when it agrees with the
-        // last known rate, or — with no recent rate to compare against, or when the
-        // market really moved — with another provider.
-        $reference = self::lastKnownRate($currency);
+        // to an hour (SPB-OPS-011, OPUS-019). Nor is agreeing with the last cached rate:
+        // that rate may itself be one provider's word, so a hostile primary could walk
+        // the price down 50 % per refresh (C2). The reference is a separate anchor,
+        // written only when two providers agree. One provider alone is trusted only
+        // close to a fresh anchor; anything else needs a second provider to agree.
+        $anchor = self::confirmedAnchor($currency);
         $collected = [];
         foreach ($order as $provider) {
             try {
@@ -262,48 +287,66 @@ class ExchangeRates {
             if ($rate === null || !is_finite($rate) || $rate <= 0) {
                 continue;
             }
-            if ($reference !== null && self::withinBand($rate, $reference)) {
-                self::saveToCache($currency, $rate, $provider->getName());
-                return $rate;
-            }
             foreach ($collected as [$earlierRate, $earlierName]) {
-                if (self::withinBand($rate, $earlierRate)) {
-                    // Two independent sources agree: prefer the higher-priority one.
+                if (self::withinBand($rate, $earlierRate, self::AGREEMENT_BAND)) {
+                    // Two independent sources agree: prefer the higher-priority one, and
+                    // make it the new anchor.
                     self::saveToCache($currency, $earlierRate, $earlierName);
+                    Config::set('rate_anchor_' . $currency, [
+                        'rate' => $earlierRate,
+                        'timestamp' => time(),
+                        'providers' => [$earlierName, $provider->getName()],
+                    ]);
                     return $earlierRate;
                 }
             }
-            if ($reference !== null) {
-                error_log("ExchangeRates: rejected {$provider->getName()} {$currency} rate {$rate}: more than "
-                    . (int)(self::SANITY_BAND * 100) . "% away from the last known rate {$reference}");
+            if ($anchor !== null && self::withinBand($rate, $anchor, self::ANCHOR_BAND)) {
+                // Close to a confirmed rate: fine on its own, but it does not move the anchor.
+                self::saveToCache($currency, $rate, $provider->getName());
+                return $rate;
+            }
+            if ($anchor !== null) {
+                error_log("ExchangeRates: {$provider->getName()} {$currency} rate {$rate} is more than "
+                    . (int)(self::ANCHOR_BAND * 100) . "% away from the confirmed rate {$anchor}; asking another provider");
             }
             $collected[] = [$rate, $provider->getName()];
         }
-        // Nothing to compare a single answer with: take it.
-        if ($reference === null && count($collected) === 1) {
-            self::saveToCache($currency, $collected[0][0], $collected[0][1]);
-            return $collected[0][0];
-        }
         if (count($collected) > 1) {
             error_log("ExchangeRates: providers disagree on the {$currency} rate; refusing to price from any of them");
+        } elseif (count($collected) === 1 && $anchor === null && $currency !== 'usd') {
+            // Only one provider answered (the other is down, rate-limited or blocked in
+            // this country) and the anchor is too old to compare with. Price the way a
+            // currency only one provider quotes is priced: confirmed BTC/USD times that
+            // provider's own FX ratio, held to the FX anchor. USD itself cannot go this
+            // way, it is the base of that path: USD with one provider answering prices
+            // only near a fresh anchor, otherwise it waits for a second provider.
+            [$rate, $name] = $collected[0];
+            error_log("ExchangeRates: only {$name} answered for {$currency}; pricing it through BTC/USD and {$name}'s exchange rate");
+            return self::singleSourcePrice($currency, $providers[$name], $primary, $secondary, $rate,
+                self::lastConfirmedRate($currency));
+        } elseif (count($collected) === 1) {
+            error_log("ExchangeRates: only {$collected[0][1]} answered for {$currency} and nothing confirms it; "
+                . 'refusing to price from a single unconfirmed rate');
         }
 
         // Fall back to stale cache as last resort
         return self::getCached($currency, true);
     }
 
-    /** A rate further than this fraction from its reference is not trusted on its own. */
-    private const SANITY_BAND = 0.5;
-    /** How old the last known rate may be and still serve as the reference. */
+    /** Two providers within this fraction of each other agree (and set the anchor). */
+    private const AGREEMENT_BAND = 0.02;
+    /** One provider alone is trusted within this fraction of the confirmed anchor. */
+    private const ANCHOR_BAND = 0.05;
+    /** How old the confirmed anchor may be and still let a single provider through. */
     private const REFERENCE_TTL = 86400;
 
-    private static function withinBand(float $rate, float $reference): bool {
-        return abs($rate - $reference) <= self::SANITY_BAND * $reference;
+    private static function withinBand(float $rate, float $reference, float $band): bool {
+        return abs($rate - $reference) <= $band * $reference;
     }
 
-    /** The last cached rate, even if expired, while it is recent enough to compare with. */
-    private static function lastKnownRate(string $currency): ?float {
-        $data = Config::get('rate_' . $currency);
+    /** The last rate two providers agreed on, while it is recent enough to compare with. */
+    private static function confirmedAnchor(string $currency): ?float {
+        $data = Config::get('rate_anchor_' . $currency);
         if (!is_array($data) || !isset($data['rate']) || (float)$data['rate'] <= 0
             || time() - (int)($data['timestamp'] ?? 0) > self::REFERENCE_TTL) {
             return null;
@@ -311,8 +354,111 @@ class ExchangeRates {
         return (float)$data['rate'];
     }
 
+    /** The last rate two providers agreed on, however old (null if they never did). */
+    private static function lastConfirmedRate(string $currency): ?float {
+        $data = Config::get('rate_anchor_' . $currency);
+        if (!is_array($data) || !isset($data['rate']) || (float)$data['rate'] <= 0) {
+            return null;
+        }
+        return (float)$data['rate'];
+    }
+
+    /** A single source's own BTC/USD must be this close to the confirmed one. */
+    private const FX_USD_BAND = 0.02;
+    /** A single source's FX rate is accepted within this fraction of the FX anchor. */
+    private const FX_ANCHOR_BAND = 0.03;
+    /** The FX anchor moves toward observed rates by at most this fraction per FX_DRIFT_PERIOD. */
+    private const FX_DRIFT = 0.02;
+    private const FX_DRIFT_PERIOD = 86400;
+    /**
+     * A first FX ratio for a currency two providers used to confirm must price it within
+     * this fraction of their last agreed rate. Wide, because that rate may be days old and
+     * bitcoin moves; it is there to catch a broken feed, not ordinary market moves.
+     */
+    private const FX_BOOTSTRAP_BAND = 0.25;
+
+    /**
+     * BTC price in a currency only one provider quotes.
+     *
+     * BTC/C = confirmed BTC/USD (the normal multi-provider path) x fx, with
+     * fx = P(C) / P(USD) from that provider. The provider's own P(USD) must match the
+     * confirmed BTC/USD within FX_USD_BAND, so its feed is coherent. fx is compared with
+     * fx_anchor_<cur>: the first fx bootstraps it (same trust as a fresh install had
+     * before C2), later ones are accepted only within FX_ANCHOR_BAND. Every observation
+     * pulls the anchor toward it by at most FX_DRIFT per FX_DRIFT_PERIOD (time-scaled,
+     * so frequent refreshes cannot add up to more), refused ones included: a genuine FX
+     * jump beyond the band heals in a day or two instead of locking the shop out, while a
+     * hostile or broken provider still moves prices by at most ~2 % a day.
+     *
+     * getBtcPrice() also lands here for a currency several providers quote when only one
+     * of them answered and no fresh anchor exists. It then passes the rate it already got
+     * ($own) and the last rate two providers agreed on ($lastConfirmed, however old).
+     * Such a currency usually has no FX anchor yet, and the first FX ratio would start
+     * one unchecked, so it must first land within FX_BOOTSTRAP_BAND of that last agreed
+     * rate: a decimal slip or wrong field cannot become the anchor. Never called for USD,
+     * so the getBtcPrice('usd') below cannot come back here.
+     */
+    private static function singleSourcePrice(string $currency, PriceProvider $provider, ?string $primary, ?string $secondary,
+        ?float $own = null, ?float $lastConfirmed = null): ?float {
+        $name = $provider->getName();
+        $usd = self::getBtcPrice('usd', $primary, $secondary);
+        if ($usd === null || $usd <= 0) {
+            error_log("ExchangeRates: no confirmed BTC/USD rate to price {$currency} from {$name}");
+            return self::getCached($currency, true);
+        }
+        try {
+            $ownUsd = $provider->getBtcPrice('usd');
+            $own ??= $provider->getBtcPrice($currency);
+        } catch (Exception $e) {
+            error_log("ExchangeRates: {$name} failed for {$currency}: " . $e->getMessage());
+            return self::getCached($currency, true);
+        }
+        foreach ([$ownUsd, $own] as $r) {
+            if ($r === null || !is_finite($r) || $r <= 0) {
+                return self::getCached($currency, true);
+            }
+        }
+        if (!self::withinBand($ownUsd, $usd, self::FX_USD_BAND)) {
+            error_log("ExchangeRates: {$name} BTC/USD {$ownUsd} is more than " . (int)(self::FX_USD_BAND * 100)
+                . "% away from the confirmed {$usd}; refusing to price {$currency} from it");
+            return self::getCached($currency, true);
+        }
+        $fx = $own / $ownUsd;
+
+        $key = 'fx_anchor_' . $currency;
+        $anchor = Config::get($key);
+        if (!is_array($anchor) || !isset($anchor['rate']) || (float)$anchor['rate'] <= 0) {
+            if ($lastConfirmed !== null && !self::withinBand($usd * $fx, $lastConfirmed, self::FX_BOOTSTRAP_BAND)) {
+                error_log("ExchangeRates: {$name} prices {$currency} at " . ($usd * $fx) . ", more than "
+                    . (int)(self::FX_BOOTSTRAP_BAND * 100) . "% away from the last rate two providers agreed on "
+                    . "({$lastConfirmed}); refusing to price {$currency} until a second provider answers again");
+                return self::getCached($currency, true);
+            }
+            Config::set($key, ['rate' => $fx, 'timestamp' => time(), 'provider' => $name]);
+            error_log("ExchangeRates: no {$currency} FX anchor yet; starting it at {$fx} {$currency} per USD from {$name}");
+        } else {
+            $anchorRate = (float)$anchor['rate'];
+            $elapsed = max(0, time() - (int)($anchor['timestamp'] ?? 0));
+            $maxMove = $anchorRate * self::FX_DRIFT * min(1.0, $elapsed / self::FX_DRIFT_PERIOD);
+            $moved = $anchorRate + max(-$maxMove, min($maxMove, $fx - $anchorRate));
+            if ($moved != $anchorRate) {
+                Config::set($key, ['rate' => $moved, 'timestamp' => time(), 'provider' => $name]);
+            }
+            if (!self::withinBand($fx, $anchorRate, self::FX_ANCHOR_BAND)) {
+                error_log("ExchangeRates: {$name} {$currency}/USD rate {$fx} is more than "
+                    . (int)(self::FX_ANCHOR_BAND * 100) . "% away from the anchored {$anchorRate}; refusing to price "
+                    . "{$currency} (the anchor drifts toward it by at most " . (int)(self::FX_DRIFT * 100) . "% a day)");
+                return self::getCached($currency, true);
+            }
+        }
+
+        $rate = $usd * $fx;
+        self::saveToCache($currency, $rate, $name);
+        return $rate;
+    }
+
     /** What the shop and the API show when no price can be had. */
-    public const UNAVAILABLE_MESSAGE = 'Prices are unavailable right now; try again in a few minutes.';
+    public const UNAVAILABLE_MESSAGE = 'We could not confirm the Bitcoin price from two sources, so fiat prices are paused. It resumes by itself when another price source answers.';
 
     private static function rateUnavailable(string $currency): Exception {
         error_log("ExchangeRates: no usable exchange rate for {$currency}");
@@ -357,7 +503,9 @@ class ExchangeRates {
         // Step 2: Convert BTC to mint unit
         $mintAmount = self::fromBtc($btcAmount, $mintUnit, $primaryProvider, $secondaryProvider);
 
-        // Apply exchange fee (positive = user pays more)
+        // Apply exchange fee (positive = user pays more). Both directions share the same
+        // 0–100 % bound, so a payout cannot deduct a different fee than an invoice adds.
+        $exchangeFeePercent = max(0.0, min(100.0, $exchangeFeePercent));
         if ($exchangeFeePercent != 0) {
             $mintAmount = bcmul($mintAmount, (string)(1 + $exchangeFeePercent / 100), self::SCALE);
         }
@@ -561,13 +709,16 @@ class ExchangeRates {
      * @param string $mintUnit The mint's unit (sat, eur, usd, etc.)
      * @param string|null $primaryProvider Primary price provider
      * @param string|null $secondaryProvider Secondary price provider
+     * @param float $exchangeFeePercent The operator's conversion fee, applied in the
+     *        same direction as on an invoice: the amount the shop receives is net of it.
      * @return int Amount in satoshis
      */
     public static function convertMintUnitToSats(
         int $amountInSmallestUnit,
         string $mintUnit,
         ?string $primaryProvider = null,
-        ?string $secondaryProvider = null
+        ?string $secondaryProvider = null,
+        float $exchangeFeePercent = 0.0
     ): int {
         $mintUnit = strtoupper($mintUnit);
 
@@ -588,8 +739,14 @@ class ExchangeRates {
         // Step 2: Convert fiat to BTC
         $btcAmount = self::toBtc($fiatAmount, $mintUnit, $primaryProvider, $secondaryProvider);
 
-        // Step 3: Convert BTC to sats
-        return (int)bcmul($btcAmount, '100000000', 0);
+        // Step 3: Convert BTC to sats. The fee is taken out of the payout, the mirror of
+        // the invoice path where it is added to what the customer pays.
+        $sats = bcmul($btcAmount, '100000000', 8);
+        $feePercent = max(0.0, min(100.0, $exchangeFeePercent));
+        if ($feePercent > 0) {
+            $sats = bcmul($sats, (string)(1 - $feePercent / 100), 8);
+        }
+        return (int)bcadd($sats, '0', 0);
     }
 
     /**

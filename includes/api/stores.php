@@ -8,9 +8,15 @@
  *
  * Single-operator: an API key only ever sees its own store (not every store).
  * This keeps BTCPay clients working (they expect a list) without leaking other
- * stores' existence.
+ * stores' existence. Like BTCPay, the list only shows stores whose settings the key
+ * may view; any other key gets an empty list.
  */
 function handleGetStores(array $auth, array $params, array $body): void {
+    if (!Auth::hasPermission($auth, 'btcpay.store.canviewstoresettings')) {
+        jsonResponse([]);
+        return;
+    }
+
     $store = Database::fetchOne(
         "SELECT id, name, created_at FROM stores WHERE id = ?",
         [(string)($auth['store_id'] ?? '')]
@@ -33,6 +39,7 @@ function handleGetStores(array $auth, array $params, array $body): void {
  */
 function handleGetStore(array $auth, array $params, array $body): void {
     $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.canviewstoresettings');
 
     $store = Database::fetchOne(
         "SELECT id, name, created_at FROM stores WHERE id = ?",
@@ -218,6 +225,7 @@ function greenfieldPermissions(array $auth): array {
  */
 function handleStorePaymentMethods(array $auth, array $params, array $body): void {
     $storeId = requireStore($auth, $params);
+    requirePermission($auth, 'btcpay.store.canviewstoresettings');
 
     jsonResponse([[
         'enabled' => true,

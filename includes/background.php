@@ -60,18 +60,39 @@ class Background {
     /**
      * The cron URL to call with the internal key, or null when no origin is trusted.
      *
-     * Only a configured `base_url` (or WordPress's own `site_url()`) counts. Deriving it
-     * from HTTP_HOST means an unauthenticated request with a forged Host header can make
-     * this server post its internal credential to the attacker's origin.
+     * Only a configured `base_url` counts. Deriving it from HTTP_HOST means an
+     * unauthenticated request with a forged Host header can make this server post its
+     * internal credential to the attacker's origin.
+     *
+     * In WordPress, site_url() is trusted only while it still matches the base_url
+     * pinned at activation: some wp-config.php files build WP_SITEURL from the request's
+     * Host header, and then site_url() names whatever host the visitor sent (OPUS N4).
      */
     private static function selfCronUrl(): ?string {
         if (Urls::isWordPress()) {
-            return Urls::cron();
+            return self::sameOrigin(Urls::cron(), (string)Config::get('base_url')) ? Urls::cron() : null;
         }
         if (!Config::get('base_url')) {
             return null;
         }
         return Urls::cron();
+    }
+
+    /**
+     * Whether two URLs name the same host and explicit port. The scheme is ignored, as
+     * in wordpress/bootstrap.php: a site moved from http to https after activation
+     * still has its old base_url, and a forged Host header changes the host anyway.
+     */
+    private static function sameOrigin(string $a, string $b): bool {
+        $origin = static function (string $url): ?string {
+            $parts = parse_url($url);
+            if (!$parts || empty($parts['host']) || empty($parts['scheme'])) {
+                return null;
+            }
+            return strtolower($parts['host']) . ':' . ($parts['port'] ?? '');
+        };
+        $originA = $origin($a);
+        return $originA !== null && $originA === $origin($b);
     }
 
     private static function isLoopbackUrl(string $url): bool {
