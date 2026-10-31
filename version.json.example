@@ -2,7 +2,7 @@
   "version": "0.5.9-alpha",
   "released": "2026-10-31",
   "url": "https://github.com/jooray/cashupayserver/releases/tag/v0.5.9-alpha",
-  "severity": "important",
+  "severity": "security",
   "min_supported": "0.5.0-alpha",
-  "notes": "Automatic withdrawals work again above about 10,000 sats, customers are no longer told to pay twice, setup asks where your money should go, and you can get alerts by email or Nostr. Upgrade when you can, keeping your data folder."
+  "notes": "Includes the 0.5.8 security fixes (payment requests, late payments, price sources, backup mints). New: automatic withdrawals work above 10,000 sats, customers are no longer told to pay twice, setup asks where your money should go, alerts by email or Nostr. Upgrade now, keeping your data folder."
 }
