@@ -5,6 +5,8 @@
  * Routes to setup wizard if not configured, otherwise serves as landing page.
  */
 
+// First, before any code that needs a newer PHP: explain startup problems plainly (A1).
+require_once __DIR__ . '/includes/preflight.php';
 require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';

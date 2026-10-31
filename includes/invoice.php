@@ -1105,42 +1105,8 @@ class Invoice {
         foreach ($rows as $invoice) {
             try {
                 Database::update('invoices', ['last_polled_at' => $now], 'id = ?', [$invoice['id']]);
-
-                $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null, $invoice['mint_unit'] ?? null);
-                $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
-
-                if ($quoteStatus->isPaid() || $quoteStatus->isIssued()) {
-                    error_log("CashuPayServer: Late payment on expired invoice {$invoice['id']} - recovering");
-                    if ($quoteStatus->isIssued()) {
-                        // No claim here: completeIssuedInvoice either settles proofs we
-                        // already hold, or calls mintAndStoreTokens, which claims for
-                        // itself. Claiming first made that second claim fail (cooldown),
-                        // so the retry announced in the log never happened.
-                        self::completeIssuedInvoice($invoice, $wallet);
-                    } else {
-                        self::mintAndStoreTokens($invoice, $wallet);
-                    }
-                    if (self::getById($invoice['id'])['status'] === 'Settled') {
-                        $recovered[] = $invoice['id'];
-                    }
-                } elseif ($quoteStatus->expiry !== null
-                          && $quoteStatus->expiry < $now - self::UNPAID_WRITE_OFF_DELAY
-                          && self::quoteIsDefinitelyUnpaid($quoteStatus)) {
-                    // The mint's own quote has long expired and the mint says plainly that
-                    // nothing was paid: this claim is resolved and the row may be cleaned
-                    // up by age from now on. The delay gives a lagging mint watcher time to
-                    // report a payment made just before expiry. Anything less than that
-                    // plain answer (no state, PENDING, an unknown word) keeps the quote:
-                    // dropping the only link to a payment is a one-way door.
-                    Database::update(
-                        'invoices',
-                        [
-                            'quote_id' => null,
-                            'last_poll_state' => 'written_off_unpaid',
-                        ],
-                        "id = ? AND status IN ('Expired', 'Invalid') AND quote_id IS NOT NULL",
-                        [$invoice['id']]
-                    );
+                if (self::collectClosedInvoice($invoice, $now)) {
+                    $recovered[] = $invoice['id'];
                 }
             } catch (Throwable $e) {
                 error_log("CashuPayServer: Error recovering expired invoice {$invoice['id']}: " . $e->getMessage());
@@ -1149,6 +1115,135 @@ class Invoice {
 
         return $recovered;
     }
+
+    /**
+     * Ask the mint whether an Expired or Invalid invoice was paid after all, and collect
+     * it if so; write off a quote the mint has long since expired unpaid.
+     *
+     * @return bool True when the invoice is now Settled
+     */
+    private static function collectClosedInvoice(array $invoice, int $now): bool {
+        $wallet = self::getWalletForStore($invoice['store_id'], $invoice['mint_url'] ?? null, $invoice['mint_unit'] ?? null);
+        $quoteStatus = $wallet->checkMintQuote($invoice['quote_id']);
+
+        if ($quoteStatus->isPaid() || $quoteStatus->isIssued()) {
+            error_log("CashuPayServer: Late payment on expired invoice {$invoice['id']} - recovering");
+            if ($quoteStatus->isIssued()) {
+                // No claim here: completeIssuedInvoice either settles proofs we
+                // already hold, or calls mintAndStoreTokens, which claims for
+                // itself. Claiming first made that second claim fail (cooldown),
+                // so the retry announced in the log never happened.
+                self::completeIssuedInvoice($invoice, $wallet);
+            } else {
+                self::mintAndStoreTokens($invoice, $wallet);
+            }
+            return self::getById($invoice['id'])['status'] === 'Settled';
+        } elseif ($quoteStatus->expiry !== null
+                  && $quoteStatus->expiry < $now - self::UNPAID_WRITE_OFF_DELAY
+                  && self::quoteIsDefinitelyUnpaid($quoteStatus)) {
+            // The mint's own quote has long expired and the mint says plainly that
+            // nothing was paid: this claim is resolved and the row may be cleaned
+            // up by age from now on. The delay gives a lagging mint watcher time to
+            // report a payment made just before expiry. Anything less than that
+            // plain answer (no state, PENDING, an unknown word) keeps the quote:
+            // dropping the only link to a payment is a one-way door.
+            Database::update(
+                'invoices',
+                [
+                    'quote_id' => null,
+                    'last_poll_state' => 'written_off_unpaid',
+                ],
+                "id = ? AND status IN ('Expired', 'Invalid') AND quote_id IS NOT NULL",
+                [$invoice['id']]
+            );
+        }
+        return false;
+    }
+
+    /** What a shop may show its customer when no invoice can be created. */
+    public const CHECKOUT_UNAVAILABLE_MESSAGE = 'Bitcoin payments are temporarily unavailable. Please try again '
+        . 'in a few minutes, or choose another payment method.';
+
+    /**
+     * Remember that a customer could not start a payment, for the operator's dashboard,
+     * and return the text to give the shop. Invoice-creation errors used to reach only
+     * the shop and the error log, so a mint that was down stopped every checkout while
+     * the dashboard stayed green (A11, 2026-10-28).
+     */
+    public static function recordCheckoutFailure(string $storeId, Throwable $e): string {
+        $message = $e->getMessage();
+        if ($message === ExchangeRates::UNAVAILABLE_MESSAGE) {
+            $reason = 'prices';
+            $public = $message;
+        } elseif (str_contains($message, 'being set up')) {
+            $reason = 'setting_up';
+            $public = $message;
+        } elseif (str_contains($message, 'mint quote')) {
+            $reason = 'mint';
+            $public = self::CHECKOUT_UNAVAILABLE_MESSAGE;
+        } elseif ($e instanceof InvalidArgumentException) {
+            // A bad request from the shop's own integration: its wording is useful as is.
+            return $message;
+        } else {
+            $reason = 'other';
+            $public = self::CHECKOUT_UNAVAILABLE_MESSAGE;
+        }
+        try {
+            $key = 'checkout_failures_' . $storeId;
+            $previous = Config::get($key);
+            $now = time();
+            Config::set($key, [
+                'first' => is_array($previous) ? (int)($previous['first'] ?? $now) : $now,
+                'last' => $now,
+                'count' => (is_array($previous) ? (int)($previous['count'] ?? 0) : 0) + 1,
+                'reason' => $reason,
+                'detail' => mb_substr($message, 0, 300),
+            ]);
+        } catch (Throwable $ignored) {
+            // Recording is best effort; the shop still gets its answer.
+        }
+        error_log("CashuPayServer: checkout failed for store {$storeId} ({$reason}): {$message}");
+        return $public;
+    }
+
+    /** A customer could start a payment again: the problem is over. */
+    public static function recordCheckoutSuccess(string $storeId): void {
+        try {
+            if (Config::get('checkout_failures_' . $storeId) !== null) {
+                Config::delete('checkout_failures_' . $storeId);
+            }
+        } catch (Throwable $ignored) {
+        }
+    }
+
+    /**
+     * The checkout page's own check of a recently closed invoice, so a customer who paid
+     * at the last second (or paid an order the shop then cancelled) sees "Payment
+     * Complete" instead of being told to pay again (C1, C2, 2026-10-28). Throttled per
+     * invoice, and only inside the frequent recovery window.
+     */
+    public static function recheckClosedInvoice(string $invoiceId, int $minInterval = 15): void {
+        $now = time();
+        $claimed = Database::query(
+            "UPDATE invoices SET last_polled_at = ?
+             WHERE id = ? AND status IN ('Expired', 'Invalid') AND quote_id IS NOT NULL
+             AND expiration_time > ? AND (last_polled_at IS NULL OR last_polled_at <= ?)",
+            [$now, $invoiceId, $now - self::EXPIRY_RECOVERY_GRACE, $now - $minInterval]
+        )->rowCount();
+        if ($claimed !== 1) {
+            return;
+        }
+        $invoice = self::getById($invoiceId);
+        if ($invoice === null) {
+            return;
+        }
+        try {
+            self::collectClosedInvoice($invoice, $now);
+        } catch (Throwable $e) {
+            error_log("CashuPayServer: Error re-checking closed invoice {$invoiceId}: " . $e->getMessage());
+        }
+    }
+
 
     // =========================================================================
     // PER-STORE BALANCE OPERATIONS (OFFLINE-FIRST)

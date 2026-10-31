@@ -12,6 +12,42 @@ require_once __DIR__ . '/urls.php';
 class Background {
     /** Shortest interval between two API-triggered background runs. */
     const TRIGGER_INTERVAL = 30;
+    /** Shortest interval between two urgent runs (a payment just settled). */
+    const URGENT_TRIGGER_INTERVAL = 3;
+    /** Budget of a run done in the visitor's request after the response was sent. */
+    const IN_PROCESS_BUDGET = 20;
+
+    /** Whether this SAPI can send the response and keep running. */
+    private static function canFinishResponse(): bool {
+        // WordPress has WP-Cron and its own shutdown handlers; finishing its response
+        // early from here could cut those short. Leave it to the self-request path.
+        if (defined('CASHUPAY_NO_IN_PROCESS_BACKGROUND') || Urls::isWordPress()) {
+            return false;
+        }
+        return function_exists('fastcgi_finish_request') || function_exists('litespeed_finish_request');
+    }
+
+    /** Shutdown handler: send the response, then run the background tasks. */
+    public static function runAfterResponse(): void {
+        try {
+            // Release the session lock first, or the visitor's next request (the page's
+            // next status poll) would wait for this run.
+            if (session_status() === PHP_SESSION_ACTIVE) {
+                session_write_close();
+            }
+            if (function_exists('fastcgi_finish_request')) {
+                fastcgi_finish_request();
+            } elseif (function_exists('litespeed_finish_request')) {
+                litespeed_finish_request();
+            }
+            ignore_user_abort(true);
+            @set_time_limit(self::IN_PROCESS_BUDGET + 40);
+            require_once __DIR__ . '/background_runner.php';
+            BackgroundRunner::run(self::IN_PROCESS_BUDGET);
+        } catch (Throwable $e) {
+            error_log('CashuPayServer: background run after response failed: ' . $e->getMessage());
+        }
+    }
 
     /**
      * Trigger background processing without blocking the current request.
@@ -20,14 +56,29 @@ class Background {
      * the calling request doesn't wait, and is coalesced so a busy checkout does not
      * start a full cron run per poll.
      */
-    public static function trigger(): void {
+    public static function trigger(bool $urgent = false): void {
         // WooCommerce polls invoice status every few seconds during checkout, and each
-        // poll used to fire a full cron run. Coalesce them.
-        $last = (int)Config::get('last_background_trigger', '0');
-        if (time() - $last < self::TRIGGER_INTERVAL) {
+        // poll used to fire a full cron run. Coalesce them. An urgent trigger (a payment
+        // just settled, so the shop is waiting for its webhook) only waits a few seconds:
+        // the 30 s window usually swallowed it, and on a quiet shop the webhook then sat
+        // until the next visitor, hours later (R3, 2026-10-28).
+        $key = $urgent ? 'last_urgent_background_trigger' : 'last_background_trigger';
+        $last = (int)Config::get($key, '0');
+        if (time() - $last < ($urgent ? self::URGENT_TRIGGER_INTERVAL : self::TRIGGER_INTERVAL)) {
             return;
         }
+        Config::set($key, (string)time());
         Config::set('last_background_trigger', (string)time());
+
+        // Where the server can finish the response and keep working (PHP-FPM, LiteSpeed),
+        // run the tasks right here after the visitor has their page. The self-request
+        // below gives up after 100 ms, which a cold TLS handshake to the site's own name
+        // often exceeds, and some hosts block such requests altogether; then nothing in
+        // the background ever ran (R4, 2026-10-28).
+        if (self::canFinishResponse()) {
+            register_shutdown_function([self::class, 'runAfterResponse']);
+            return;
+        }
 
         $url = self::selfCronUrl();
         if ($url === null) {

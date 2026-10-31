@@ -180,4 +180,35 @@ check(str_contains($body, 'Admin Password'), 'the right code continues setup in 
 [$code, $body] = req($merchant, 'GET', $base);
 check(str_contains($body, 'already started setting up'), 'the browser that held the claim before is locked out');
 
+echo "After the recovery phrase, setup asks where the money should go (R2)\n";
+[$code, $body] = req($stranger, 'GET', $base);
+[$code, $body] = req($stranger, 'POST', $base, ['step' => '2', 'csrf_token' => csrf($body),
+    'password' => 'owner-pass-1', 'confirm_password' => 'owner-pass-1']);
+[$code, $body] = req($stranger, 'POST', $base, ['step' => '4', 'csrf_token' => csrf($body), 'store_name' => 'Yarn Shop']);
+[$code, $body] = req($stranger, 'POST', $base, ['step' => '5', 'csrf_token' => csrf($body), 'mint_url' => $mintUrl,
+    'mint_unit' => 'sat'], ['X-Test-Allow-Private: 1']);
+[$code, $body] = req($stranger, 'POST', $base, ['step' => '6', 'csrf_token' => csrf($body), 'action' => 'generate'],
+    ['X-Test-Allow-Private: 1']);
+[$code, $body] = req($stranger, 'POST', $base, ['step' => '6', 'csrf_token' => csrf($body), 'action' => 'confirm',
+    'seed_confirmed' => '1'], ['X-Test-Allow-Private: 1']);
+if (!str_contains($body, 'Where should your money go?')) {
+    preg_match('#class="error"[^>]*>(.*?)</div>#s', $body, $m);
+    fwrite(STDERR, 'step 6 said: ' . trim(strip_tags($m[1] ?? substr($body, 0, 300))) . "\n");
+}
+check(str_contains($body, 'Where should your money go?') && str_contains($body, 'value="10000"'),
+    'the payout step follows, suggesting 10,000 sats');
+check(str_contains($body, 'Not now'), 'and it can be skipped');
+$complete = fn() => $pdo->query("SELECT value FROM config WHERE key = 'setup_complete'")->fetchColumn();
+check(!$complete(), 'setup is not complete yet');
+[$code, $body] = req($stranger, 'POST', $base, ['step' => '8', 'csrf_token' => csrf($body), 'action' => 'save',
+    'payout_address' => 'not an address', 'payout_threshold' => '10000']);
+check(str_contains($body, 'does not look like a Lightning address') && str_contains($body, 'Where should your money go?'),
+    'a mistyped address is refused in plain words, on the same step');
+check(!$complete(), 'and setup is still not complete');
+[$code, $body] = req($stranger, 'POST', $base, ['step' => '8', 'csrf_token' => csrf($body), 'action' => 'skip']);
+check(str_contains($body, 'Setup Complete'), '"Not now" finishes setup');
+check((bool)$complete(), 'setup is complete');
+check((int)$pdo->query("SELECT auto_melt_enabled FROM stores WHERE name = 'Yarn Shop'")->fetchColumn() === 0,
+    'with automatic payouts left off');
+
 echo "All setup wizard checks passed.\n";

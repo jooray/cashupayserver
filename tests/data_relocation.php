@@ -77,4 +77,24 @@ echo "It is never done twice, nor once a wallet exists\n";
 $again = json_decode(inApp('echo json_encode(Database::relocateOutsideWebroot());'), true);
 check(($again['ok'] ?? true) === false, 'a second move is refused');
 
+echo "Losing includes/data-location.txt does not lose the wallet (A5)\n";
+check(trim((string)@file_get_contents("$app/data/.cashupay-location")) === "$home/cashupay-data",
+    'a second record is kept in the website\'s data folder, which upgrades keep');
+unlink("$app/includes/data-location.txt");
+check(inApp("echo Database::getDataDir();") === "$home/cashupay-data", 'the second record finds it');
+check(inApp("echo Config::get('marker');") === 'kept', 'with the database');
+check(is_file("$app/includes/data-location.txt"), 'and the first record is written back');
+
+echo "Replacing the whole folder (both records gone) still finds it (A5)\n";
+exec('rm -rf ' . escapeshellarg("$app/data"));
+unlink("$app/includes/data-location.txt");
+check(inApp("echo Database::getDataDir();") === "$home/cashupay-data", 'the folder that names this install is found');
+check(inApp("echo Config::get('marker');") === 'kept', 'so setup does not start over on an empty database');
+
+echo "Another site's moved folder is never adopted\n";
+file_put_contents("$home/cashupay-data/.cashupay-app", "/some/other/site\n");
+exec('rm -rf ' . escapeshellarg("$app/data"));
+@unlink("$app/includes/data-location.txt");
+check(inApp("echo Database::getDataDir();") !== "$home/cashupay-data", 'a folder owned by another install is ignored');
+
 echo "data_relocation: OK\n";

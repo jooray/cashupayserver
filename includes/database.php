@@ -58,13 +58,78 @@ class Database {
     /** Where setup moved the data folder to (see relocateOutsideWebroot()), if it did. */
     private const LOCATION_FILE = __DIR__ . '/data-location.txt';
 
+    /**
+     * A second record of the moved location, inside the website's own data folder. An
+     * upgrade replaces the program files but keeps data/, so this survives an operator
+     * deleting and re-uploading the whole folder, which loses includes/ (A5, 2026-10-28).
+     */
+    private const WEB_DATA_MARKER = __DIR__ . '/../data/.cashupay-location';
+    /** Inside a moved data folder: which installation it belongs to (its real path). */
+    private const OWNER_FILE = '.cashupay-app';
+
     private static function relocatedDataDir(): ?string {
-        $path = @file_get_contents(self::LOCATION_FILE);
-        if ($path === false) {
+        foreach ([self::LOCATION_FILE, self::WEB_DATA_MARKER] as $record) {
+            $path = @file_get_contents($record);
+            if ($path === false) {
+                continue;
+            }
+            $path = rtrim(trim($path), '/');
+            if ($path !== '' && is_dir($path)) {
+                self::rememberLocation($path);
+                return $path;
+            }
+        }
+        // Both records gone (the folder was replaced and data/ with it). Before this was
+        // a fresh setup on an empty database that anyone could claim, while the wallet
+        // sat untouched next to the website. Look for a moved folder that says it is ours.
+        $found = self::findOwnMovedDataDir();
+        if ($found !== null) {
+            self::rememberLocation($found);
+        }
+        return $found;
+    }
+
+    /** The real path that identifies this installation in a moved folder's owner file. */
+    private static function appIdentity(): string {
+        return realpath(__DIR__ . '/..') ?: dirname(__DIR__);
+    }
+
+    /** Write any missing record of a known moved location. Best effort, never fatal. */
+    private static function rememberLocation(string $path): void {
+        if (!is_file(self::LOCATION_FILE) && is_writable(__DIR__)) {
+            @file_put_contents(self::LOCATION_FILE, $path . "\n");
+        }
+        $webData = dirname(self::WEB_DATA_MARKER);
+        if (!is_file(self::WEB_DATA_MARKER) && is_dir($webData) && is_writable($webData)) {
+            @file_put_contents(self::WEB_DATA_MARKER, $path . "\n");
+        }
+        $owner = $path . '/' . self::OWNER_FILE;
+        if (!is_file($owner) && is_writable($path)) {
+            @file_put_contents($owner, self::appIdentity() . "\n");
+        }
+    }
+
+    /**
+     * A cashupay-data* folder next to the website whose owner file names this install and
+     * that holds a wallet database. Never another site's: the owner file must match.
+     */
+    private static function findOwnMovedDataDir(): ?string {
+        if (is_file(__DIR__ . '/../data/cashupay.sqlite')) {
             return null;
         }
-        $path = rtrim(trim($path), '/');
-        return $path !== '' && is_dir($path) ? $path : null;
+        $docRoot = realpath((string)($_SERVER['DOCUMENT_ROOT'] ?? ''));
+        $parents = array_unique(array_filter([$docRoot ? dirname($docRoot) : null, dirname(self::appIdentity())]));
+        $me = self::appIdentity();
+        foreach ($parents as $parent) {
+            foreach (glob($parent . '/cashupay-data*', GLOB_ONLYDIR) ?: [] as $candidate) {
+                $owner = trim((string)@file_get_contents($candidate . '/' . self::OWNER_FILE));
+                if ($owner === $me && is_file($candidate . '/cashupay.sqlite')) {
+                    error_log("CashuPayServer: found this installation's moved data folder at {$candidate}");
+                    return $candidate;
+                }
+            }
+        }
+        return null;
     }
 
     /**
@@ -133,10 +198,16 @@ class Database {
                     }
                 }
             }
+            // Mark the folder as this installation's before recording where it is, so
+            // it can be found again if the records are lost (A5).
+            @file_put_contents($target . '/' . self::OWNER_FILE, self::appIdentity() . "\n");
             $tmp = self::LOCATION_FILE . '.' . bin2hex(random_bytes(4));
             if (@file_put_contents($tmp, $target . "\n") === false || !@rename($tmp, self::LOCATION_FILE)) {
                 @unlink($tmp);
                 throw new RuntimeException('could not record the new location');
+            }
+            if (is_dir($old) && is_writable($old)) {
+                @file_put_contents($old . '/' . basename(self::WEB_DATA_MARKER), $target . "\n");
             }
         } catch (Throwable $e) {
             error_log('CashuPayServer: moving the data folder failed: ' . $e->getMessage());

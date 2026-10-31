@@ -74,8 +74,10 @@ function req(string $url, ?array $post = null): array {
 
 $realDir = realpath($dataDir);
 
+Config::set('alert_email', 'owner@example.com');
 echo "Before login\n";
 [$code, $headers, $body] = req($url);
+check(!str_contains($body, 'owner@example.com'), 'the shell does not contain the alert email address');
 check($code === 200 && str_contains($body, 'id="data-folder-path"'), "the shell is served (HTTP $code)");
 check(!str_contains($body, $dataDir) && !str_contains($body, $realDir), 'without the data folder path in it');
 check((bool)preg_match('/^Cache-Control:\s*no-store/mi', $headers), 'with Cache-Control: no-store');

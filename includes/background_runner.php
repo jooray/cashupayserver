@@ -72,6 +72,7 @@ class BackgroundRunner {
         'cleanup_pending_ops' => ['name' => 'Clearing finished wallet records', 'impact' => 'Old wallet records are not being cleaned up. Nothing urgent.'],
         'cleanup_webhooks' => ['name' => 'Trimming the shop notification history', 'impact' => 'The notification history keeps growing. Nothing urgent.'],
         'finish_payment_requests' => ['name' => 'Confirming payments to payment requests', 'impact' => 'A payment-request QR that was paid may keep showing as unpaid.'],
+        'send_alerts' => ['name' => 'Sending alerts', 'impact' => 'Problems are shown on the dashboard, but the email or Nostr alerts you set up are not being sent.'],
         'cleanup_payment_requests' => ['name' => 'Removing old payment requests', 'impact' => 'Old payment requests are not being cleaned up. Nothing urgent.'],
     ];
 
@@ -146,6 +147,10 @@ class BackgroundRunner {
                 if ($sessions > 0) { $parts[] = "removed {$sessions} old sessions"; }
                 if ($backups > 0) { $parts[] = "removed {$backups} leftover backups"; }
                 return $parts === [] ? 'none' : implode(', ', $parts);
+            },
+            'send_alerts' => function () {
+                require_once __DIR__ . '/alerts.php';
+                return Alerts::run();
             },
             'cleanup_invoices' => fn() => self::cleanupInvoices(),
             'cleanup_pending_ops' => fn() => self::cleanupPendingOperations(),

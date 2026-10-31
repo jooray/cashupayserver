@@ -20,6 +20,16 @@ use Cashu\Proof;
 use Cashu\ProofState;
 use Cashu\LightningAddress as CashuLightningAddress;
 
+/**
+ * A withdrawal that does not fit the money available for it, once the mint's Lightning
+ * fee reserve and input fee are known. Thrown before anything is recorded or sent.
+ */
+class MeltDoesNotFit extends Exception {
+    public function __construct(public readonly int $have, public readonly int $need, string $unit) {
+        parent::__construct("Insufficient balance. Have: {$have} {$unit}, Need: {$need} {$unit}");
+    }
+}
+
 class LightningAddress {
     /**
      * Validate a Lightning address format
@@ -65,7 +75,8 @@ class LightningAddress {
         int $amountSats,
         ?string $comment = null,
         string $transferType = Transfer::TYPE_LIGHTNING_ADDRESS,
-        ?array $account = null
+        ?array $account = null,
+        ?int $budget = null
     ): array {
         if ($amountSats < 1) {
             throw new Exception('The amount to send is too small.');
@@ -79,7 +90,66 @@ class LightningAddress {
         // invoice is for the amount we asked for.
         $bolt11 = CashuLightningAddress::getInvoice($address, $amountSats, $comment);
 
-        return self::executeMelt($storeId, $bolt11, $address, $transferType, $account);
+        return self::executeMelt($storeId, $bolt11, $address, $transferType, $account, $budget);
+    }
+
+    /**
+     * Check a payout Lightning address before it is saved: does it answer, and can it
+     * receive the automatic-withdrawal amount? A typo used to be found only when a
+     * background withdrawal failed, days later (R2/A10, 2026-10-28).
+     *
+     * @param int|null $thresholdSats The automatic-withdrawal amount in sats, if known
+     * @return array{ok: bool, message: string}
+     */
+    public static function checkPayoutAddress(string $address, ?int $thresholdSats = null): array {
+        if (!CashuLightningAddress::isValid($address)) {
+            return ['ok' => false, 'message' => 'This does not look like a Lightning address. It should look like name@wallet.com.'];
+        }
+        $info = CashuLightningAddress::resolve($address);
+        if ($info === null) {
+            return ['ok' => false, 'message' => 'We could not reach this Lightning address. Check it for typos, '
+                . 'or make sure the wallet that gave it to you is still active.'];
+        }
+        $min = (int)ceil($info['minSendable'] / 1000);
+        $max = (int)floor($info['maxSendable'] / 1000);
+        if ($thresholdSats !== null && $max > 0 && $thresholdSats > $max) {
+            return ['ok' => false, 'message' => 'This wallet accepts at most ' . number_format($max) . ' sats per payment. '
+                . 'Choose a lower withdrawal amount, at most ' . number_format($max) . ' sats.'];
+        }
+        if ($thresholdSats !== null && $thresholdSats < $min) {
+            return ['ok' => false, 'message' => 'This wallet needs at least ' . number_format($min) . ' sats per payment. '
+                . 'Choose a higher withdrawal amount.'];
+        }
+        return ['ok' => true, 'message' => 'Found your wallet. It can receive between ' . number_format(max(1, $min))
+            . ' and ' . number_format($max) . ' sats per payment.'];
+    }
+
+    /**
+     * Send $amountSats through $send(int $sats); if the mint's fee reserve and input fee
+     * make that not fit the budget, shrink it once to what fits and send again. Nothing
+     * is recorded or sent by an attempt that does not fit. The needed amount is in the
+     * account's unit, so scaling by have/need also works for fiat mints.
+     *
+     * @return int The amount actually sent, in sats
+     */
+    public static function sendFitted(int $amountSats, callable $send): int {
+        // The reserve scales with the amount but the input fee is per proof, so one
+        // proportional step can still fall a few units short: refit from the mint's
+        // latest numbers, a few times at most.
+        for ($attempt = 0; ; $attempt++) {
+            try {
+                $send($amountSats);
+                return $amountSats;
+            } catch (MeltDoesNotFit $tooBig) {
+                $shortfall = $tooBig->need - $tooBig->have;
+                $fitted = (int)floor($amountSats * $tooBig->have / max(1, $tooBig->need))
+                    - ($attempt > 0 ? $shortfall : 1);
+                if ($attempt >= 3 || $fitted < 1 || $fitted >= $amountSats) {
+                    throw $tooBig;
+                }
+                $amountSats = $fitted;
+            }
+        }
     }
 
     /**
@@ -186,7 +256,8 @@ class LightningAddress {
         string $bolt11,
         ?string $destination,
         string $transferType,
-        ?array $account = null
+        ?array $account = null,
+        ?int $budget = null
     ): array {
         self::assertNoPendingWithdrawal($storeId);
         $account = self::resolveAccount($storeId, $account);
@@ -199,12 +270,23 @@ class LightningAddress {
         $proofs = $wallet->getStorage()->getProofsAsObjects(ProofState::UNSPENT);
         $balance = Wallet::sumProofs($proofs);
 
-        if ($balance < $totalNeeded) {
-            throw new Exception("Insufficient balance. Have: {$balance} {$mintUnit}, Need: {$totalNeeded} {$mintUnit}");
+        // $budget: how much of the balance this withdrawal may use (an automatic one
+        // leaves the donation share behind). Defaults to all of it.
+        $available = $budget === null ? $balance : min($balance, $budget);
+        if ($available < $totalNeeded) {
+            throw new MeltDoesNotFit($available, $totalNeeded, $mintUnit);
         }
 
         // Cover the NUT-02 input fee the selection itself incurs, not just the quote.
-        $selectedProofs = $wallet->selectProofsWithFees($proofs, $totalNeeded);
+        try {
+            $selectedProofs = $wallet->selectProofsWithFees($proofs, $totalNeeded);
+        } catch (\Cashu\InsufficientBalanceException $e) {
+            throw new MeltDoesNotFit($available, $totalNeeded + $wallet->calculateFee($proofs), $mintUnit);
+        }
+        $needWithInputFee = $totalNeeded + $wallet->calculateFee($selectedProofs);
+        if ($available < $needWithInputFee) {
+            throw new MeltDoesNotFit($available, $needWithInputFee, $mintUnit);
+        }
         $inputAmount = Wallet::sumProofs($selectedProofs);
         $inputSecrets = array_map(fn($p) => $p->secret, $selectedProofs);
 
@@ -445,23 +527,20 @@ class LightningAddress {
         $convertedSats = $meltAmountSats;
         $ratePerSat = $convertedSats > 0 ? $meltAmountInMintUnit / $convertedSats : 0.0;
 
-        // Account for Lightning fee reserve - mints charge fees on top of invoice amount
-        // Use 1% fee buffer (min 2 sats, max 100 sats) to ensure we have enough for fees
-        $feeBuffer = max(2, min(100, (int)ceil($meltAmountSats * 0.01)));
+        // The mint adds a Lightning fee reserve (commonly 1-2 %) and an input fee on top of
+        // the invoice. Start from a 1 % guess; if the mint's real numbers do not fit, shrink
+        // the payout once to fit them exactly. A fixed 100-sat cap on the guess made every
+        // automatic withdrawal above ~10k sats fail forever on a 1 % mint (R1, 2026-10-28).
+        $feeBuffer = max(2, (int)ceil($meltAmountSats * 0.01));
         $meltAmountSats = $meltAmountSats - $feeBuffer;
         if ($meltAmountSats < 1) {
             return null;
         }
 
         try {
-            self::meltToAddress(
-                $store['id'],
-                $store['auto_melt_address'],
-                $meltAmountSats,
-                'CashuPayServer auto-withdrawal',
-                Transfer::TYPE_AUTO_WITHDRAW,
-                $account
-            );
+            $meltAmountSats = self::sendFitted($meltAmountSats, fn(int $sats) => self::meltToAddress(
+                $store['id'], $store['auto_melt_address'], $sats,
+                'CashuPayServer auto-withdrawal', Transfer::TYPE_AUTO_WITHDRAW, $account, $meltAmountInMintUnit));
         } catch (Exception $meltError) {
             // Mint unreachable, insufficient funds, … Log and carry on with other stores.
             error_log("Auto-melt operation failed for store {$store['id']} at {$account['mint_url']}: " . $meltError->getMessage());

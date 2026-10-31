@@ -87,8 +87,8 @@ CashuPayServer sits between custodial payment gateways and full self-hosting:
 ### Standalone (Any PHP Hosting)
 
 1. **Download** the latest `cashupayserver.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases)
-2. **Extract** the zip file
-3. **Upload** to your web hosting via FTP or file manager
+2. **Create a folder** for it on your web hosting, for example `cashupayserver`, with your host's file manager
+3. **Unpack the zip into that folder** (or unpack it on your computer and upload the files into the folder). The zip has no folder of its own: its files go straight into the folder you choose.
 4. **Open** the URL in your browser (e.g., `https://yourdomain.com/cashupayserver/`)
 5. **Follow** the setup wizard to configure your mint and password
 
@@ -207,8 +207,7 @@ Upgrading never touches your ecash. Your database (`data/`, or `cashupay-data` f
 
 1. **Back up first**: in the dashboard, go to **Settings → Wallet backup** and click **Download database backup**. Keep the file on your own computer.
 2. **Download** the new `cashupayserver.zip` from [GitHub Releases](https://github.com/jooray/cashupayserver/releases).
-3. **Extract** it on your computer.
-4. **Upload** the extracted files over your existing installation with your host's file manager or FTP program, overwriting the old files. Your database is not in the zip, so a normal upload cannot overwrite it. (The zip's `data` folder holds only two small protection files; uploading them is safe.)
+3. **Unpack it directly into your existing installation folder** (the one that contains `admin.php` and the `data` folder) with your host's file manager, or unpack it on your computer and upload the files into that folder, overwriting the old files. The zip has no folder of its own, so do not unpack it into a new subfolder. If you do by mistake, setup in the new copy says so and tells you which folder to delete. Your database is not in the zip, so a normal upload cannot overwrite it. (The zip's `data` folder holds only two small protection files; uploading them is safe.)
    - **Important**: if your FTP program offers a "mirror" or "delete extra files" mode, don't use it here — that could delete your data folder along with everything in it. Do a plain upload/overwrite instead.
 5. **Open** your CashuPayServer dashboard in a browser. The database upgrades itself on this first visit — you should land on your normal dashboard, not the setup wizard.
 

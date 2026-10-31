@@ -15,6 +15,13 @@
  * Both modes work simultaneously.
  */
 
+// Startup problems get a plain page, not a white screen (A1). JSON endpoints behind the
+// router (api, receive, cron) keep their own error handling, so only operator pages here.
+$cashupayPath = (string)parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH);
+if (preg_match('#(^/$|/(admin|setup|index)(\.php)?$|/setup/|/admin/)#', $cashupayPath)) {
+    require_once __DIR__ . '/includes/preflight.php';
+}
+unset($cashupayPath);
 require_once __DIR__ . '/includes/entrypoint_guard.php';
 
 // =============================================================================

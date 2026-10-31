@@ -62,7 +62,11 @@ make_zip() {
         cd build
         rm -f "$zipname"
         find "$dir" -exec env TZ=UTC touch -h -t "$stamp" {} +
-        find "$dir" -print | LC_ALL=C sort | TZ=UTC zip -X -q "$zipname" -@
+        if [ "${FLAT_ZIP:-0}" = "1" ]; then
+            (cd "$dir" && find . -mindepth 1 -print | sed 's#^\./##' | LC_ALL=C sort | TZ=UTC zip -X -q "../$zipname" -@)
+        else
+            find "$dir" -print | LC_ALL=C sort | TZ=UTC zip -X -q "$zipname" -@
+        fi
     )
     local sum
     if command -v sha256sum >/dev/null 2>&1; then
@@ -116,7 +120,9 @@ cat > "$BUILD_DIR/data/.htaccess" <<'HTACCESS'
 HTACCESS
 printf '%s' "<?php http_response_code(403); exit('Forbidden');" > "$BUILD_DIR/data/index.php"
 
-# Create zip
-make_zip cashupayserver cashupayserver.zip
+# Create zip. Its contents are the application itself, with no top-level folder: an
+# upgrade extracted into the install folder overwrites the old files instead of creating
+# build/…/cashupayserver/cashupayserver/, a second, unclaimed installation (A6, 2026-10-28).
+FLAT_ZIP=1 make_zip cashupayserver cashupayserver.zip
 
 echo "Standalone build: build/cashupayserver.zip"

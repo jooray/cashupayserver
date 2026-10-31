@@ -78,11 +78,13 @@ function handleCreateInvoice(array $auth, array $params, array $body): void {
             'metadata' => $metadata,
             'checkout' => $checkout,
         ]);
-
-        jsonResponse(Invoice::formatForApi($invoice), 200);
     } catch (Exception $e) {
-        errorResponse('invoice-error', $e->getMessage());
+        // The shop may show this text to its customer: say it plainly, without mint or
+        // network internals, and record the failure for the operator's dashboard (A11, C14).
+        errorResponse('invoice-error', Invoice::recordCheckoutFailure($storeId, $e));
     }
+    Invoice::recordCheckoutSuccess($storeId);
+    jsonResponse(Invoice::formatForApi($invoice), 200);
 }
 
 /**

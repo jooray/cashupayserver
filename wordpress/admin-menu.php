@@ -15,6 +15,7 @@ add_action('admin_notices', 'cashupay_startup_error_notice');
 add_action('admin_notices', 'cashupay_data_exposure_notice');
 add_action('admin_notices', 'cashupay_foreign_data_dir_notice');
 add_action('admin_notices', 'cashupay_network_data_dir_notice');
+add_action('admin_notices', 'cashupay_needs_attention_notice');
 add_action('admin_init', 'cashupay_handle_exposure_recheck');
 
 function cashupay_admin_menu(): void {
@@ -370,4 +371,40 @@ function cashupay_network_data_dir_notice(): void {
     echo '</p><p>'
         . esc_html__('If this shop took payments with CashuPay before this update, do not set up a new wallet here: its money is in that shared folder. Ask whoever looks after this WordPress network for help before you go on.', 'cashupay')
         . '</p></div>';
+}
+
+/**
+ * What the CashuPay dashboard would flag (customers cannot pay, withdrawals failing, a
+ * security update, ...), in wp-admin where a WordPress operator spends their time. The
+ * CashuPay dashboard is a separate page they rarely open (A12, 2026-10-28). Cached for
+ * five minutes, so ordinary wp-admin pages stay fast.
+ */
+function cashupay_needs_attention_notice(): void {
+    if (!cashupay_current_user_can_manage()) {
+        return;
+    }
+    $problems = get_transient('cashupay_attention');
+    if ($problems === false) {
+        $problems = [];
+        try {
+            require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+            require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
+            if (Database::isInitialized() && Config::isSetupComplete()) {
+                require_once CASHUPAY_PLUGIN_DIR . '/includes/alerts.php';
+                $problems = array_column(Alerts::problems(), 'text');
+            }
+        } catch (Throwable $e) {
+            $problems = [];
+        }
+        set_transient('cashupay_attention', $problems, 5 * MINUTE_IN_SECONDS);
+    }
+    if (!$problems) {
+        return;
+    }
+    echo '<div class="notice notice-warning"><p><strong>' . esc_html__('CashuPay needs your attention.', 'cashupay') . '</strong></p><ul style="list-style:disc;margin-left:1.5em">';
+    foreach ($problems as $text) {
+        echo '<li>' . esc_html($text) . '</li>';
+    }
+    echo '</ul><p><a href="' . esc_url(admin_url('tools.php?page=cashupay')) . '">'
+        . esc_html__('Open CashuPay', 'cashupay') . '</a></p></div>';
 }

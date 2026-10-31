@@ -16,6 +16,8 @@
  * for backwards compatibility, but step 3 is no longer used.
  */
 
+// First, before any code that needs a newer PHP: explain startup problems plainly (A1).
+require_once __DIR__ . '/includes/preflight.php';
 require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
@@ -23,6 +25,34 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/urls.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/setup_ownership.php';
+
+/**
+ * The configured CashuPayServer installation this folder sits inside, if any: a parent
+ * folder (up to three levels) with the application's files and a wallet database or a
+ * record of where its moved data folder is.
+ */
+function cashupay_enclosing_install(string $dir): ?string {
+    $parent = dirname($dir);
+    for ($i = 0; $i < 3 && $parent !== dirname($parent); $i++, $parent = dirname($parent)) {
+        if (is_file($parent . '/includes/database.php') && is_file($parent . '/setup.php')
+            && (is_file($parent . '/data/cashupay.sqlite') || is_file($parent . '/data/.cashupay-location')
+                || is_file($parent . '/includes/data-location.txt'))) {
+            return $parent;
+        }
+    }
+    return null;
+}
+
+/** The last step of the first setup: the install is now in use. */
+function cashupay_complete_setup(): void {
+    Config::set('setup_complete', true);
+    Setup::clearOwnershipToken();
+    // Generate a cron key so background processing can be scheduled and the
+    // cron endpoint isn't left open. See FABLE-CASHUPAYSERVER-AUDIT (C-CRON-1).
+    if (!Config::get('cron_key')) {
+        Config::set('cron_key', bin2hex(random_bytes(16)));
+    }
+}
 
 // Initialize session early - needed for storing temp data during setup
 Auth::initSession();
@@ -49,6 +79,29 @@ if ($setupComplete && $mode !== 'add_store' && ($_POST['step'] ?? '') !== '7') {
 // nothing to add to, so the normal wizard runs (and its password step is not skipped).
 if (!$setupComplete && $mode === 'add_store') {
     $mode = '';
+}
+
+// A fresh copy unpacked inside an existing installation (an upgrade zip extracted into
+// the wrong folder) is a second, unclaimed install while the real one keeps running the
+// old version. Refuse to start setup there and say what happened (A6, 2026-10-28).
+if (!$setupComplete && !$isWordPressSetup && ($enclosing = cashupay_enclosing_install(__DIR__)) !== null) {
+    http_response_code(409);
+    header('Content-Type: text/html; charset=utf-8');
+    $here = basename(__DIR__);
+    $outer = basename($enclosing);
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        . '<title>This is a second copy</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
+        . 'background:#0f1117;color:#e2e8f0;padding:2rem 1rem;line-height:1.5}.card{max-width:640px;margin:0 auto;background:#1a1d27;'
+        . 'border:1px solid #2d3343;border-radius:12px;padding:1.5rem}h1{font-size:1.3rem;color:#f7931a}</style></head><body><div class="card">'
+        . '<h1>This is a second copy of CashuPayServer</h1>'
+        . '<p>These files were unpacked inside your existing installation in the folder <strong>'
+        . htmlspecialchars($outer) . '</strong>, so they made a new, empty copy in <strong>'
+        . htmlspecialchars($outer . '/' . $here) . '</strong>. Your shop still runs the old version, and your money is safe there.</p>'
+        . '<p><strong>To finish the upgrade:</strong> delete the folder <strong>' . htmlspecialchars($here)
+        . '</strong> inside <strong>' . htmlspecialchars($outer) . '</strong>, then unpack the zip again directly into <strong>'
+        . htmlspecialchars($outer) . '</strong> (the zip has no folder of its own, its files go straight in). '
+        . 'Keep the <strong>data</strong> folder as it is.</p></div></body></html>';
+    exit;
 }
 
 // Initialize database if needed
@@ -102,7 +155,7 @@ if (is_string($requestedStep) && ctype_digit($requestedStep)) {
     // For add_store mode, start at step 4 (store creation)
     $step = $mode === 'add_store' ? 4 : 1;
 }
-if (!in_array($step, [1, 2, 4, 5, 6, 7], true)) {
+if (!in_array($step, [1, 2, 4, 5, 6, 7, 8], true)) {
     $step = $mode === 'add_store' ? 4 : 1;
 }
 // Why the requested step was replaced, shown instead of running the replacement step's
@@ -475,15 +528,46 @@ if ($isPost) {
                         exit;
                     }
 
-                    Config::set('setup_complete', true);
-                    Setup::clearOwnershipToken();
-                    // Generate a cron key so background processing can be scheduled and the
-                    // cron endpoint isn't left open. See FABLE-CASHUPAYSERVER-AUDIT (C-CRON-1).
-                    if (!Config::get('cron_key')) {
-                        Config::set('cron_key', bin2hex(random_bytes(16)));
-                    }
-                    $step = 7;
+                    // Next: where the money should go. Setup completes after that step,
+                    // whether the operator sets a payout address or chooses "Not now".
+                    $step = 8;
                 }
+                break;
+
+            case 8: // Where should the money go? (R2/A10, 2026-10-28)
+                $storeId = $_SESSION['setup_store_id'] ?? null;
+                $payoutStore = $storeId ? Config::getStore($storeId) : null;
+                if (!$payoutStore || empty($payoutStore['seed_phrase'])) {
+                    $step = 6;
+                    throw new Exception('Finish the recovery phrase step first.');
+                }
+                $action = setupField('action');
+                if ($action === 'save') {
+                    require_once __DIR__ . '/includes/lightning_address.php';
+                    $address = trim(setupField('payout_address'));
+                    $threshold = (int)setupField('payout_threshold', '10000');
+                    $_SESSION['payout_form'] = ['address' => $address, 'threshold' => $threshold];
+                    if ($threshold < 1) {
+                        throw new Exception('Enter a withdrawal amount of at least 1.');
+                    }
+                    $unit = strtolower((string)($payoutStore['mint_unit'] ?? 'sat'));
+                    $check = LightningAddress::checkPayoutAddress($address,
+                        in_array($unit, ['sat', 'sats'], true) ? $threshold : null);
+                    if (!$check['ok']) {
+                        throw new Exception($check['message']);
+                    }
+                    Database::update('stores', [
+                        'auto_melt_enabled' => 1,
+                        'auto_melt_address' => $address,
+                        'auto_melt_threshold' => $threshold,
+                    ], 'id = ?', [$storeId]);
+                    $_SESSION['payout_result'] = $check['message'];
+                } elseif ($action !== 'skip') {
+                    throw new Exception('Choose a payout address, or "Not now".');
+                }
+                unset($_SESSION['payout_form']);
+                cashupay_complete_setup();
+                $step = 7;
                 break;
         }
     } catch (Exception $e) {
@@ -1850,6 +1934,47 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         </form>
                     </details>
                 <?php endif; ?>
+
+            <?php elseif ($step === 8): ?>
+                <!-- Step 8: Where should the money go? -->
+                <?php $payoutForm = $_SESSION['payout_form'] ?? ['address' => '', 'threshold' => 10000]; ?>
+                <h2 style="margin-bottom: 1rem;">Where should your money go?</h2>
+                <p style="color: #a0aec0; margin-bottom: 1rem;">
+                    Payments first arrive at the payment service you chose. They are safest in your own
+                    Lightning wallet, so CashuPayServer can send them there by itself whenever enough has
+                    come in. Enter the Lightning address of your wallet (it looks like
+                    <strong>name@wallet.com</strong>).
+                </p>
+                <form method="POST">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
+                    <input type="hidden" name="step" value="8">
+                    <input type="hidden" name="action" value="save">
+                    <div class="form-group">
+                        <label for="payout_address">Your Lightning address</label>
+                        <input type="text" id="payout_address" name="payout_address" placeholder="name@wallet.com"
+                               autocomplete="off" autocapitalize="off" spellcheck="false"
+                               value="<?php echo htmlspecialchars((string)$payoutForm['address']); ?>" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="payout_threshold">Send it when the balance reaches (sats)</label>
+                        <input type="number" id="payout_threshold" name="payout_threshold" min="1" step="1"
+                               value="<?php echo (int)$payoutForm['threshold']; ?>">
+                        <p style="color: #718096; font-size: 0.85rem; margin-top: 0.4rem;">
+                            Smaller amounts keep less money at the payment service; each payout costs a small fee.
+                            You can change this later under Store settings.
+                        </p>
+                    </div>
+                    <button type="submit" class="btn">Check address and turn on automatic payouts</button>
+                </form>
+                <form method="POST" style="margin-top: 0.75rem;">
+                    <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
+                    <input type="hidden" name="step" value="8">
+                    <input type="hidden" name="action" value="skip">
+                    <button type="submit" class="btn btn-secondary">Not now, I just want to try it out</button>
+                    <p style="color: #718096; font-size: 0.85rem; margin-top: 0.4rem;">
+                        Until you add one, payments stay at the payment service. The dashboard reminds you.
+                    </p>
+                </form>
 
             <?php elseif ($step === 7): ?>
                 <!-- Step 7: Complete -->

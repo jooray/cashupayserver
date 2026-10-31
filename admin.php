@@ -5,6 +5,8 @@
  * Modern PWA admin dashboard with PIN access.
  */
 
+// First, before any code that needs a newer PHP: explain startup problems plainly (A1).
+require_once __DIR__ . '/includes/preflight.php';
 require_once __DIR__ . '/includes/entrypoint_guard.php';
 require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
@@ -14,6 +16,8 @@ require_once __DIR__ . '/includes/lightning_address.php';
 require_once __DIR__ . '/includes/transfer.php';
 require_once __DIR__ . '/includes/locks.php';
 require_once __DIR__ . '/includes/store_safety.php';
+require_once __DIR__ . '/includes/recovery_kit.php';
+require_once __DIR__ . '/includes/alerts.php';
 require_once __DIR__ . '/includes/mint_helpers.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
@@ -218,16 +222,75 @@ function cashupay_diagnostics(?string $storeId): array {
                   . 'upload the new plugin zip in WordPress (Plugins → Add New → Upload Plugin) '
                   . 'and choose "Replace current with uploaded". Your payments and settings are kept.'
                 : 'Upgrading takes a few minutes: download a database backup under Settings, then '
-                  . 'upload the new files over the old ones with your file manager or FTP program, '
-                  . 'leaving the data folder exactly as it is. Then open this dashboard again.',
+                  . 'unpack the new zip directly into the folder "' . basename(__DIR__) . '" with your '
+                  . 'file manager or FTP program, replacing the old files (the zip has no folder of its '
+                  . 'own). Leave the data folder exactly as it is. Then open this dashboard again.',
             'url' => ($update['url'] && cashupay_is_trusted_release_link($update['url']))
                 ? $update['url'] : 'https://github.com/jooray/cashupayserver/releases',
         ];
     }
 
+    // Money that stays at the payment service because no payout address is set (the
+    // operator chose "Not now" in setup, or switched payouts off). Not an alarm: a
+    // reminder with the amount, until a Lightning address is set (R2/A10, 2026-10-28).
+    $payoutReminders = [];
+    foreach (Database::fetchAll(
+        "SELECT id, name, mint_unit FROM stores WHERE seed_phrase IS NOT NULL AND mint_url IS NOT NULL
+         AND (auto_melt_enabled = 0 OR auto_melt_enabled IS NULL OR auto_melt_address IS NULL OR auto_melt_address = '')"
+        . ($storeId ? ' AND id = ?' : ''),
+        $storeId ? [$storeId] : []
+    ) as $row) {
+        try {
+            $held = Invoice::getBalance($row['id']);
+        } catch (Throwable $e) {
+            continue;
+        }
+        if ($held > 0) {
+            $payoutReminders[] = ['store' => $row['name'], 'amount' => $held, 'unit' => $row['mint_unit'] ?? 'sat'];
+        }
+    }
+
+    // Customers who could not start a payment (A11): only the shop used to know.
+    $checkoutFailures = [];
+    foreach (Database::fetchAll(
+        'SELECT id, name, mint_url FROM stores WHERE mint_url IS NOT NULL' . ($storeId ? ' AND id = ?' : ''),
+        $storeId ? [$storeId] : []
+    ) as $row) {
+        $f = Config::get('checkout_failures_' . $row['id']);
+        if (!is_array($f) || time() - (int)($f['last'] ?? 0) > 86400) {
+            continue;
+        }
+        $checkoutFailures[] = [
+            'store' => $row['name'],
+            'mint' => $row['mint_url'],
+            'since' => (int)$f['first'],
+            'last' => (int)$f['last'],
+            'count' => (int)$f['count'],
+            'reason' => (string)$f['reason'],
+            'detail' => (string)($f['detail'] ?? ''),
+            'recent' => time() - (int)$f['last'] < 7200,
+        ];
+    }
+
+    // A recovery sheet for the current list of mints (R8). Not an alarm.
+    $recoveryKitReminders = [];
+    foreach (Database::fetchAll(
+        "SELECT id, name FROM stores WHERE seed_phrase IS NOT NULL AND seed_phrase != ''"
+        . ($storeId ? ' AND id = ?' : ''),
+        $storeId ? [$storeId] : []
+    ) as $row) {
+        $why = RecoveryKit::reminder($row['id']);
+        if ($why !== null) {
+            $recoveryKitReminders[] = ['store' => $row['name'], 'reason' => $why];
+        }
+    }
+
     return [
         // Shown as a banner that stays until it is fixed: it means the money is exposed.
         'databaseExposure' => $exposureWarning,
+        'payoutReminders' => $payoutReminders,
+        'recoveryKitReminders' => $recoveryKitReminders,
+        'checkoutFailures' => $checkoutFailures,
         'updatePrompt' => $updatePrompt,
         'background' => $background + ['stale' => $stale, 'needsBaseUrl' => $needsBaseUrl],
         'suggestedBaseUrl' => $needsBaseUrl ? rtrim(Config::getBaseUrl(), '/') : null,
@@ -245,6 +308,7 @@ function cashupay_diagnostics(?string $storeId): array {
         // not raise an alarm on its own — it is listed so the operator can act on it.
         'needsAttention' => $stale
             || $exposureWarning !== null
+            || !empty(array_filter($checkoutFailures, fn($f) => $f['recent']))
             || ($updatePrompt !== null && $updatePrompt['severity'] === 'security')
             || !empty(array_filter($background['failing'] ?? [], fn($t) => !empty($t['paymentPath'])))
             || !empty(array_filter($unreachableAccounts, fn($a) => $a['primary']))
@@ -642,6 +706,16 @@ if (isset($_GET['api'])) {
             echo json_encode(array_map([Invoice::class, 'formatForApi'], $invoices));
             break;
 
+        case 'alert_settings':
+            // Loaded after login: the page shell is served to anyone, and the email
+            // address is personal.
+            echo json_encode([
+                'email' => (string)Config::get('alert_email', ''),
+                'npub' => (string)Config::get('alert_npub', ''),
+                'senderNpub' => Alerts::serverNpub(),
+            ]);
+            break;
+
         case 'data_folder':
             // Not printed into the page itself: the shell is served before login, and
             // the absolute path tells a stranger where the wallet lives on disk.
@@ -885,6 +959,73 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['error' => $e->getMessage()]);
             }
             break;
+
+        case 'save_alerts':
+            try {
+                $email = trim((string)($_POST['email'] ?? ''));
+                $npub = trim((string)($_POST['npub'] ?? ''));
+                if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    throw new InvalidArgumentException('That email address does not look right.');
+                }
+                if ($npub !== '') {
+                    Alerts::npubToHex($npub); // throws with a plain message on a typo
+                }
+                Config::set('alert_email', $email);
+                Config::set('alert_npub', $npub);
+                $message = $email === '' && $npub === '' ? 'Alerts are off.' : 'Saved.';
+                if (!empty($_POST['test']) && ($email !== '' || $npub !== '')) {
+                    if (!Security::checkRateLimit('test_alert', Security::getClientIp(), 3)) {
+                        throw new InvalidArgumentException('Saved. Wait a minute before sending another test.');
+                    }
+                    $sent = Alerts::deliver('CashuPayServer test alert',
+                        'This is a test alert from your CashuPayServer. If you can read this, alerts work.');
+                    $message = $sent['sent'] > 0
+                        ? 'Saved. Test alert sent by ' . implode(' and ', $sent['channels']) . '.'
+                            . ($sent['errors'] ? ' Not sent: ' . implode('; ', $sent['errors']) . '.' : '')
+                        : 'Saved, but the test alert could not be sent: ' . implode('; ', $sent['errors']) . '.';
+                }
+                echo json_encode(['success' => true, 'message' => $message]);
+            } catch (InvalidArgumentException $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'recovery_kit':
+            // The recovery words plus every mint the store has used (R8). A real form post
+            // (the answer is a page or a file), behind the same fresh password check as
+            // showing the seed phrase.
+            $kitStore = Config::getStore((string)($_POST['store_id'] ?? ''));
+            if (!Security::checkRateLimit('reveal_seed', Security::getClientIp(), 5)) {
+                http_response_code(429);
+                echo json_encode(['error' => 'Too many attempts. Please wait a minute.']);
+                break;
+            }
+            if (!Auth::verifyAdminPassword((string)($_POST['password'] ?? ''))) {
+                usleep(500000);
+                http_response_code(403);
+                header('Content-Type: text/html; charset=utf-8');
+                echo '<!DOCTYPE html><p style="font-family:sans-serif">Incorrect password. Close this tab and try again.</p>';
+                break;
+            }
+            if (!$kitStore || empty($kitStore['seed_phrase'])) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Store not found or has no wallet']);
+                break;
+            }
+            RecoveryKit::markTaken((string)$kitStore['id']);
+            error_log("CashuPayServer: recovery sheet taken for store {$kitStore['id']} from " . Security::getClientIp());
+            header_remove('Content-Type');
+            if (($_POST['format'] ?? '') === 'text') {
+                header('Content-Type: text/plain; charset=utf-8');
+                header('Content-Disposition: attachment; filename="cashupay-recovery-'
+                    . preg_replace('/[^A-Za-z0-9_-]+/', '-', (string)$kitStore['name']) . '.txt"');
+                echo RecoveryKit::text($kitStore);
+            } else {
+                header('Content-Type: text/html; charset=utf-8');
+                echo RecoveryKit::html($kitStore);
+            }
+            exit;
 
         case 'download_backup':
             // A consistent snapshot of a WAL-mode database. Copying the .sqlite file
@@ -1788,6 +1929,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($enabled === 1 && $address === '') {
                     throw new Exception('Enter a Lightning address before switching automatic withdrawals on.');
                 }
+                // Ask the address before saving it: a typo used to surface only when an
+                // automatic withdrawal failed, days later (R2/A10).
+                $checkMessage = null;
+                if ($enabled === 1) {
+                    $unit = strtolower(Config::getStoreMintUnit($storeId));
+                    $check = LightningAddress::checkPayoutAddress($address,
+                        in_array($unit, ['sat', 'sats'], true) ? $threshold : null);
+                    if (!$check['ok']) {
+                        throw new Exception($check['message']);
+                    }
+                    $checkMessage = $check['message'];
+                }
 
                 Database::update('stores', [
                     'auto_melt_enabled' => $enabled,
@@ -1795,7 +1948,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'auto_melt_threshold' => $threshold
                 ], 'id = ?', [$storeId]);
 
-                echo json_encode(['success' => true]);
+                echo json_encode(['success' => true, 'message' => $checkMessage]);
             } catch (Exception $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
@@ -3889,8 +4042,15 @@ $isWp = Urls::isWordPress();
                         </p>
                         <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
                             <button class="btn btn-secondary" type="button" id="reveal-seed-btn">Show seed phrase</button>
+                            <button class="btn btn-secondary" type="button" id="recovery-sheet-btn">Print recovery sheet</button>
+                            <button class="btn btn-secondary" type="button" id="recovery-file-btn">Download recovery sheet (text)</button>
                             <button class="btn btn-secondary" type="button" id="download-backup-btn">Download database backup</button>
                         </div>
+                        <p class="form-help" style="margin-top: 0.5rem;">
+                            The recovery sheet has the seed phrase <em>and</em> every payment service this store
+                            has used. If this website is ever lost, both are needed to get all the money back.
+                            Keep it like cash: printed or on a USB stick, never in email or a cloud folder.
+                        </p>
                         <p class="form-help" style="margin-top: 0.75rem;">
                             Data folder on the server (keep it when you upgrade, copy it for a full backup):
                             <code style="word-break: break-all;" id="data-folder-path">&hellip;</code>
@@ -4010,6 +4170,52 @@ $isWp = Urls::isWordPress();
                         </button>
                     </div>
                 </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <div class="card-title">Alerts</div>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-help" style="margin-bottom: 0.75rem;">
+                            Get a message when something needs you: customers cannot pay, automatic
+                            withdrawals keep failing, or a security update is out. At most one message a day
+                            per problem. Leave both empty to see problems only here on the dashboard.
+                        </p>
+                        <div class="form-group">
+                            <label class="form-label" for="alert-email">Email address</label>
+                            <input type="email" class="form-input" id="alert-email" placeholder="you@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label" for="alert-npub">Nostr public key (npub), for a private message</label>
+                            <input type="text" class="form-input" id="alert-npub" placeholder="npub1…" autocomplete="off" spellcheck="false">
+                            <p class="form-help" style="margin-top: 0.4rem;">
+                                Messages come from this server's own key, <code style="word-break: break-all;"
+                                id="alert-sender-npub">&hellip;</code>.
+                            </p>
+                        </div>
+                        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                            <button class="btn btn-secondary" type="button" onclick="saveAlerts(false)">Save</button>
+                            <button class="btn btn-secondary" type="button" onclick="saveAlerts(true)">Save and send a test alert</button>
+                        </div>
+                    </div>
+                </div>
+                <script>
+                async function saveAlerts(test) {
+                    try {
+                        const response = await postWithCsrf(window.location.pathname, new URLSearchParams({
+                            action: 'save_alerts',
+                            email: document.getElementById('alert-email').value.trim(),
+                            npub: document.getElementById('alert-npub').value.trim(),
+                            test: test ? '1' : '',
+                        }));
+                        const result = await response.json().catch(() => ({}));
+                        showToast(response.ok ? (result.message || 'Saved') : (result.error || 'Could not save'),
+                            response.ok ? 'success' : 'error');
+                    } catch (e) {
+                        showToast('Could not save', 'error');
+                    }
+                }
+                </script>
 
                 <?php $cpsUpdate = UpdateCheck::status(); ?>
                 <div style="text-align: center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.8rem;">
@@ -4783,6 +4989,7 @@ $isWp = Urls::isWordPress();
                 storeSelector.style.display = 'none';
                 if (document.getElementById('proxy-card')) loadProxySettings();
                 loadDataFolder();
+                loadAlertSettings();
             } else {
                 storeSelector.style.display = 'flex';
             }
@@ -5317,6 +5524,9 @@ $isWp = Urls::isWordPress();
                 || diag.background?.needsBaseUrl
                 || (diag.background?.failing || []).length > 0
                 || diag.updatePrompt
+                || (diag.payoutReminders || []).length > 0
+                || (diag.recoveryKitReminders || []).length > 0
+                || (diag.checkoutFailures || []).length > 0
                 || (diag.pendingTransfers || []).length > 0);
             if (!hasItems) {
                 card.style.display = 'none';
@@ -5326,6 +5536,39 @@ $isWp = Urls::isWordPress();
             const items = [];
             const actions = [];
             const bg = diag.background || {};
+
+            for (const f of (diag.checkoutFailures || [])) {
+                const when = (t) => new Date(t * 1000).toLocaleString();
+                const why = {
+                    mint: `your payment service (${f.mint}) did not answer`,
+                    prices: 'the Bitcoin price could not be confirmed by two price sources',
+                    setting_up: 'payments were still being set up with your payment service',
+                }[f.reason] || `of an error: ${f.detail}`;
+                items.push(`Customers of "${f.store}" could not pay with Bitcoin ${f.count === 1 ? 'once' : f.count + ' times'}`
+                    + ` between ${when(f.since)} and ${when(f.last)}, because ${why}. `
+                    + (f.reason === 'mint'
+                        ? 'It resumes by itself when the service answers again; if this lasts more than a day, add a backup mint under Store settings.'
+                        : 'It resumes by itself; this note goes away with the next successful payment.'));
+            }
+
+            for (const r of (diag.payoutReminders || [])) {
+                items.push(`${r.amount} ${String(r.unit).toUpperCase()} of "${r.store}" is waiting at the payment `
+                    + 'service. It is safest in your own Lightning wallet: add your Lightning address and '
+                    + 'CashuPayServer sends it there by itself.');
+            }
+            if ((diag.payoutReminders || []).length > 0) {
+                actions.push({ label: 'Set up automatic payouts', run: () => switchView('stores') });
+            }
+            for (const r of (diag.recoveryKitReminders || [])) {
+                items.push(r.reason === 'mints_changed'
+                    ? `"${r.store}" now uses a payment service your recovery sheet does not list. Print a new one `
+                      + 'and replace the old sheet.'
+                    : `Print a recovery sheet for "${r.store}": your recovery words plus the payment services it `
+                      + 'uses. If this website is ever lost, it is the only way to get all the money back.');
+            }
+            if ((diag.recoveryKitReminders || []).length > 0) {
+                actions.push({ label: 'Go to the recovery sheet', run: () => switchView('settings') });
+            }
 
             if (diag.updatePrompt) {
                 const u = diag.updatePrompt;
@@ -5501,6 +5744,19 @@ $isWp = Urls::isWordPress();
                 document.getElementById('data-folder-path').textContent = data.path || '';
             } catch (e) {
                 // The path simply stays unknown.
+            }
+        }
+
+        async function loadAlertSettings() {
+            try {
+                const response = await fetch(`${adminUrl}?api=alert_settings`);
+                if (!response.ok) return;
+                const data = await response.json();
+                document.getElementById('alert-email').value = data.email || '';
+                document.getElementById('alert-npub').value = data.npub || '';
+                document.getElementById('alert-sender-npub').textContent = data.senderNpub || '';
+            } catch (e) {
+                // The fields stay empty; saving still works.
             }
         }
 
@@ -6476,7 +6732,7 @@ $isWp = Urls::isWordPress();
                 const result = await response.json();
 
                 if (response.ok) {
-                    showToast('Settings saved!', 'success');
+                    showToast(result.message ? 'Saved. ' + result.message : 'Settings saved!', 'success');
                 } else {
                     showToast(result.error || 'Failed to save', 'error');
                 }
@@ -6664,6 +6920,36 @@ $isWp = Urls::isWordPress();
                     box.style.display = 'block';
                 });
             }
+
+            const kit = (format) => {
+                if (!currentStoreId) {
+                    showToast('Select a store first', 'error');
+                    return;
+                }
+                const password = prompt(isWordPressMode
+                    ? 'Enter your WordPress password to make the recovery sheet:'
+                    : 'Re-enter your admin password to make the recovery sheet:');
+                if (!password) return;
+                const form = document.createElement('form');
+                form.method = 'POST';
+                form.action = adminUrl;
+                form.style.display = 'none';
+                if (format === 'html') form.target = '_blank';
+                [['action', 'recovery_kit'], ['format', format], ['store_id', currentStoreId],
+                 ['password', password], ['csrf_token', getCsrfToken()]].forEach(([name, value]) => {
+                    const field = document.createElement('input');
+                    field.type = 'hidden';
+                    field.name = name;
+                    field.value = value;
+                    form.appendChild(field);
+                });
+                document.body.appendChild(form);
+                form.submit();
+                form.remove();
+                setTimeout(() => loadDashboard && loadDashboard(), 1500);
+            };
+            document.getElementById('recovery-sheet-btn')?.addEventListener('click', () => kit('html'));
+            document.getElementById('recovery-file-btn')?.addEventListener('click', () => kit('text'));
 
             if (hideBtn) {
                 hideBtn.addEventListener('click', () => {

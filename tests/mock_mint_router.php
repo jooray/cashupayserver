@@ -343,7 +343,11 @@ if ($uri === '/v1/melt/quote/bolt11' && $method === 'POST') {
         'request' => (string)($body['request'] ?? ''),
         'unit' => MOCK_UNIT,
         'amount' => $amount,
-        'fee_reserve' => 1,
+        // Real mints reserve a share of the amount (Nutshell 1 %, many CDK mints 2 %).
+        // MOCK_FEE_RESERVE_PPK opts into that; the default stays a flat 1.
+        'fee_reserve' => getenv('MOCK_FEE_RESERVE_PPK') !== false
+            ? max(1, (int)ceil($amount * (int)getenv('MOCK_FEE_RESERVE_PPK') / 1000))
+            : 1,
         'state' => 'UNPAID',
         'expiry' => time() + 900,
         'payment_preimage' => null,

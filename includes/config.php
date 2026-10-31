@@ -10,7 +10,7 @@ require_once __DIR__ . '/database.php';
 // Version
 require_once __DIR__ . '/http.php';
 
-define('CASHUPAY_VERSION', '0.5.8-alpha');
+define('CASHUPAY_VERSION', '0.5.9-alpha');
 
 /**
  * The BTCPay Server version reported to Greenfield clients.

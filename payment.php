@@ -12,6 +12,14 @@ require_once __DIR__ . '/includes/invoice.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 
+// There are no refunds, so a customer who already paid must never be told to pay again:
+// a late payment, or one on an order the shop cancelled, is still collected (C1, C2).
+const CLOSED_MESSAGE_EXPIRED = 'This invoice has expired. If you already paid, do not pay again: '
+    . 'your payment will still be found and this page will update. Otherwise, go back to the shop '
+    . 'to get a new invoice.';
+const CLOSED_MESSAGE_INVALID = 'This order was cancelled. If you already paid, do not pay again: '
+    . 'contact the shop and give them the reference below.';
+
 // Keep minting alive if the customer navigates away mid-request. See FABLE-CASHUPAYSERVER-AUDIT (C-ABORT-1).
 ignore_user_abort(true);
 @set_time_limit(60);
@@ -39,13 +47,6 @@ if (!is_string($invoiceId) || $invoiceId === '' || strlen($invoiceId) > 128) {
     exit;
 }
 
-// H3: Poll only this specific invoice (fast) instead of all pending quotes
-Invoice::pollSingleQuote($invoiceId);
-
-// Trigger background processing for other tasks (non-blocking)
-Background::trigger();
-
-// Get invoice
 $invoice = Invoice::getById($invoiceId);
 if ($invoice === null) {
     http_response_code(404);
@@ -53,12 +54,38 @@ if ($invoice === null) {
     exit;
 }
 
+// Only the page's status checks ask the mint. The first render comes from the database,
+// so a slow or unreachable mint no longer leaves the customer on a blank page for up to
+// half a minute; the page's first check follows immediately (C5, 2026-10-28).
+if (isset($_GET['json'])) {
+    if (in_array($invoice['status'], ['New', 'Processing'], true)) {
+        // H3: Poll only this specific invoice (fast) instead of all pending quotes
+        Invoice::pollSingleQuote($invoiceId);
+    } else {
+        // A payment made at the last second, or on an order the shop cancelled, still
+        // arrives; check for it so the customer is not told to pay again (C1, C2).
+        Invoice::recheckClosedInvoice($invoiceId);
+    }
+    $before = $invoice['status'];
+    $invoice = Invoice::getById($invoiceId) ?? $invoice;
+    $justSettled = $before !== 'Settled' && $invoice['status'] === 'Settled';
+}
+
+// Trigger background processing for other tasks (non-blocking). A payment that just
+// settled queued the shop's webhook: deliver it now, not on the next visit (R3).
+Background::trigger(!empty($justSettled));
+
 // Get store name for display
 $store = Database::fetchOne(
     "SELECT name FROM stores WHERE id = ?",
     [$invoice['store_id']]
 );
 $storeName = $store['name'] ?? 'Payment';
+
+// Something the customer can quote to the shop if anything goes wrong: the shop's own
+// order number when the integration sent one, and always this payment's id (C3).
+$metadata = $invoice['metadata'] ? (json_decode($invoice['metadata'], true) ?: []) : [];
+$orderId = isset($metadata['orderId']) && is_scalar($metadata['orderId']) ? (string)$metadata['orderId'] : null;
 
 // Handle JSON requests (polling)
 if (isset($_GET['json'])) {
@@ -368,6 +395,14 @@ $baseUrl = Config::getBaseUrl();
             color: white;
         }
 
+        .reference {
+            margin-top: 1.5rem;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            word-break: break-all;
+            user-select: all;
+        }
+
         .hidden {
             display: none;
         }
@@ -449,6 +484,17 @@ $baseUrl = Config::getBaseUrl();
                 <p style="color: var(--text-secondary); margin-top: 1rem;">
                     Payment detected. Please wait...
                 </p>
+                <div id="processing-slow" class="hidden">
+                    <p style="color: var(--text-secondary); margin-top: 1rem;">
+                        Your payment was received and is still being confirmed. Do not pay again.
+                        You can close this page; the shop will be told when it is done.
+                    </p>
+                    <?php if ($redirectUrl): ?>
+                        <a href="<?php echo htmlspecialchars($redirectUrl); ?>" class="btn" style="margin-top: 1.5rem;">
+                            Return to Shop
+                        </a>
+                    <?php endif; ?>
+                </div>
             </div>
 
             <div id="payment-success" class="success-animation <?php echo $invoice['status'] === 'Settled' ? 'show' : ''; ?>">
@@ -480,15 +526,19 @@ $baseUrl = Config::getBaseUrl();
                     <?php echo $isInvalid ? 'Payment Cancelled' : 'Invoice Expired'; ?>
                 </div>
                 <p style="color: var(--text-secondary); margin-top: 1rem;" id="closed-message">
-                    <?php echo $isInvalid
-                        ? 'This payment was cancelled and can no longer be paid. Please start a new order.'
-                        : 'This invoice has expired. Please request a new one.'; ?>
+                    <?php echo $isInvalid ? CLOSED_MESSAGE_INVALID : CLOSED_MESSAGE_EXPIRED; ?>
                 </p>
                 <?php if ($redirectUrl): ?>
                     <a href="<?php echo htmlspecialchars($redirectUrl); ?>" class="btn" style="margin-top: 1.5rem;">
                         Return to Shop
                     </a>
                 <?php endif; ?>
+            </div>
+            <div class="reference" id="reference">
+                <?php if ($orderId !== null): ?>
+                    Order <?php echo htmlspecialchars($orderId); ?> &middot;
+                <?php endif; ?>
+                Reference <span id="reference-id"><?php echo htmlspecialchars($invoiceId); ?></span>
             </div>
         </div>
     </div>
@@ -532,11 +582,32 @@ $baseUrl = Config::getBaseUrl();
 
         // Copy invoice to clipboard
         function copyInvoice() {
-            navigator.clipboard.writeText(invoice).then(() => {
-                const toast = document.getElementById('copy-toast');
+            const toast = document.getElementById('copy-toast');
+            const show = (text) => {
+                toast.textContent = text;
                 toast.classList.add('show');
                 setTimeout(() => toast.classList.remove('show'), 2000);
-            });
+            };
+            // navigator.clipboard is missing on plain-HTTP pages and in some in-app
+            // browsers; fall back to a hidden textarea, and say so if both fail (C8).
+            const fallback = () => {
+                const area = document.createElement('textarea');
+                area.value = invoice;
+                area.setAttribute('readonly', '');
+                area.style.position = 'fixed';
+                area.style.opacity = '0';
+                document.body.appendChild(area);
+                area.select();
+                let ok = false;
+                try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+                document.body.removeChild(area);
+                show(ok ? 'Copied to clipboard!' : 'Could not copy. Use "Open in Wallet" instead.');
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(invoice).then(() => show('Copied to clipboard!'), fallback);
+            } else {
+                fallback();
+            }
         }
 
         // Update timer
@@ -545,8 +616,11 @@ $baseUrl = Config::getBaseUrl();
             const remaining = expirationTime - now;
 
             if (remaining <= 0) {
-                document.getElementById('timer').textContent = 'Invoice expired';
+                // Until the server confirms the expiry with the mint, a payment made at the
+                // last second may still be on its way; do not invite a new one (C6).
+                document.getElementById('timer').textContent = 'Invoice expired. Checking for a last-second payment…';
                 document.getElementById('timer').className = 'timer expired';
+                document.getElementById('qr-code').style.opacity = '0.25';
                 return;
             }
 
@@ -571,9 +645,18 @@ $baseUrl = Config::getBaseUrl();
             timerEl.className = remaining < 300 ? 'timer urgent' : 'timer';
         }
 
-        // Poll for status
+        const closedMessages = <?php echo json_encode(['Expired' => CLOSED_MESSAGE_EXPIRED, 'Invalid' => CLOSED_MESSAGE_INVALID]); ?>;
+        const pageOpened = Date.now();
+        let processingSince = currentStatus === 'Processing' ? Date.now() : null;
+
+        // Poll for status. An expired or cancelled invoice is still checked, slowly, for
+        // half an hour: a payment made at the last second still arrives (C1, C2).
         async function pollStatus() {
-            if (currentStatus === 'Settled' || currentStatus === 'Expired' || currentStatus === 'Invalid') {
+            if (currentStatus === 'Settled') {
+                return;
+            }
+            const closed = currentStatus === 'Expired' || currentStatus === 'Invalid';
+            if (closed && Date.now() - pageOpened > 30 * 60 * 1000) {
                 return;
             }
 
@@ -592,7 +675,13 @@ $baseUrl = Config::getBaseUrl();
                 console.error('Poll error:', e);
             }
 
-            setTimeout(pollStatus, 2000);
+            if (currentStatus === 'Processing' && processingSince !== null
+                && Date.now() - processingSince > 45000) {
+                document.getElementById('processing-slow').classList.remove('hidden');
+            }
+
+            const isClosed = currentStatus === 'Expired' || currentStatus === 'Invalid';
+            setTimeout(pollStatus, isClosed ? 15000 : 2000);
         }
 
         // Update UI based on status
@@ -607,6 +696,7 @@ $baseUrl = Config::getBaseUrl();
                     document.getElementById('payment-pending').classList.remove('hidden');
                     break;
                 case 'Processing':
+                    processingSince = processingSince ?? Date.now();
                     document.getElementById('payment-processing').classList.remove('hidden');
                     break;
                 case 'Settled':
@@ -621,10 +711,7 @@ $baseUrl = Config::getBaseUrl();
                 case 'Invalid':
                     document.getElementById('closed-badge').textContent =
                         status === 'Invalid' ? 'Payment Cancelled' : 'Invoice Expired';
-                    document.getElementById('closed-message').textContent =
-                        status === 'Invalid'
-                            ? 'This payment was cancelled and can no longer be paid. Please start a new order.'
-                            : 'This invoice has expired. Please request a new one.';
+                    document.getElementById('closed-message').textContent = closedMessages[status];
                     document.getElementById('payment-pending').classList.add('hidden');
                     document.getElementById('payment-expired').classList.remove('hidden');
                     break;
@@ -632,7 +719,7 @@ $baseUrl = Config::getBaseUrl();
         }
 
         // Start polling and timer
-        if (currentStatus === 'New' || currentStatus === 'Processing') {
+        if (currentStatus !== 'Settled') {
             pollStatus();
             if (currentStatus === 'New') {
                 updateTimer();
