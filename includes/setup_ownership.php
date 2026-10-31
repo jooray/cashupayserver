@@ -43,6 +43,7 @@
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/security.php';
+require_once __DIR__ . '/auth.php';
 
 class Setup {
     private const TOKEN_PREFIX = 'setup-token-';
@@ -147,7 +148,10 @@ class Setup {
         }
 
         $ip = Security::getClientIp();
-        if (!Security::checkRateLimit('setup_recovery', $ip, self::RECOVERY_ATTEMPTS)) {
+        // Per address, plus one budget shared by all addresses: behind a proxy that passes
+        // a client's own X-Forwarded-For through, the address is the client's choice (N2).
+        if (!Security::checkRateLimit('setup_recovery', $ip, self::RECOVERY_ATTEMPTS)
+            || !Security::checkRateLimit('setup_recovery_all', 'all', self::RECOVERY_ATTEMPTS * 5)) {
             error_log("CashuPayServer: setup recovery code attempts rate-limited for {$ip}");
             self::$lastRecoveryError = 'rate_limited';
             return false;
@@ -292,10 +296,12 @@ class Setup {
     private static function assignClaim(): void {
         // A session id the browser arrived with may have been planted (cookie tossing from
         // a sibling subdomain): the claim must not be granted to an id someone else knows
-        // (N-4). The session data, CSRF token included, carries over to the new id.
+        // (N-4). The CSRF token is replaced too: the anonymous one was readable by
+        // whoever planted the id (N1, 2026-10-28). setup.php re-reads it before rendering.
         if (session_status() === PHP_SESSION_ACTIVE && !headers_sent()) {
             session_regenerate_id(true);
         }
+        Auth::rotateCsrfToken();
         self::resetWizardState();
         $secret = bin2hex(random_bytes(32));
         $hash = hash('sha256', $secret);
@@ -310,14 +316,17 @@ class Setup {
      * A claim is only ever (re)assigned before setup completes: on the first claim, after an
      * idle claim was released, or on a recovery-code takeover. Whatever an earlier holder
      * chose must not carry over to the new one: the pinned origin (checkout links, pairing
-     * and cron URLs, the X-Cron-Key destination), the URL mode, and stores they started but
-     * never finished (their mint would be adopted silently). A store with a wallet seed is
-     * finished and is never touched here.
+     * and cron URLs, the X-Cron-Key destination), the URL mode, and every store they started
+     * (their mint would be adopted silently). Before setup completes no store is finished:
+     * a store can carry a seed only because an earlier claimant's seed step failed after
+     * saving it, and that seed may be one the claimant knows (S2, 2026-10-28).
      */
     private static function resetWizardState(): void {
         Config::delete('base_url');
         Config::delete('url_mode');
-        Database::delete('stores', "seed_phrase IS NULL OR seed_phrase = ''");
+        if (!Config::isSetupComplete()) {
+            Database::delete('stores', '1 = 1');
+        }
         unset($_SESSION['setup_created_stores'], $_SESSION['setup_store_id'],
             $_SESSION['mint_url_temp'], $_SESSION['mint_units']);
     }

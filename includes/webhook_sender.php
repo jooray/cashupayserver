@@ -9,6 +9,7 @@ require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/security.php';
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/urls.php';
+require_once __DIR__ . '/background.php';
 
 class WebhookSender {
     /**
@@ -239,6 +240,12 @@ class WebhookSender {
         // Without a configured base_url, siteBase() falls back to the request's Host
         // header, which the API caller chooses: "own origin" would be whatever they say.
         if (!Urls::isWordPress() && !Config::get('base_url')) {
+            return false;
+        }
+        // In WordPress, site_url() can itself come from the Host header (a wp-config.php
+        // that builds WP_SITEURL from HTTP_HOST). Trust it only while it matches the
+        // base_url pinned at activation, as Background::selfCronUrl does (N3, 2026-10-28).
+        if (Urls::isWordPress() && !Background::sameOrigin(Urls::siteBase(), (string)Config::get('base_url'))) {
             return false;
         }
         $target = parse_url($url);

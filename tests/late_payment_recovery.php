@@ -101,4 +101,21 @@ pay($mint, $late['quote_id']);
 Invoice::recoverExpiredPaidInvoices(0);
 check(Invoice::getById($late['id'])['status'] === 'Settled', 'the expired-but-paid invoice settles');
 
+echo "Recent abandoned checkouts do not starve the daily re-check of older invoices (S8)\n";
+$now = time();
+$old = Invoice::create('s1', ['amount' => 50, 'currency' => 'sat']);
+pay($mint, $old['quote_id']);
+Database::update('invoices', ['status' => 'Expired', 'expiration_time' => $now - 4 * 86400,
+    'last_polled_at' => $now - 2 * 86400], 'id = ?', [$old['id']]);
+for ($i = 0; $i < 12; $i++) {
+    $abandoned = Invoice::create('s1', ['amount' => 10 + $i, 'currency' => 'sat']);
+    Database::update('invoices', ['status' => 'Expired', 'expiration_time' => $now - 3600 * (1 + $i)],
+        'id = ?', [$abandoned['id']]);
+}
+$before = Invoice::getBalance('s1');
+Invoice::recoverExpiredPaidInvoices();
+check(Invoice::getById($old['id'])['status'] === 'Settled',
+    'a 4-day-old paid invoice settles in one pass despite 12 recent unpaid ones');
+check(Invoice::getBalance('s1') === $before + 50, 'and its payment reaches the balance');
+
 echo "late_payment_recovery: OK\n";

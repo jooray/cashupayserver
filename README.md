@@ -272,6 +272,12 @@ Your seed phrase is your backup. Write it down and store it safely. If you lose 
 
 **Warning**: Do not import the seed phrase into another wallet you use actively. Using the same seed in multiple wallets causes coin loss.
 
+### Known Limitation: CPU Cost of the Public Receive Endpoint
+
+`receive.php` accepts ecash tokens from anyone, so it is a public endpoint. It accepts request bodies up to about 272 KiB, the size of the largest token the wallet library reads. A crafted JSON body of that size can cost roughly 0.3–2 seconds of CPU to parse, compared with a few milliseconds for a normal payment. The endpoint allows 20 requests per minute per client address, which limits a single source. Several sources together (or one IPv6 client rotating addresses) could keep a small shared-hosting PHP pool busy and slow down checkout while the requests continue. Funds and data are not affected.
+
+If you run on a host where this matters, limit request bodies for `receive.php` at the web server (for example nginx `client_max_body_size 128k;` in a `location` for it) or add a per-address request limit there.
+
 ## Development
 
 ### Quick Start with PHP Built-in Server

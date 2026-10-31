@@ -83,7 +83,7 @@ class Background {
      * in wordpress/bootstrap.php: a site moved from http to https after activation
      * still has its old base_url, and a forged Host header changes the host anyway.
      */
-    private static function sameOrigin(string $a, string $b): bool {
+    public static function sameOrigin(string $a, string $b): bool {
         $origin = static function (string $url): ?string {
             $parts = parse_url($url);
             if (!$parts || empty($parts['host']) || empty($parts['scheme'])) {

@@ -42,6 +42,17 @@ if (($argv[1] ?? '') === 'wp-cron') {
     echo json_encode($m->invoke(null));
     exit(0);
 }
+if (($argv[1] ?? '') === 'wp-own') {
+    define('CASHUPAY_DATA_DIR', $argv[2]);
+    define('CASHUPAY_WORDPRESS', true);
+    $GLOBALS['siteUrl'] = $argv[3];
+    function site_url(string $path = ''): string { return rtrim($GLOBALS['siteUrl'], '/') . $path; }
+    require_once $root . '/includes/database.php';
+    require_once $root . '/includes/config.php';
+    require_once $root . '/includes/webhook_sender.php';
+    echo json_encode(WebhookSender::isOwnOrigin($argv[4]));
+    exit(0);
+}
 
 $dataDir = sys_get_temp_dir() . '/cashupay-netguard-' . bin2hex(random_bytes(6));
 mkdir($dataDir, 0700, true);
@@ -174,5 +185,20 @@ check(wpCron($dataDir, 'http://shop.example.com') === 'http://shop.example.com/c
 check(wpCron($dataDir, 'https://shop.example.com:8443') === null, 'nor one on another port');
 Config::delete('base_url');
 check(wpCron($dataDir, 'https://shop.example.com') === null, 'without a pinned base_url nothing is sent');
+
+echo "WordPress webhook own-origin exemption (N3)\n";
+function wpOwn(string $dataDir, string $siteUrl, string $target): bool {
+    $out = shell_exec(escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__FILE__) . ' wp-own '
+        . escapeshellarg($dataDir) . ' ' . escapeshellarg($siteUrl) . ' ' . escapeshellarg($target) . ' 2>&1');
+    return json_decode((string)$out, true) === true;
+}
+Config::set('base_url', 'https://shop.example.com/cashupay');
+check(wpOwn($dataDir, 'https://shop.example.com', 'https://shop.example.com/wp-json/x'),
+    'the real site is its own origin');
+check(!wpOwn($dataDir, 'http://10.0.0.5:6379', 'http://10.0.0.5:6379/anything'),
+    'a Host-derived site_url() pointing at an internal service is not');
+Config::delete('base_url');
+check(!wpOwn($dataDir, 'https://shop.example.com', 'https://shop.example.com/wp-json/x'),
+    'without a pinned base_url nothing is exempt');
 
 echo "All network-guard checks passed.\n";

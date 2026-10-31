@@ -297,6 +297,7 @@ class ExchangeRates {
                         'timestamp' => time(),
                         'providers' => [$earlierName, $provider->getName()],
                     ]);
+                    self::seedFxAnchorFromAgreement($currency, $earlierRate);
                     return $earlierRate;
                 }
             }
@@ -363,6 +364,47 @@ class ExchangeRates {
         return (float)$data['rate'];
     }
 
+    /** Two anchors this close in time give a usable FX ratio (BTC moves less in an hour). */
+    private const FX_RATIO_MAX_SKEW = 3600;
+
+    /**
+     * The <cur>/USD ratio implied by two-provider agreements on both, or null when the
+     * two agreements are too far apart in time to divide one by the other.
+     */
+    private static function agreedFxRatio(string $currency): ?float {
+        $cur = Config::get('rate_anchor_' . $currency);
+        $usd = Config::get('rate_anchor_usd');
+        if (!is_array($cur) || !is_array($usd) || (float)($cur['rate'] ?? 0) <= 0 || (float)($usd['rate'] ?? 0) <= 0) {
+            return null;
+        }
+        if (abs((int)($cur['timestamp'] ?? 0) - (int)($usd['timestamp'] ?? 0)) > self::FX_RATIO_MAX_SKEW) {
+            return null;
+        }
+        return (float)$cur['rate'] / (float)$usd['rate'];
+    }
+
+    /**
+     * When two providers agree on a currency, the FX anchor the single-source fallback is
+     * held to starts (or restarts) from that agreement, not from one provider's word.
+     * Before, it was created by whichever provider first answered alone and never reset
+     * (S3, 2026-10-28).
+     */
+    private static function seedFxAnchorFromAgreement(string $currency, float $rate): void {
+        if ($currency === 'usd') {
+            return;
+        }
+        $ratio = self::agreedFxRatio($currency);
+        if ($ratio === null) {
+            // The USD agreement is too old to divide by. Refresh it (cached for a few
+            // minutes, so this asks the providers at most once per refresh) and retry.
+            self::getBtcPrice('usd');
+            $ratio = self::agreedFxRatio($currency);
+        }
+        if ($ratio !== null) {
+            Config::set('fx_anchor_' . $currency, ['rate' => $ratio, 'timestamp' => time(), 'provider' => 'agreement']);
+        }
+    }
+
     /** A single source's own BTC/USD must be this close to the confirmed one. */
     private const FX_USD_BAND = 0.02;
     /** A single source's FX rate is accepted within this fraction of the FX anchor. */
@@ -370,12 +412,6 @@ class ExchangeRates {
     /** The FX anchor moves toward observed rates by at most this fraction per FX_DRIFT_PERIOD. */
     private const FX_DRIFT = 0.02;
     private const FX_DRIFT_PERIOD = 86400;
-    /**
-     * A first FX ratio for a currency two providers used to confirm must price it within
-     * this fraction of their last agreed rate. Wide, because that rate may be days old and
-     * bitcoin moves; it is there to catch a broken feed, not ordinary market moves.
-     */
-    private const FX_BOOTSTRAP_BAND = 0.25;
 
     /**
      * BTC price in a currency only one provider quotes.
@@ -393,9 +429,9 @@ class ExchangeRates {
      * getBtcPrice() also lands here for a currency several providers quote when only one
      * of them answered and no fresh anchor exists. It then passes the rate it already got
      * ($own) and the last rate two providers agreed on ($lastConfirmed, however old).
-     * Such a currency usually has no FX anchor yet, and the first FX ratio would start
-     * one unchecked, so it must first land within FX_BOOTSTRAP_BAND of that last agreed
-     * rate: a decimal slip or wrong field cannot become the anchor. Never called for USD,
+     * Its FX anchor is seeded whenever two providers agree on it; without one, the
+     * provider's ratio must match the ratio two agreements imply within FX_ANCHOR_BAND,
+     * or the currency waits for a second provider (S3). Never called for USD,
      * so the getBtcPrice('usd') below cannot come back here.
      */
     private static function singleSourcePrice(string $currency, PriceProvider $provider, ?string $primary, ?string $secondary,
@@ -428,11 +464,18 @@ class ExchangeRates {
         $key = 'fx_anchor_' . $currency;
         $anchor = Config::get($key);
         if (!is_array($anchor) || !isset($anchor['rate']) || (float)$anchor['rate'] <= 0) {
-            if ($lastConfirmed !== null && !self::withinBand($usd * $fx, $lastConfirmed, self::FX_BOOTSTRAP_BAND)) {
-                error_log("ExchangeRates: {$name} prices {$currency} at " . ($usd * $fx) . ", more than "
-                    . (int)(self::FX_BOOTSTRAP_BAND * 100) . "% away from the last rate two providers agreed on "
-                    . "({$lastConfirmed}); refusing to price {$currency} until a second provider answers again");
-                return self::getCached($currency, true);
+            if ($lastConfirmed !== null) {
+                // Several providers quote this currency, so one of them alone must not set
+                // its exchange rate. Compare the ratio itself with the one the agreements
+                // imply: comparing a BTC price with a days-old BTC price needed a 25 % band,
+                // and one provider could move prices by that much in one step (S3).
+                $agreed = self::agreedFxRatio($currency);
+                if ($agreed === null || !self::withinBand($fx, $agreed, self::FX_ANCHOR_BAND)) {
+                    error_log("ExchangeRates: {$name} {$currency}/USD rate {$fx} cannot be checked against a rate two "
+                        . "providers agreed on" . ($agreed !== null ? " ({$agreed})" : '')
+                        . "; refusing to price {$currency} until a second provider answers again");
+                    return self::getCached($currency, true);
+                }
             }
             Config::set($key, ['rate' => $fx, 'timestamp' => time(), 'provider' => $name]);
             error_log("ExchangeRates: no {$currency} FX anchor yet; starting it at {$fx} {$currency} per USD from {$name}");

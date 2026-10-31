@@ -214,4 +214,66 @@ class StoreSafety {
         $host = parse_url($mintUrl, PHP_URL_HOST);
         return is_string($host) && $host !== '' ? $host : $mintUrl;
     }
+
+    /**
+     * What a backup mint account still holds, in plain language.
+     *
+     * @return array{reasons: string[]}|null Null when the row is unknown or unreadable
+     */
+    public static function backupMintHoldings(int $backupMintId): ?array {
+        $row = Database::fetchOne('SELECT store_id, mint_url, unit FROM store_mints WHERE id = ?', [$backupMintId]);
+        if (!$row) {
+            return null;
+        }
+        $store = Config::getStore($row['store_id']);
+        if (!$store || empty($store['wallet_account_id'])) {
+            return null;
+        }
+
+        try {
+            $storage = new WalletStorage(
+                Database::getDbPath(),
+                $row['mint_url'],
+                $row['unit'],
+                $store['wallet_account_id']
+            );
+
+            $reasons = [];
+            $balance = $storage->getBalance();
+            if ($balance > 0) {
+                $reasons[] = "{$balance} {$row['unit']} of ecash";
+            }
+            $exported = Wallet::sumProofs($storage->getProofsAsObjects(ProofState::EXPORTED));
+            if ($exported > 0) {
+                $reasons[] = "{$exported} {$row['unit']} in exported tokens nobody has cashed in";
+            }
+            $journals = count($storage->getPendingOperations());
+            if ($journals > 0) {
+                $reasons[] = "{$journals} transfer(s) still in progress";
+            }
+
+            // An order whose Lightning invoice this mint issued can still be paid: the
+            // payment is collected through the invoice's own mint, into this account. With
+            // the account gone it would settle the order but never show up in the balance
+            // (S4, 2026-10-28). Same rule as StoreSafety::deletionBlockers; a row without a
+            // unit predates v11 and is counted to be safe.
+            $openOrders = (int)(Database::fetchOne(
+                "SELECT COUNT(*) AS cnt FROM invoices
+                 WHERE store_id = ? AND quote_id IS NOT NULL
+                 AND status IN ('New', 'Processing', 'Expired', 'Invalid')
+                 AND RTRIM(mint_url, '/') = ?
+                 AND (mint_unit IS NULL OR LOWER(mint_unit) = ?)",
+                [$row['store_id'], rtrim($row['mint_url'], '/'), strtolower($row['unit'])]
+            )['cnt'] ?? 0);
+            if ($openOrders > 0) {
+                $reasons[] = "{$openOrders} order(s) whose Lightning payment may still arrive at this mint"
+                    . " (this clears by itself about a week after they expire)";
+            }
+
+            return ['reasons' => $reasons];
+        } catch (Throwable $e) {
+            // Cannot verify: treat as "holds something" rather than silently allowing removal.
+            return ['reasons' => ['funds that could not be checked (' . $e->getMessage() . ')']];
+        }
+    }
 }

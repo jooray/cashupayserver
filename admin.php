@@ -54,50 +54,6 @@ function cashupay_display_unit(?string $unit): string {
 }
 
 /**
- * What a backup mint account still holds, in plain language.
- *
- * @return array{reasons: string[]}|null Null when the row is unknown or unreadable
- */
-function cashupay_backup_mint_holdings(int $backupMintId): ?array {
-    $row = Database::fetchOne('SELECT store_id, mint_url, unit FROM store_mints WHERE id = ?', [$backupMintId]);
-    if (!$row) {
-        return null;
-    }
-    $store = Config::getStore($row['store_id']);
-    if (!$store || empty($store['wallet_account_id'])) {
-        return null;
-    }
-
-    try {
-        $storage = new \Cashu\WalletStorage(
-            Database::getDbPath(),
-            $row['mint_url'],
-            $row['unit'],
-            $store['wallet_account_id']
-        );
-
-        $reasons = [];
-        $balance = $storage->getBalance();
-        if ($balance > 0) {
-            $reasons[] = "{$balance} {$row['unit']} of ecash";
-        }
-        $exported = \Cashu\Wallet::sumProofs($storage->getProofsAsObjects(\Cashu\ProofState::EXPORTED));
-        if ($exported > 0) {
-            $reasons[] = "{$exported} {$row['unit']} in exported tokens nobody has cashed in";
-        }
-        $journals = count($storage->getPendingOperations());
-        if ($journals > 0) {
-            $reasons[] = "{$journals} transfer(s) still in progress";
-        }
-
-        return ['reasons' => $reasons];
-    } catch (Throwable $e) {
-        // Cannot verify: treat as "holds something" rather than silently allowing removal.
-        return ['reasons' => ['funds that could not be checked (' . $e->getMessage() . ')']];
-    }
-}
-
-/**
  * Reasons a store is not safe to delete, in plain language.
  *
  * @return string[] Empty when nothing is outstanding
@@ -882,7 +838,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     (string)($_POST['new_password'] ?? '')
                 );
                 Security::clearLoginAttempts(Security::getClientIp());
-                echo json_encode(['success' => true]);
+                echo json_encode(['success' => true, 'csrfToken' => Auth::generateCsrfToken()]);
             } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
@@ -2570,23 +2526,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $id = (int)($_POST['id'] ?? 0);
 
-                // Recovery only visits accounts a store currently lists, so removing a
-                // backup mint that still holds anything strands it: the funds stay in the
-                // database but nothing looks for them any more.
-                $held = cashupay_backup_mint_holdings($id);
-                if ($held !== null && !empty($held['reasons'])) {
+                // Hold the store's funds lock across the check and the delete, so an
+                // automatic withdrawal cannot start on this account in between.
+                $backupRow = Database::fetchOne('SELECT store_id FROM store_mints WHERE id = ?', [$id]);
+                $fundsLock = $backupRow ? cashupay_acquire_lock('funds_' . $backupRow['store_id']) : null;
+                if ($backupRow && !$fundsLock) {
                     http_response_code(409);
-                    echo json_encode([
-                        'error' => 'backup_mint_not_empty',
-                        'reasons' => $held['reasons'],
-                        'message' => 'This backup mint still holds ' . implode(' and ', $held['reasons'])
-                            . '. Removing it now would hide that from this store. Withdraw or export it first.',
-                    ]);
+                    echo json_encode(['error' => 'A withdrawal or export for this store is running. Try again in a minute.']);
                     break;
                 }
+                try {
+                    // Recovery only visits accounts a store currently lists, so removing a
+                    // backup mint that still holds anything strands it: the funds stay in the
+                    // database but nothing looks for them any more.
+                    $held = StoreSafety::backupMintHoldings($id);
+                    if ($held !== null && !empty($held['reasons'])) {
+                        http_response_code(409);
+                        echo json_encode([
+                            'error' => 'backup_mint_not_empty',
+                            'reasons' => $held['reasons'],
+                            'message' => 'This backup mint still holds ' . implode(' and ', $held['reasons'])
+                                . '. Removing it now would hide that from this store. Withdraw or export the money'
+                                . ' first, and wait for any listed orders to clear.',
+                        ]);
+                        break;
+                    }
 
-                Config::removeStoreBackupMint($id);
-                echo json_encode(['success' => true]);
+                    Config::removeStoreBackupMint($id);
+                    echo json_encode(['success' => true]);
+                } finally {
+                    cashupay_release_lock($fundsLock);
+                }
             } catch (Throwable $e) {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
@@ -5578,6 +5548,11 @@ $isWp = Urls::isWordPress();
             if (!response.ok) {
                 showToast(result.error || 'Could not change the password', 'error');
                 return;
+            }
+            // The server replaces the CSRF token when the password changes.
+            if (result.csrfToken) {
+                const metaTag = document.querySelector('meta[name="csrf-token"]');
+                if (metaTag) metaTag.content = result.csrfToken;
             }
             ['current-password', 'new-password', 'confirm-password'].forEach(id => {
                 document.getElementById(id).value = '';

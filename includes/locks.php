@@ -28,6 +28,22 @@ function cashupay_acquire_lock(string $name) {
     return $fp;
 }
 
+/**
+ * Like cashupay_acquire_lock(), but waits up to $seconds for a holder to finish.
+ * For short critical sections where the caller should queue rather than refuse.
+ */
+function cashupay_acquire_lock_wait(string $name, float $seconds) {
+    $deadline = microtime(true) + $seconds;
+    do {
+        $fp = cashupay_acquire_lock($name);
+        if ($fp) {
+            return $fp;
+        }
+        usleep(100000);
+    } while (microtime(true) < $deadline);
+    return null;
+}
+
 function cashupay_release_lock($fp): void {
     if ($fp) {
         @flock($fp, LOCK_UN);

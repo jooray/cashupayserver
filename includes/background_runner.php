@@ -16,6 +16,7 @@
 
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/locks.php';
 // Used by the sync task. cron.php happens to load this first; WP-Cron does not, so
 // without an explicit require sync_proofs fataled on every WordPress run.
 require_once __DIR__ . '/background.php';
@@ -844,6 +845,37 @@ class BackgroundRunner {
      * This task used to instantiate each wallet and count it as synced without calling
      * syncProofStates(), so a balance could stay wrong until a withdrawal failed.
      */
+    /**
+     * The wallets of every account a store lists (primary and backups) that hold ecash
+     * here. Background maintenance used to visit only the primary, so a backup that took
+     * payments while the primary was down never had its proofs synced or moved off a
+     * retiring keyset (N4, 2026-10-28). Accounts with nothing stored are skipped: asking
+     * every backup mint on each run got them to rate-limit us.
+     *
+     * @return array<int, array{label: string, wallet: Wallet}>
+     */
+    private static function walletsHoldingEcash(array $store): array {
+        $wallets = [];
+        $accountId = (string)(Config::getStore($store['id'])['wallet_account_id'] ?? '');
+        foreach (Config::getStoreWalletAccounts($store['id']) as $account) {
+            if (!$account['primary']) {
+                if ($accountId === '') {
+                    continue;
+                }
+                $local = new \Cashu\WalletStorage(Database::getDbPath(), $account['mint_url'], $account['unit'],
+                    $accountId);
+                if ($local->getBalance() <= 0) {
+                    continue;
+                }
+            }
+            $wallets[] = [
+                'label' => $store['id'] . ' at ' . $account['mint_url'],
+                'wallet' => Invoice::getWalletForStore($store['id'], $account['mint_url'], $account['unit']),
+            ];
+        }
+        return $wallets;
+    }
+
     private static function syncProofs(): string {
         if (!Background::shouldSync()) {
             return 'skipped (recently synced)';
@@ -854,17 +886,25 @@ class BackgroundRunner {
         $errors = 0;
         foreach (self::stores() as $store) {
             try {
-                $wallet = Invoice::getWalletInstance($store['id']);
-                if (!$wallet->hasStorage()) {
-                    continue;
-                }
-                $sync = $wallet->syncProofStates();
-                $checked += (int)($sync['checked'] ?? 0);
-                $updated += (int)($sync['updated'] ?? 0);
-                $errors += (int)($sync['errors'] ?? 0);
+                $accounts = self::walletsHoldingEcash($store);
             } catch (Throwable $e) {
                 $errors++;
                 error_log("Sync failed for store {$store['id']}: " . $e->getMessage());
+                continue;
+            }
+            foreach ($accounts as ['label' => $label, 'wallet' => $wallet]) {
+                try {
+                    if (!$wallet->hasStorage()) {
+                        continue;
+                    }
+                    $sync = $wallet->syncProofStates();
+                    $checked += (int)($sync['checked'] ?? 0);
+                    $updated += (int)($sync['updated'] ?? 0);
+                    $errors += (int)($sync['errors'] ?? 0);
+                } catch (Throwable $e) {
+                    $errors++;
+                    error_log("Sync failed for store {$label}: " . $e->getMessage());
+                }
             }
         }
         Background::markSynced();
@@ -882,20 +922,36 @@ class BackgroundRunner {
         $checked = 0;
         $errors = 0;
         foreach (self::stores() as $store) {
+            // Rotation swaps the store's proofs, so it takes the same funds lock as
+            // withdrawals, exports and donations. A busy store is skipped this pass;
+            // keysets are rotated weeks before they expire (S5, 2026-10-28).
+            $fundsLock = cashupay_acquire_lock('funds_' . $store['id']);
+            if (!$fundsLock) {
+                continue;
+            }
             try {
-                $wallet = Invoice::getWalletInstance($store['id']);
-                if ($wallet->hasStorage()) {
-                    $rotation = $wallet->rotateProofs();
-                    $rotated += $rotation['rotated'];
-                    $checked += $rotation['checked'];
-                    foreach ($rotation['errors'] as $rotationError) {
+                foreach (self::walletsHoldingEcash($store) as ['label' => $label, 'wallet' => $wallet]) {
+                    try {
+                        if (!$wallet->hasStorage()) {
+                            continue;
+                        }
+                        $rotation = $wallet->rotateProofs();
+                        $rotated += $rotation['rotated'];
+                        $checked += $rotation['checked'];
+                        foreach ($rotation['errors'] as $rotationError) {
+                            $errors++;
+                            error_log("Keyset rotation error for store {$label}: {$rotationError}");
+                        }
+                    } catch (Throwable $e) {
                         $errors++;
-                        error_log("Keyset rotation error for store {$store['id']}: {$rotationError}");
+                        error_log("Keyset rotation failed for store {$label}: " . $e->getMessage());
                     }
                 }
             } catch (Throwable $e) {
                 $errors++;
                 error_log("Keyset rotation failed for store {$store['id']}: " . $e->getMessage());
+            } finally {
+                cashupay_release_lock($fundsLock);
             }
         }
         Config::set('last_keyset_rotation_check', (string)time());

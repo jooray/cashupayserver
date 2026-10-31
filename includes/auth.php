@@ -123,6 +123,7 @@ class Auth {
             $_SESSION['last_seen'] = time();
             $_SESSION['password_version'] = self::passwordVersion();
             session_regenerate_id(true);
+            self::rotateCsrfToken();
             return true;
         }
 
@@ -242,6 +243,7 @@ class Auth {
         if (session_status() === PHP_SESSION_ACTIVE && ($_SESSION['admin_logged_in'] ?? false) === true) {
             $_SESSION['password_version'] = $version;
             session_regenerate_id(true);
+            self::rotateCsrfToken();
         }
         error_log('CashuPayServer: admin password changed from ' . Security::getClientIp());
     }
@@ -278,10 +280,11 @@ class Auth {
      */
     public static function generateCsrfToken(): string {
         self::initSession();
-        if (!isset($_SESSION[self::CSRF_TOKEN_NAME])) {
-            $_SESSION[self::CSRF_TOKEN_NAME] = bin2hex(random_bytes(32));
+        $key = self::csrfKey();
+        if (!isset($_SESSION[$key])) {
+            $_SESSION[$key] = bin2hex(random_bytes(32));
         }
-        return $_SESSION[self::CSRF_TOKEN_NAME];
+        return $_SESSION[$key];
     }
 
     /**
@@ -289,8 +292,32 @@ class Auth {
      */
     public static function validateCsrfToken(string $token): bool {
         self::initSession();
-        return isset($_SESSION[self::CSRF_TOKEN_NAME]) &&
-               hash_equals($_SESSION[self::CSRF_TOKEN_NAME], $token);
+        $key = self::csrfKey();
+        return isset($_SESSION[$key]) &&
+               hash_equals($_SESSION[$key], $token);
+    }
+
+    /**
+     * Replace the CSRF token after a privilege change (login, password change, setup
+     * claim). A token handed to the anonymous visitor of a session id must not stay
+     * valid once that session becomes an admin's: someone who planted the id (cookie
+     * tossing from a sibling subdomain) would know it (N1, 2026-10-28).
+     */
+    public static function rotateCsrfToken(): void {
+        self::initSession();
+        $_SESSION[self::csrfKey()] = bin2hex(random_bytes(32));
+    }
+
+    /**
+     * In WordPress mode the admin is whoever WordPress says is signed in, not this
+     * session, so the token is kept per WordPress user. Otherwise a token fetched
+     * anonymously in a planted session would be valid for the admin's requests.
+     */
+    private static function csrfKey(): string {
+        if (defined('CASHUPAY_WORDPRESS') && CASHUPAY_WORDPRESS && function_exists('get_current_user_id')) {
+            return self::CSRF_TOKEN_NAME . '_wp' . (int)get_current_user_id();
+        }
+        return self::CSRF_TOKEN_NAME;
     }
 
     /**

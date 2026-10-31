@@ -227,8 +227,8 @@ $cgEur = new MarketProvider('coingecko', ['usd' => fn() => $usd, 'eur' => fn() =
 useProviders($cgEur, new MarketProvider('binance', ['usd' => fn() => $usd, 'eur' => fn() => 55200.0]),
     new MarketProvider('kraken', ['usd' => fn() => $usd, 'eur' => fn() => 55100.0]));
 check(ExchangeRates::getBtcPrice('EUR', 'coingecko', 'binance') === 55000.0, 'EUR comes from two agreeing providers');
-check($cgEur->asked === ['eur'] && Config::get('fx_anchor_eur') === null && Config::get('rate_usd') === null,
-    'and never goes through USD or an FX anchor');
+check(abs((float)Config::get('fx_anchor_eur')['rate'] - 55000.0 / $usd) < 1e-9,
+    'and the agreement seeds the EUR FX anchor from agreed EUR and USD rates (S3)');
 
 // --- Currencies two providers quote, with one of them down (R2) -----------------
 // CAD comes from CoinGecko and Kraken. With Kraken down and the CAD anchor older than a
@@ -244,19 +244,33 @@ $fxCad = 1.37;             // CAD per USD
 $fairCad = $usd * $fxCad;  // CAD per BTC
 $staleDay = time() - 2 * 86400;
 
-echo "CAD with Kraken down and a two-day-old anchor still prices through CoinGecko's FX\n";
+echo "Two providers agreeing on CAD seed its FX anchor (S3)\n";
 resetCad();
-Config::set('rate_anchor_cad', ['rate' => $fairCad * 0.97, 'timestamp' => $staleDay, 'providers' => ['coingecko', 'kraken']]);
 $cad = $fairCad;
 $cgCad = new MarketProvider('coingecko', ['usd' => fn() => $usd, 'cad' => function () use (&$cad) { return $cad; }]);
+$krakenUp = new MarketProvider('kraken', ['usd' => fn() => $usd, 'cad' => fn() => $fairCad]);
+useProviders($cgCad, new MarketProvider('binance', ['usd' => fn() => $usd]), $krakenUp);
+check(abs((float)ExchangeRates::getBtcPrice('CAD', 'coingecko', 'binance') - $fairCad) < 0.01, 'CAD is priced from the agreement');
+check(abs((float)Config::get('fx_anchor_cad')['rate'] - $fxCad) < 1e-9, 'and the agreed CAD/USD ratio becomes the FX anchor');
+
+echo "CAD with Kraken down and a two-day-old anchor still prices through CoinGecko's FX\n";
+Config::set('rate_cad', null);
+Config::set('rate_anchor_cad', ['rate' => $fairCad * 0.97, 'timestamp' => $staleDay, 'providers' => ['coingecko', 'kraken']]);
 $krakenDown = new MarketProvider('kraken', ['usd' => null, 'cad' => null]);
 useProviders($cgCad, new MarketProvider('binance', ['usd' => fn() => $usd]), $krakenDown);
+$cgCad->asked = [];
 $rate = ExchangeRates::getBtcPrice('CAD', 'coingecko', 'binance');
 check($rate !== null && abs($rate - $fairCad) < 0.01, "CAD is priced at the fair rate ($rate)");
-check(abs((float)Config::get('fx_anchor_cad')['rate'] - $fxCad) < 1e-9, 'the CAD/USD ratio starts an FX anchor');
 check(in_array('cad', $krakenDown->asked, true), 'Kraken was asked first');
 check(count(array_filter($cgCad->asked, fn($c) => $c === 'cad')) === 1, 'CoinGecko was asked for CAD only once');
 check((float)Config::get('rate_anchor_cad')['rate'] === $fairCad * 0.97, 'one provider never moves the CAD anchor');
+
+echo "Without an FX anchor a lone provider cannot set the CAD exchange rate (S3)\n";
+resetCad();
+Config::set('rate_anchor_cad', ['rate' => $fairCad, 'timestamp' => $staleDay, 'providers' => ['coingecko', 'kraken']]);
+$cad = $fairCad * 1.24; // honest BTC/USD, CAD 24 % high: the old 25 % bootstrap band let this through
+check(ExchangeRates::getBtcPrice('CAD', 'coingecko', 'binance') === null, 'a CAD rate 24% off is refused');
+check(Config::get('fx_anchor_cad') === null, 'and it does not become the FX anchor');
 
 echo "A broken CoinGecko CAD feed cannot start the FX anchor\n";
 resetCad();
@@ -292,12 +306,22 @@ resetCad();
 Config::set('rate_anchor_eur', ['rate' => 55000.0, 'timestamp' => $staleDay, 'providers' => ['coingecko', 'binance']]);
 Config::set('rate_anchor_usd', ['rate' => $usd, 'timestamp' => time() - 3600, 'providers' => ['coingecko', 'binance']]);
 $fxEur = 55000.0 / $usd;
+// The FX anchor an earlier two-provider agreement on EUR seeded (S3).
+Config::set('fx_anchor_eur', ['rate' => $fxEur, 'timestamp' => $staleDay, 'provider' => 'agreement']);
 $cgEur = new MarketProvider('coingecko', ['usd' => fn() => $usd, 'eur' => fn() => 55000.0]);
 useProviders($cgEur, new MarketProvider('binance', ['usd' => null, 'eur' => null]),
     new MarketProvider('kraken', ['usd' => null, 'eur' => null]));
 $rate = ExchangeRates::getBtcPrice('EUR', 'coingecko', 'binance');
 check($rate !== null && abs($rate - 55000.0) < 0.01, "EUR is priced through a fresh BTC/USD anchor and CoinGecko's FX ($rate)");
-check(abs((float)Config::get('fx_anchor_eur')['rate'] - $fxEur) < 1e-9, 'the EUR/USD ratio starts an FX anchor');
+
+echo "The S3 scenario: honest BTC/USD, EUR 24% high, the other EUR providers down\n";
+Config::set('rate_eur', null);
+$cgEur->quotes['eur'] = fn() => 55000.0 * 1.24;
+check(ExchangeRates::getBtcPrice('EUR', 'coingecko', 'binance') === null, 'the skewed EUR rate is refused');
+Config::set('fx_anchor_eur', null);
+check(ExchangeRates::getBtcPrice('EUR', 'coingecko', 'binance') === null,
+    'also when no FX anchor exists yet (the old 25% bootstrap band accepted it)');
+check(Config::get('fx_anchor_eur') === null, 'and it does not start one');
 
 echo "USD with only one provider and an old anchor still refuses (and so does EUR)\n";
 resetCad();

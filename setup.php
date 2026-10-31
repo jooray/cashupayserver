@@ -686,6 +686,9 @@ function setupProbeDataExposure(): array {
     }
     return $result = $refused === $total ? ['status' => 'protected', 'exposed' => []] : $inconclusive;
 }
+
+// A claim made while handling this request replaced the CSRF token (N1); render the new one.
+$csrfToken = Auth::generateCsrfToken();
 ?>
 <!DOCTYPE html>
 <html lang="en">

@@ -13,6 +13,7 @@ require_once __DIR__ . '/includes/database.php';
 require_once __DIR__ . '/includes/config.php';
 require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/payment_request.php';
+require_once __DIR__ . '/includes/locks.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
 require_once __DIR__ . '/cashu-wallet-php/CashuWallet.php';
@@ -292,6 +293,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $claim = null;
     $wallet = null;
     $unit = Config::getStoreMintUnit($storeId);
+
+    // One receive per store at a time. The checks below (claim, "does the wallet already
+    // hold these secrets?") read the database before the swap imports anything, so two
+    // concurrent posts of the same token could both pass them and both mark a payment
+    // request paid while the store is credited once (S1, 2026-10-28). Receives are short
+    // and rare; later ones wait instead of being refused. The lock is released when the
+    // request ends, including on exit.
+    $receiveLock = cashupay_acquire_lock_wait('receive_' . $storeId, 25.0);
+    if (!$receiveLock) {
+        http_response_code(503);
+        header('Retry-After: 10');
+        echo json_encode(['error' => 'This shop is busy receiving another payment. Please send the same token again in a few seconds.']);
+        exit;
+    }
 
     try {
         // Initialize wallet with store's configuration

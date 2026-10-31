@@ -133,8 +133,10 @@ echo "A recovery takeover forgets the previous claimant's wizard state (M-2, M-3
 check(str_contains($body, 'Connect Cashu Mint') && storeNames() === ['My Store'], 'the attacker starts a store');
 db()->exec("UPDATE stores SET mint_url = 'https://attacker-mint.example', mint_unit = 'sat'");
 $seed = 'legal winner thank year wave sausage worth useful legal winner thank yellow';
+// A seeded store before setup completes: an earlier claimant's seed step saved the seed and
+// then failed (S2). It must not survive the takeover either.
 db()->exec("INSERT INTO stores (id, name, wallet_account_id, mint_url, mint_unit, seed_phrase, created_at)
-            VALUES ('store_done', 'Finished Shop', 'wa_done', 'https://mint.example', 'sat', '$seed', 0)");
+            VALUES ('store_done', 'Aaa Main Shop', 'wa_done', 'https://attacker-mint.example', 'sat', '$seed', 0)");
 $code = trim((string)file_get_contents(glob("$dataDir/setup-token-*.txt")[0]));
 
 [, $body] = req($merchant, 'GET', $base);
@@ -144,7 +146,7 @@ $before = sessionId($merchant);
 check(str_contains($body, 'Admin Password'), 'the merchant takes over with the recovery code');
 check(sessionId($merchant) !== $before, 'with a fresh session id');
 check(cfg('base_url') === null && cfg('url_mode') === null, 'the planted base_url and url_mode are gone');
-check(storeNames() === ['Finished Shop'], 'the unfinished store is gone, the store with a seed is kept');
+check(storeNames() === [], 'every store the earlier claimant left is gone, seeded or not (S2)');
 [, $body] = req($merchant, 'POST', $base, ['step' => '2', 'csrf_token' => csrf($body),
     'password' => 'merchant-pass', 'confirm_password' => 'merchant-pass']);
 [, $body] = req($merchant, 'POST', $base, ['step' => '4', 'csrf_token' => csrf($body), 'store_name' => 'My Store']);
@@ -170,7 +172,7 @@ db()->exec("INSERT OR REPLACE INTO config (key, value, created_at, updated_at) V
 [, $body] = req($third, 'GET', $base);
 [, $body] = req($third, 'POST', $base, ['step' => '1', 'csrf_token' => csrf($body), 'security_acknowledged' => '1']);
 check(str_contains($body, 'Admin Password'), 'a new browser claims the released installation');
-check(cfg('base_url') === null && storeNames() === ['Finished Shop'], 'the stale base_url and unfinished stores are gone');
+check(cfg('base_url') === null && storeNames() === [], 'the stale base_url and the earlier stores are gone');
 
 echo "A finished installation cannot reset the admin password through setup (C4)\n";
 [, $body] = req($third, 'POST', $base, ['step' => '2', 'csrf_token' => csrf($body),
@@ -188,7 +190,7 @@ check(str_contains($body, 'Create Store') && str_contains($body, 'Settings'), 'i
     'password' => 'thief-pass-1', 'confirm_password' => 'thief-pass-1']);
 check(cfg('admin_password_hash') === $hash && cfg('admin_password_version') === 'pv_test',
     'posting step 2 changes neither the password nor the session generation');
-check(storeNames() === ['Finished Shop'], 'and does not run the store step with the posted fields');
+check(storeNames() === [], 'and does not run the store step with the posted fields');
 [$status] = req($third, 'POST', $base, ['step' => '2', 'csrf_token' => csrf($body),
     'password' => 'thief-pass-1', 'confirm_password' => 'thief-pass-1']);
 check($status === 302 && cfg('admin_password_hash') === $hash, 'without add_store the finished install redirects to the dashboard');

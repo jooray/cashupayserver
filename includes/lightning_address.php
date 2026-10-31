@@ -676,7 +676,17 @@ class Donation {
                     }
 
                     if (!empty($spentSecrets)) {
-                        $wallet->getStorage()->updateProofsState($spentSecrets, ProofState::SPENT);
+                        // Conditional, like Invoice::markProofsSpent: a proof the mint
+                        // reports spent may be an input of a swap the background keyset
+                        // rotation has in flight. Overwriting it left that swap unable to
+                        // finish and dropped its new proofs from the balance (S5, 2026-10-28).
+                        $storage = $wallet->getStorage();
+                        $storage->transitionProofStates(
+                            $spentSecrets,
+                            ProofState::SPENT,
+                            [ProofState::UNSPENT],
+                            array_flip($storage->getReservedInputSecrets())
+                        );
                     }
 
                     $proofs = $validProofs;
@@ -754,7 +764,7 @@ class Donation {
             }
 
             Transfer::complete($transferId, (int)$amount);
-            $wallet->getStorage()->updateProofsState($donationSecrets, ProofState::SPENT);
+            $wallet->getStorage()->transitionProofStates($donationSecrets, ProofState::SPENT, [ProofState::EXPORTED]);
 
             return ['success' => true, 'token' => $token, 'transferId' => $transferId, 'error' => null];
 

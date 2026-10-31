@@ -1078,24 +1078,29 @@ class Invoice {
         // down stays mintable, so abandoning it after 72 hours simply lost the money.
         // `Invalid` is included: a merchant cancelling an order does not revoke the
         // Lightning invoice a customer may still pay.
-        $rows = Database::fetchAll(
-            "SELECT * FROM invoices
-             WHERE status IN ('Expired', 'Invalid')
-             AND quote_id IS NOT NULL
+        // Each window gets its own batch, with its own due-time in SQL. With one shared
+        // LIMIT the frequent window (every abandoned checkout of the last 72 hours, due
+        // again after a minute) took every slot on a busy shop, and the daily re-check of
+        // older invoices, which exists for payments made during a long outage, never ran
+        // (S8, 2026-10-28).
+        $base = "SELECT * FROM invoices
+                 WHERE status IN ('Expired', 'Invalid')
+                 AND quote_id IS NOT NULL";
+        $recent = Database::fetchAll(
+            "$base AND expiration_time > ?
              AND (last_polled_at IS NULL OR last_polled_at <= ?)
-             ORDER BY (expiration_time > ?) DESC, last_polled_at ASC
+             ORDER BY last_polled_at ASC
              LIMIT ?",
-            [$now - $minInterval, $now - self::EXPIRY_RECOVERY_GRACE, $batchLimit]
+            [$now - self::EXPIRY_RECOVERY_GRACE, $now - $minInterval, $batchLimit]
         );
-
-        // Anything past the frequent window is only re-checked once a day.
-        $rows = array_values(array_filter($rows, function (array $invoice) use ($now): bool {
-            if ((int)$invoice['expiration_time'] > $now - self::EXPIRY_RECOVERY_GRACE) {
-                return true;
-            }
-            $last = (int)($invoice['last_polled_at'] ?? 0);
-            return $now - $last >= self::EXPIRY_RECOVERY_SLOW_INTERVAL;
-        }));
+        $older = Database::fetchAll(
+            "$base AND expiration_time <= ?
+             AND (last_polled_at IS NULL OR last_polled_at <= ?)
+             ORDER BY last_polled_at ASC
+             LIMIT ?",
+            [$now - self::EXPIRY_RECOVERY_GRACE, $now - self::EXPIRY_RECOVERY_SLOW_INTERVAL, $batchLimit]
+        );
+        $rows = array_merge($recent, $older);
 
         foreach ($rows as $invoice) {
             try {
