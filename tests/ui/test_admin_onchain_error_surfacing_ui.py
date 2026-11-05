@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -39,6 +40,7 @@ def _login_to_stores(page, configured: ConfiguredPayserver) -> None:
     # store having no xpub yet (fresh per-test store guarantees that).
     page.select_option("#store-select", configured.store_id)
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_selector("#onchain-xpub", state="visible")
 
 

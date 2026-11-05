@@ -29,6 +29,7 @@ import json
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 
 @pytest.fixture
@@ -88,6 +89,7 @@ def _invoice_metadata(handle, invoice_id: str) -> dict:
 
 def _goto_stores(page, base):
     page.goto(f"{base}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1000)
 
 
@@ -97,6 +99,7 @@ def _goto_stores(page, base):
 def test_defaults_show_both(admin_page):
     page, cfg = admin_page
     page.goto(f"{cfg.handle.url}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
 
     data = _dashboard(page, cfg.store_id)
     assert data["invoicePrivacy"] == {"hideStoreName": False, "hideNote": False}
@@ -110,6 +113,7 @@ def test_defaults_show_both(admin_page):
 def test_save_privacy_round_trips_both_directions(admin_page):
     page, cfg = admin_page
     page.goto(f"{cfg.handle.url}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
 
     # Hide the store name, keep the note shown.
     res = _post_action(
@@ -144,6 +148,7 @@ def test_save_privacy_round_trips_both_directions(admin_page):
 def test_save_privacy_rejects_unknown_store(admin_page):
     page, cfg = admin_page
     page.goto(f"{cfg.handle.url}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
     res = _post_action(
         page, "action=save_store_privacy&store_id=does_not_exist&hide_store_name_on_invoice=1"
     )
@@ -170,6 +175,7 @@ def test_store_name_still_shown_on_payment_page_when_hidden(admin_page):
     never the customer-facing payment web page."""
     page, cfg = admin_page
     page.goto(f"{cfg.handle.url}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
     _post_action(
         page,
         f"action=save_store_privacy&store_id={cfg.store_id}"
@@ -219,6 +225,7 @@ def test_request_modal_prefills_from_store_default(admin_page):
     page, cfg = admin_page
     # Store hides the name by default, shows the note.
     page.goto(f"{cfg.handle.url}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
     _post_action(
         page,
         f"action=save_store_privacy&store_id={cfg.store_id}"

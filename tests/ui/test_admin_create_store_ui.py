@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -43,6 +44,7 @@ def test_create_store_dropdown_option_navigates_to_wizard(
     # against /admin/<view>) actually triggers. Dashboard happens to be
     # the canonical landing path, but the dropdown is visible on stores too.
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_url("**/admin/stores")
 
     # Select the "+ Create Store" sentinel value. onStoreSelectChange()
@@ -69,6 +71,7 @@ def test_create_store_empty_state_button_navigates_to_wizard(
     # (which always has one store), so force the button visible and
     # dispatch its click to exercise the same handler the user would.
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_url("**/admin/stores")
 
     page.evaluate(

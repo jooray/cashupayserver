@@ -15,6 +15,7 @@ import time
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -140,6 +141,7 @@ def test_save_new_xpub_replacing_existing(shared_configured: ConfiguredPayserver
 
     # Click the Stores nav item — that's the view holding the on-chain card.
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_selector("#onchain-xpub", state="visible")
 
     # Wait until the dashboard fetch has populated the on-chain card — the

@@ -22,6 +22,7 @@ import time
 import requests
 
 from conftest import ConfiguredPayserver, DEFAULT_ADMIN_PASSWORD
+from fixtures.browser import expand_settings_cards
 
 
 def _enable_store_selfserve(shared_configured: ConfiguredPayserver, enabled: bool = True) -> None:
@@ -249,6 +250,7 @@ def test_store_settings_info_no_unit_and_selfserve_link(
     page = ctx.new_page()
     try:
         page.goto(f"{shared_configured.handle.url}/admin/stores", wait_until="networkidle")
+        expand_settings_cards(page)
         # loadDashboard auto-selects a store, populates dashboardData.selfserve
         # and runs refreshStoreSelfServeCard (which toggles the info-grid link);
         # loadStoreSettings fills the store-info block.
@@ -287,6 +289,7 @@ def test_store_settings_info_hides_selfserve_link_when_off(
     page = ctx.new_page()
     try:
         page.goto(f"{shared_configured.handle.url}/admin/stores", wait_until="networkidle")
+        expand_settings_cards(page)
         page.evaluate("async () => { await loadDashboard(); await loadStoreSettings(); }")
         page.wait_for_timeout(1000)
         assert not page.locator("#store-info-selfserve-row").is_visible(), (
@@ -331,11 +334,13 @@ def test_site_selfserve_card_gone_and_store_card_round_trips(
     ctx, page = _login_page(shared_configured, browser)
     try:
         page.goto(f"{shared_configured.handle.url}/admin/settings", wait_until="networkidle")
+        expand_settings_cards(page)
         assert page.locator("#card-selfserve").count() == 0, "site self-serve card must be gone"
         assert page.locator("#btn-save-selfserve").count() == 0
         assert page.locator("#selfserve-enabled").count() == 0
 
         page.goto(f"{shared_configured.handle.url}/admin/stores", wait_until="networkidle")
+        expand_settings_cards(page)
         page.evaluate("async () => { await loadDashboard(); }")
         page.wait_for_timeout(300)
         assert page.evaluate("currentStoreId") is not None, "a store should be selected"
@@ -367,6 +372,7 @@ def test_admin_save_store_selfserve_shows_success(
     ctx, page = _login_page(shared_configured, browser)
     try:
         page.goto(f"{shared_configured.handle.url}/admin/stores", wait_until="networkidle")
+        expand_settings_cards(page)
         page.evaluate("async () => { await loadDashboard(); }")
         page.wait_for_timeout(300)
         # Force the override off so neither the client- nor server-side

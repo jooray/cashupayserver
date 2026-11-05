@@ -39,6 +39,7 @@ from e2e.test_strike_onchain_receive import MockEsplora
 from fixtures.api_client import AdminClient
 from fixtures.lnurlp_server import LnurlpServer
 from fixtures.strike_api import TEST_STRIKE_KEY, StrikeApiServer
+from fixtures.browser import expand_settings_cards
 
 LNURL_ADDRESS = "merchant@example.test"
 STATIC_ADDR = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
@@ -308,6 +309,7 @@ def admin_page(cfg: ConfiguredPayserver, browser):
 
 def _goto_stores(page, base: str) -> None:
     page.goto(f"{base}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1200)
 
 

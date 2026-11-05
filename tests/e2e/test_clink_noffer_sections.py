@@ -27,6 +27,7 @@ import pytest
 
 from conftest import ConfiguredPayserver, DEFAULT_ADMIN_PASSWORD
 from fixtures.api_client import AdminClient
+from fixtures.browser import expand_settings_cards
 
 # Reference noffer from @shocknet/clink-sdk (decodes to a valid pubkey/relay/
 # offer). Used only for config persistence — never dialled in this test.
@@ -146,6 +147,7 @@ def admin_page(shared_configured: ConfiguredPayserver, browser):
 
 def _goto_stores(page, base):
     page.goto(f"{base}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1200)
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import requests
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 # Shared-server note: the offline-token tests below deliberately stay on the
 # function-scoped `configured` fixture. They all present the SAME NUT-12 vector
@@ -264,6 +265,7 @@ def test_offline_settings_ui_roundtrip(shared_configured: ConfiguredPayserver, b
     sid = shared_configured.store_id
     try:
         page.goto(f"{base}/admin/stores", wait_until="networkidle")
+        expand_settings_cards(page)
         page.wait_for_timeout(800)
 
         # The offline-cashu settings card is part of the store-settings template.

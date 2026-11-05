@@ -93,3 +93,22 @@ def open_manual_mints(page) -> None:
         except PlaywrightTimeoutError:
             if attempt == 2:
                 raise
+
+
+def expand_settings_cards(page) -> None:
+    """Open every collapsible card in the active Stores / Settings view.
+
+    Both views collapse all of their cards each time they are shown (see
+    collapseSettingsCards() in admin.php), so a test that drives controls
+    inside a card must expand it first. Waits for the view to be active, which
+    switchView() sets in the same synchronous block as the collapse, so the
+    expansion can't be undone by a late initial-view restore. A later
+    switchView() back into the view re-collapses them. The per-section
+    defaults inside the Lightning payments card (the .subsection toggles) are
+    untouched; they have their own coverage.
+    """
+    page.wait_for_selector("#view-stores.active, #view-settings.active", state="attached")
+    page.evaluate(
+        "() => document.querySelectorAll('.view.active .card.collapsible')"
+        ".forEach(c => c.classList.remove('collapsed'))"
+    )

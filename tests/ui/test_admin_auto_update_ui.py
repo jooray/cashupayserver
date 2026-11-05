@@ -14,6 +14,7 @@ import time
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -51,6 +52,7 @@ def _login_and_open_settings(configured: ConfiguredPayserver, page) -> None:
     page.click("#password-submit")
     page.wait_for_selector("#app", state="visible")
     page.click('[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#card-auto-update", state="visible")
 
 

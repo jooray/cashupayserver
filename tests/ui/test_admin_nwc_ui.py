@@ -20,6 +20,7 @@ import pytest
 
 from conftest import ConfiguredPayserver, SESSION_TMP
 from fixtures.browser import (
+    expand_settings_cards,
     dashboard_seq,
     wait_for_dashboard_settled,
     wait_for_store_settings_loaded,
@@ -106,6 +107,7 @@ def _open_lightning_payments(page, configured: ConfiguredPayserver) -> None:
         arg=configured.store_id,
     )
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     # The lists live in the always-visible "Lightning payments" card now — no
     # cashout-mode column click needed to reveal them.
     page.wait_for_selector("#card-lightning-payments", state="visible")

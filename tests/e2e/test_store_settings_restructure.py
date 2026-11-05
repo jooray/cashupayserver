@@ -25,6 +25,7 @@ from conftest import SESSION_TMP
 from fixtures.api_client import AdminClient
 from fixtures.payserver import PayserverHandle, start_payserver, stop_payserver
 from fixtures.setup_helpers import SetupWizard
+from fixtures.browser import expand_settings_cards
 
 GMP_FUNCS = (
     "gmp_init,gmp_add,gmp_mul,gmp_cmp,gmp_mod,gmp_div_q,gmp_intval,gmp_strval,"
@@ -86,16 +87,17 @@ def test_lightning_payments_card_order_and_note(mintless_payserver) -> None:
     assert ">Payment path priority<" in page
 
     # The priority widget and the per-type lists live in the card, before the
-    # Cashu section; the save button sits between the destination sections
-    # and the Cashu section.
+    # Cashu section; the save button sits at the bottom of the card, after
+    # the Cashu section.
     for group in (
         'id="ln-rail-order-group"',
         'id="auto-melt-address-group"',
         'id="auto-melt-nwc-group"',
         'id="auto-melt-noffer-group"',
-        'id="btn-save-lightning-payments"',
     ):
         assert lp < page.index(group) < cashu_section, group
+    save_btn = page.index('id="btn-save-lightning-payments"')
+    assert cashu_section < save_btn < page.index('id="card-store-swaps"')
 
 
 def test_cashout_card_has_two_modes_no_global(mintless_payserver) -> None:
@@ -182,6 +184,7 @@ def test_cashout_greys_out_without_mint(admin_page) -> None:
     stays fully interactive."""
     page, base = admin_page
     page.goto(f"{base}/admin/stores", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1500)
 
     assert page.evaluate(

@@ -17,6 +17,7 @@ from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from conftest import ConfiguredPayserver
 from fixtures.browser import (
+    expand_settings_cards,
     dashboard_seq,
     wait_for_dashboard_settled,
     wait_for_store_settings_loaded,
@@ -53,6 +54,7 @@ def test_store_settings_wait_blocks_until_the_stores_response_lands(
     held = _hold(page, "api=stores")
 
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_selector("#card-lightning-payments", state="visible")
     assert len(held) == 1, "the Stores click fetches ?api=stores exactly once"
 

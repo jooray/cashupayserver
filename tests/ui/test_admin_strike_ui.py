@@ -20,6 +20,7 @@ import pytest
 
 from conftest import ConfiguredPayserver
 from fixtures.browser import (
+    expand_settings_cards,
     dashboard_seq,
     wait_for_dashboard_settled,
     wait_for_store_settings_loaded,
@@ -67,6 +68,7 @@ def _open_lightning_payments(page, configured: ConfiguredPayserver) -> None:
     page.click("#password-submit")
     page.wait_for_selector("#app", state="visible")
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_selector("#card-lightning-payments", state="visible")
     # Two async loads re-render the saved lists from scratch and would wipe
     # rows added before they land: the dashboard payload (already loaded at

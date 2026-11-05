@@ -10,6 +10,7 @@ import pytest
 
 from conftest import ConfiguredPayserver, DEFAULT_ADMIN_PASSWORD
 from fixtures.api_client import AdminClient
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -25,6 +26,7 @@ def _login(page, base_url: str, username: str, password: str) -> None:
 
 def _open_settings(page) -> None:
     page.click('.nav-item[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#view-settings.active")
 
 

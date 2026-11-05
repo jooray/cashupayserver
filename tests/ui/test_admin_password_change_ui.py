@@ -5,6 +5,7 @@ import pytest
 
 from conftest import ConfiguredPayserver
 from fixtures.api_client import AdminClient
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -22,6 +23,7 @@ def test_user_changes_own_password(configured: ConfiguredPayserver, page) -> Non
     _login(page, configured.handle.url, "admin", configured.admin_password)
 
     page.click('.nav-item[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#view-settings.active")
     page.click("#btn-change-own-password")
     page.wait_for_selector("#modal-change-password.visible")
@@ -52,6 +54,7 @@ def test_change_password_rejects_mismatched_confirm(
 ) -> None:
     _login(page, configured.handle.url, "admin", configured.admin_password)
     page.click('.nav-item[data-view="settings"]')
+    expand_settings_cards(page)
     page.click("#btn-change-own-password")
     page.wait_for_selector("#modal-change-password.visible")
     page.fill("#cp-current", configured.admin_password)

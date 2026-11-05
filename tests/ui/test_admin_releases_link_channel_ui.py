@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -24,6 +25,7 @@ def _login_and_open_settings(configured: ConfiguredPayserver, page) -> None:
     page.click("#password-submit")
     page.wait_for_selector("#app", state="visible")
     page.click('[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#card-auto-update", state="visible")
     _wait_card_loaded(page)
 
@@ -62,6 +64,7 @@ def test_releases_link_follows_update_channel(
 
     # And back to main -> /releases/latest again.
     page.click('[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#card-auto-update", state="visible")
     _wait_card_loaded(page)
     page.select_option("#auto-update-channel", "main")

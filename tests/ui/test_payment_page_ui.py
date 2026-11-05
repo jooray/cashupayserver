@@ -69,9 +69,9 @@ def test_payment_page_qr_size_and_button_row(
     # Internal canvas resolution is oversized so CSS upscaling stays crisp.
     assert canvas.evaluate("c => c.width") >= 380
 
-    # Open in Wallet + Copy Invoice share a single row.
+    # "Pay with BTC wallet" + Copy Invoice share a single row.
     block = page.locator('[data-method-block="lightning"]')
-    open_box = block.locator("a.btn", has_text="Open in Wallet").bounding_box()
+    open_box = block.locator("a.btn", has_text="Pay with BTC wallet").bounding_box()
     copy_box = block.locator("button.btn", has_text="Copy Invoice").bounding_box()
     assert abs(open_box["y"] - copy_box["y"]) < 2, "buttons should share a row"
     assert open_box["x"] + open_box["width"] <= copy_box["x"] + 1
@@ -86,11 +86,34 @@ def test_payment_page_qr_size_and_button_row(
         }"""
     )
 
-    # Logo + store name merged into one compact header line.
+    # One compact header line: store name, then "powered by", then the
+    # BareBits wordmark (the same asset as the admin header) — no
+    # lightning-bolt glyph.
     header = page.locator(".merchant-header")
     assert header.count() == 1
-    assert header.locator(".logo").count() == 1
+    assert header.locator("img.logo").count() == 1
+    assert (header.locator("img.logo").get_attribute("src") or "").endswith("img/barebits-logo.svg")
+    assert header.locator("img.logo").get_attribute("alt") == "BareBits"
+    assert "\u26a1" not in header.inner_text()
     assert header.locator(".merchant-name").count() == 1
+    assert header.locator(".powered-by").inner_text().strip() == "powered by"
+    assert page.evaluate(
+        """() => {
+            const h = document.querySelector('.merchant-header');
+            const [name, by, logo] = ['.merchant-name', '.powered-by', 'img.logo'].map(s => h.querySelector(s));
+            const after = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+            return after(name, by) && after(by, logo);
+        }"""
+    ), "header order must be store name, 'powered by', logo"
+    name_box = header.locator(".merchant-name").bounding_box()
+    logo_box = header.locator("img.logo").bounding_box()
+    assert name_box["x"] + name_box["width"] <= logo_box["x"] + 1
+    assert abs(name_box["y"] + name_box["height"] / 2 - (logo_box["y"] + logo_box["height"] / 2)) < 6
+    # The Lightning-network blurb is gone from the notice line.
+    notice = page.locator(".barebits-notice").inner_text()
+    assert "Powered by the Bitcoin Lightning Network" not in notice
+    assert "pay with any Lightning or Cashu wallet" not in notice
+    assert "BareBits" in notice
 
 
 def test_payment_page_displays_invoice_amount(
@@ -106,18 +129,18 @@ def test_payment_page_displays_invoice_amount(
     page.wait_for_function("() => document.body.innerText.includes('4242')")
 
 
-# Each "Pay with" brand links to the provider's site and shows a name caption.
-EXPECTED_BRANDS = {
-    "Cash App": "https://cash.app",
-    "Strike": "https://strike.me",
-    "Coinbase": "https://www.coinbase.com",
-    "Kraken": "https://www.kraken.com",
-    "Venmo": "https://venmo.com",
-    "PayPal": "https://www.paypal.com",
-}
+# Each "Pay with" brand shows a name caption and acts as the "Pay with BTC
+# wallet" button of the active method.
+EXPECTED_BRANDS = ["Cash App", "Strike", "Coinbase", "Kraken", "Venmo", "PayPal"]
 
 
-def test_payment_page_provider_logos_link_and_label(
+def _logo_hrefs(page) -> list:
+    return page.eval_on_selector_all(
+        "#payment-methods a.pm-item", "els => els.map(e => e.getAttribute('href'))"
+    )
+
+
+def test_payment_page_provider_logos_open_wallet_and_label(
     shared_configured: ConfiguredPayserver,
     page,
 ) -> None:
@@ -125,6 +148,7 @@ def test_payment_page_provider_logos_link_and_label(
     invoice = configured.greenfield.create_invoice(
         configured.store_id, amount="1000", currency="sat"
     )
+    bolt11 = invoice["checkout"]["paymentMethods"]["BTC-LightningNetwork"]["destination"]
     page.set_default_timeout(15000)
     page.goto(f"{configured.handle.url}/payment?id={invoice['id']}")
 
@@ -132,15 +156,114 @@ def test_payment_page_provider_logos_link_and_label(
     items.first.wait_for(state="attached")
     assert items.count() == len(EXPECTED_BRANDS)
 
-    for name, url in EXPECTED_BRANDS.items():
+    for name in EXPECTED_BRANDS:
         link = page.locator(f"#payment-methods a.pm-item:has(.pm-name:text-is('{name}'))")
-        assert link.count() == 1, f"expected one link for {name}"
-        assert link.get_attribute("href") == url
-        # Opens in a new tab without leaking the referrer/opener.
-        assert link.get_attribute("target") == "_blank"
-        assert "noopener" in (link.get_attribute("rel") or "")
-        # The logo carries the provider name for accessibility.
+        assert link.count() == 1, f"expected one logo for {name}"
+        # Same target as the "Pay with BTC wallet" button: the invoice's
+        # lightning: URI, opened in this tab (no provider-site new-tab link).
+        assert link.get_attribute("href") == f"lightning:{bolt11}"
+        assert link.get_attribute("target") is None
         assert link.locator("img.pm-logo").get_attribute("alt") == name
+        assert "Pay with BTC wallet" in (link.get_attribute("aria-label") or "")
+
+    # "or any Bitcoin wallet" sits on its own line beneath the logos, larger
+    # than the brand captions.
+    label = page.locator("#payment-methods .pm-label-any")
+    assert label.inner_text().strip() == "or any Bitcoin wallet"
+    label_box = label.bounding_box()
+    logos_box = page.locator("#payment-methods .pm-logos").bounding_box()
+    assert label_box["y"] >= logos_box["y"] + logos_box["height"] - 1, (
+        "the 'or any Bitcoin wallet' label must sit below the logo row"
+    )
+    label_px = page.evaluate("el => parseFloat(getComputedStyle(el).fontSize)", label.element_handle())
+    caption_px = page.evaluate(
+        "() => parseFloat(getComputedStyle(document.querySelector('#payment-methods .pm-name')).fontSize)"
+    )
+    pay_with_px = page.evaluate(
+        "() => parseFloat(getComputedStyle(document.querySelector('#payment-methods .pm-label:not(.pm-label-any)')).fontSize)"
+    )
+    assert label_px > caption_px and label_px > pay_with_px, (label_px, caption_px, pay_with_px)
+
+
+def test_payment_page_provider_logos_follow_active_method(
+    shared_configured: ConfiguredPayserver,
+    page,
+) -> None:
+    """With both rails offered the logos track the active tab: the BIP-21 URI
+    on the on-chain view, the lightning: URI on the Lightning view."""
+    configured = shared_configured
+    invoice = configured.greenfield.create_invoice(
+        configured.store_id, amount="1000", currency="sat"
+    )
+    bolt11 = invoice["checkout"]["paymentMethods"]["BTC-LightningNetwork"]["destination"]
+    addr = "bc1qpaymentlogosuitestaddr000000000000000"
+    with configured.handle.db() as conn:
+        conn.execute(
+            "UPDATE invoices SET onchain_address = ?, onchain_amount_sat = ? WHERE id = ?",
+            (addr, 1000, invoice["id"]),
+        )
+    page.set_default_timeout(15000)
+    page.goto(f"{configured.handle.url}/payment?id={invoice['id']}")
+    page.wait_for_selector(".method-tabs", state="visible")
+
+    expected = {
+        "onchain": f"bitcoin:{addr}?amount=0.00001",
+        "lightning": f"lightning:{bolt11}",
+    }
+    for _ in range(2):
+        for method in ("onchain", "lightning"):
+            page.click(f'.method-tab[data-method="{method}"]')
+            assert page.get_attribute("#payment-methods", "data-method") == method
+            hrefs = _logo_hrefs(page)
+            assert hrefs and all(h == expected[method] for h in hrefs), (method, hrefs)
+            # The logos match the method's own "Pay with BTC wallet" button.
+            btn = page.get_attribute(f'[data-method-block="{method}"] a.btn', "href")
+            assert btn == expected[method]
+
+
+def test_payment_page_provider_logos_on_cashu_view(
+    shared_configured: ConfiguredPayserver,
+    page,
+) -> None:
+    """The Cashu view has no "Pay with BTC wallet" button of its own, so the
+    logos reuse the Lightning URI there — and carry no link at all when the
+    invoice has no Lightning leg."""
+    configured = shared_configured
+    page.set_default_timeout(15000)
+    with configured.handle.db() as conn:
+        conn.execute(
+            "UPDATE stores SET offline_cashu_enabled = 1 WHERE id = ?",
+            (configured.store_id,),
+        )
+    try:
+        invoice = configured.greenfield.create_invoice(
+            configured.store_id, amount="1000", currency="sat"
+        )
+        bolt11 = invoice["checkout"]["paymentMethods"]["BTC-LightningNetwork"]["destination"]
+        page.goto(f"{configured.handle.url}/payment?id={invoice['id']}")
+        page.wait_for_selector(".method-tabs", state="visible")
+        page.click('.method-tab[data-method="cashu"]')
+        assert page.get_attribute("#payment-methods", "data-method") == "cashu"
+        hrefs = _logo_hrefs(page)
+        assert hrefs and all(h == f"lightning:{bolt11}" for h in hrefs), hrefs
+
+        # Strip the Lightning leg: Cashu is the only method, nothing to open.
+        with configured.handle.db() as conn:
+            conn.execute(
+                "UPDATE invoices SET bolt11 = NULL WHERE id = ?", (invoice["id"],)
+            )
+        page.goto(f"{configured.handle.url}/payment?id={invoice['id']}")
+        page.wait_for_selector('[data-method-block="cashu"]', state="visible")
+        assert page.locator('[data-method-block="lightning"]').count() == 0
+        assert page.get_attribute("#payment-methods", "data-method") == "cashu"
+        hrefs = _logo_hrefs(page)
+        assert hrefs and all(h is None for h in hrefs), hrefs
+    finally:
+        with configured.handle.db() as conn:
+            conn.execute(
+                "UPDATE stores SET offline_cashu_enabled = 0 WHERE id = ?",
+                (configured.store_id,),
+            )
 
 
 def test_payment_page_footer_powered_by_links_to_barebits(

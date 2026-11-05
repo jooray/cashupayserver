@@ -18,6 +18,7 @@ import sqlite3
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -40,6 +41,7 @@ def _open_store_swaps_card(page, configured: ConfiguredPayserver) -> None:
     )
     _login(page, configured)
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_selector("#store-swaps-fee-pct", state="visible")
     # Wait until refreshStoreSwapsCard() has run: the fee placeholders flip
     # from the static markup to "default (N)" / "off" once dashboardData lands.
@@ -63,6 +65,7 @@ def test_site_swaps_card_is_gone(shared_configured: ConfiguredPayserver, page) -
     the site auto-cashout default selector) under any of the old ids."""
     _login(page, shared_configured)
     page.locator('.nav-item[data-view="settings"]').click()
+    expand_settings_cards(page)
     # The Email Notifications card survives the refactor — use it as the
     # signal that the Settings view has rendered.
     page.wait_for_selector("#card-notifications", state="visible")
