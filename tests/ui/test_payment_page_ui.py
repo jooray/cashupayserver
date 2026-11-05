@@ -86,8 +86,8 @@ def test_payment_page_qr_size_and_button_row(
         }"""
     )
 
-    # Logo + store name merged into one compact header line; the logo is the
-    # BareBits wordmark (the same asset as the admin header), not the old
+    # One compact header line: store name, then "powered by", then the
+    # BareBits wordmark (the same asset as the admin header) — no
     # lightning-bolt glyph.
     header = page.locator(".merchant-header")
     assert header.count() == 1
@@ -96,6 +96,24 @@ def test_payment_page_qr_size_and_button_row(
     assert header.locator("img.logo").get_attribute("alt") == "BareBits"
     assert "\u26a1" not in header.inner_text()
     assert header.locator(".merchant-name").count() == 1
+    assert header.locator(".powered-by").inner_text().strip() == "powered by"
+    assert page.evaluate(
+        """() => {
+            const h = document.querySelector('.merchant-header');
+            const [name, by, logo] = ['.merchant-name', '.powered-by', 'img.logo'].map(s => h.querySelector(s));
+            const after = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+            return after(name, by) && after(by, logo);
+        }"""
+    ), "header order must be store name, 'powered by', logo"
+    name_box = header.locator(".merchant-name").bounding_box()
+    logo_box = header.locator("img.logo").bounding_box()
+    assert name_box["x"] + name_box["width"] <= logo_box["x"] + 1
+    assert abs(name_box["y"] + name_box["height"] / 2 - (logo_box["y"] + logo_box["height"] / 2)) < 6
+    # The Lightning-network blurb is gone from the notice line.
+    notice = page.locator(".barebits-notice").inner_text()
+    assert "Powered by the Bitcoin Lightning Network" not in notice
+    assert "pay with any Lightning or Cashu wallet" not in notice
+    assert "BareBits" in notice
 
 
 def test_payment_page_displays_invoice_amount(

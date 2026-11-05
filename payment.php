@@ -535,7 +535,8 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             max-width: 480px;
         }
 
-        /* Logo + store name share one compact line above the amount. */
+        /* "Store name · powered by [BareBits]" on one compact line above
+           the amount. */
         .merchant-header {
             display: flex;
             align-items: center;
@@ -553,6 +554,13 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         .merchant-name {
             font-size: 0.875rem;
             color: var(--text-secondary);
+        }
+
+        .powered-by {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            opacity: 0.8;
+            margin-left: 0.25rem;
         }
 
         .amount {
@@ -1163,8 +1171,9 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
     <div class="container">
         <div class="payment-card">
             <div class="merchant-header">
-                <img class="logo" src="<?= htmlspecialchars(Urls::assets('img/barebits-logo.svg')) ?>" alt="BareBits">
                 <span class="merchant-name"><?= htmlspecialchars($storeName) ?></span>
+                <span class="powered-by">powered by</span>
+                <img class="logo" src="<?= htmlspecialchars(Urls::assets('img/barebits-logo.svg')) ?>" alt="BareBits">
             </div>
 
             <?php
@@ -1523,7 +1532,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 </div>
 
                 <div class="barebits-notice">
-                    Payments by <a href="https://getbarebits.com" target="_blank" rel="noopener">BareBits</a>. Powered by the Bitcoin Lightning Network &mdash; pay with any Lightning or Cashu wallet.
+                    Payments by <a href="https://getbarebits.com" target="_blank" rel="noopener">BareBits</a>.
                 </div>
             </div>
 
