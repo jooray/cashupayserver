@@ -10,7 +10,11 @@
  *      are, nothing is parked.
  *   2. Once the store gains a mint, the refresh moves the invoice onto the
  *      mint rail, parks the swap bolt11 and releases the held swap
- *      (provider cancelInvoice called, row → invoice.expired).
+ *      (provider cancelInvoice called, row → invoice.expired) — unless
+ *      strict no-mint-fallback is on: strict forbids the mint standing in
+ *      for the swap rail (as at creation), so the refresh stays
+ *      'unavailable' and the swap is kept (test_long_lived_strict_no_mint_refresh.php
+ *      covers the strict rule in depth).
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
@@ -105,6 +109,19 @@ assert_eq(0, (int)Database::fetchOne("SELECT COUNT(*) AS c FROM invoice_ln_quote
 // ---- 2. a mint appears: the refresh moves the invoice onto it ----
 $mint = start_mock_mint(['quotes' => [], 'quote_ttl' => 600]);
 Database::update('stores', ['mint_url' => $mint['url']], 'id = ?', [$store]);
+
+// 2a. ...but not while strict no-mint-fallback is on: the mint may not stand
+// in for the swap rail, so the held swap stays exactly as it was.
+Database::update('invoices', ['ln_refresh_lock_at' => null], 'id = ?', [$ll['id']]);
+$r = Invoice::refreshLightning($ll['id']);
+assert_eq('unavailable', $r['reason'], 'strict mode: the mint does not take the swap invoice over');
+assert_eq('swap', row($ll['id'])['payment_rail'], 'strict mode: still on the swap rail');
+assert_eq($ll['bolt11'], row($ll['id'])['bolt11'], 'strict mode: swap bolt11 kept');
+assert_eq(0, MockSwapProvider::$cancelled, 'strict mode: held swap not cancelled');
+assert_eq('swap.created', swap_status($ll['id']), 'strict mode: swap row untouched');
+
+// 2b. strict off: the mint takes the invoice over.
+SwapsConfig::setStoreStrictOverride($store, SwapsConfig::FORCE_OFF);
 Database::update('invoices', ['ln_refresh_lock_at' => null], 'id = ?', [$ll['id']]);
 $r = Invoice::refreshLightning($ll['id']);
 assert_true($r['ok'], 'refresh ok via the mint: ' . json_encode($r['reason'] ?? null));

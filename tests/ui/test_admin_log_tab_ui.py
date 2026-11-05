@@ -117,7 +117,15 @@ def test_suppress_invoice_errors_toggle_persists(
     configured: ConfiguredPayserver, page
 ) -> None:
     _login_admin(page, configured)
-    page.locator('.nav-item[data-view="settings"]').click()
+    # Opening Settings kicks off loadInvoiceErrorSettings(), whose response
+    # writes the checkbox from the server value. A click that lands before
+    # that response is undone by it (the checkbox snaps back to off and the
+    # save posts 0) — so wait for the load to complete before touching it.
+    with page.expect_response(
+        lambda r: "get_invoice_error_settings" in (r.request.post_data or "")
+    ) as load_info:
+        page.locator('.nav-item[data-view="settings"]').click()
+    load_info.value.finished()  # body parsed → checkbox written on the next tick
     page.wait_for_selector("#card-invoice-errors", state="attached")
 
     toggle = page.locator("#suppress-invoice-errors")

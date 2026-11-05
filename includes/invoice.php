@@ -3081,7 +3081,22 @@ class Invoice {
                 $sourced['_quote'] = null;
             }
         }
-        if ($sourced === null && Config::isStoreConfigured($storeId)) {
+        // Strict no-mint-fallback: with swaps enabled the mint is only ever a
+        // fallback for the swap rail, and strict mode forbids exactly that
+        // (see Invoice::create). A refresh never creates a swap (decision 6b),
+        // so under strict mode the mint is off the table here too — otherwise
+        // a long-lived invoice created on-chain only would quietly move onto
+        // the mint on its first page view.
+        $strictMintBlocked = $sourced === null
+            && SwapsConfig::isEnabledForStore($storeId)
+            && SwapsConfig::strictNoMintFallbackForStore($storeId);
+        if ($strictMintBlocked) {
+            error_log(sprintf(
+                '[long-lived] strict mode: mint fallback skipped on refresh invoice=%s store=%s',
+                $invoiceId, $storeId
+            ));
+        }
+        if ($sourced === null && !$strictMintBlocked && Config::isStoreConfigured($storeId)) {
             $fixed = (!$requote && $currentRail === 'mint' && !empty($invoice['bolt11']))
                 ? (int)$invoice['amount_sats'] : null;
             try {
@@ -3105,7 +3120,9 @@ class Invoice {
         if ($sourced === null) {
             error_log(sprintf('[long-lived] no Lightning rail could re-source invoice=%s store=%s', $invoiceId, $storeId));
             AdminLog::log('lightning', 'refresh', $storeId, $invoiceId, null,
-                'Lightning invoice could not be refreshed: no destination or mint produced a bolt11');
+                $strictMintBlocked
+                    ? 'Lightning invoice could not be refreshed: no destination produced a bolt11 and strict mode (no mint fallback) is on'
+                    : 'Lightning invoice could not be refreshed: no destination or mint produced a bolt11');
             return [
                 'ok' => false, 'reason' => 'unavailable', 'invoice' => $invoice,
                 'receive_errors' => self::dedupeReceiveErrors($receiveErrors),

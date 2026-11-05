@@ -237,10 +237,15 @@ def _check_docker_available() -> str | None:
     if shutil.which("docker") is None:
         return "docker missing"
     # sudo -n: non-interactive. If a password is needed, sudo exits 1.
-    res = subprocess.run(["sudo", "-n", "docker", "version"], capture_output=True, text=True, timeout=10)
+    # A loaded CI runner has taken >10 s just to answer `docker compose
+    # version` (cold compose plugin), which surfaced as a fixture ERROR rather
+    # than a slow setup. 60 s is generous for a version probe; a timeout still
+    # raises so a wedged docker is loud, not a silent skip.
+    probe_timeout = 60
+    res = subprocess.run(["sudo", "-n", "docker", "version"], capture_output=True, text=True, timeout=probe_timeout)
     if res.returncode != 0:
         return f"`sudo docker version` failed: {res.stderr.strip()[:100]}"
-    res = subprocess.run(["sudo", "-n", "docker", "compose", "version"], capture_output=True, text=True, timeout=10)
+    res = subprocess.run(["sudo", "-n", "docker", "compose", "version"], capture_output=True, text=True, timeout=probe_timeout)
     if res.returncode != 0:
         return f"`sudo docker compose version` failed: {res.stderr.strip()[:100]}"
     return None
