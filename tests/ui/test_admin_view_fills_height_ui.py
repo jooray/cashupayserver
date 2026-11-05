@@ -21,6 +21,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -58,6 +59,7 @@ def test_settings_footer_pinned_to_bottom(shared_configured: ConfiguredPayserver
     _login(shared_configured, page)
 
     page.click('.nav-item[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#view-settings.active")
     page.wait_for_selector("#view-settings .view-footer")
 
@@ -91,6 +93,7 @@ def test_settings_footer_always_visible_on_desktop(
     page.wait_for_selector("#app", state="visible")
 
     page.click('.nav-item[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#view-settings.active")
     page.wait_for_selector("#view-settings .settings-scroll")
     page.wait_for_selector("#view-settings .view-footer")
@@ -155,6 +158,7 @@ def test_settings_footer_visible_above_mobile_nav(
     page.wait_for_selector("#app", state="visible")
 
     page.click('.nav-item[data-view="settings"]')
+    expand_settings_cards(page)
     page.wait_for_selector("#view-settings.active")
     page.wait_for_selector("#view-settings .view-footer")
     # Scroll to the end so we test the worst case (footer at the bottom edge).

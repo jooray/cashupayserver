@@ -29,6 +29,7 @@ import requests
 
 from conftest import ConfiguredPayserver, DEFAULT_ADMIN_PASSWORD
 from fixtures.payserver import PayserverHandle
+from fixtures.browser import expand_settings_cards
 
 
 def _set_config(handle: PayserverHandle, key: str, value) -> None:
@@ -121,6 +122,7 @@ def test_auto_update_toggle_persists_both_ways(admin_page):
         )
 
     page.goto(f"{configured.handle.url}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1500)
 
     toggle = page.locator("#auto-update-enabled")
@@ -137,6 +139,7 @@ def test_auto_update_toggle_persists_both_ways(admin_page):
 
     # Survives a reload (state comes from update_status, not the DOM).
     page.goto(f"{configured.handle.url}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1500)
     toggle = page.locator("#auto-update-enabled")
     assert toggle.is_checked(), "the saved opt-in must be reflected after reload"
@@ -153,6 +156,7 @@ def test_update_email_checkbox_defaults_on(admin_page):
     ON (unlike the other per-type toggles) and persists an explicit off."""
     page, configured = admin_page
     page.goto(f"{configured.handle.url}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1500)
 
     box = page.locator("#notifications-update-available")
@@ -164,6 +168,7 @@ def test_update_email_checkbox_defaults_on(admin_page):
     page.wait_for_timeout(800)
 
     page.goto(f"{configured.handle.url}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1500)
     assert not page.locator("#notifications-update-available").is_checked(), (
         "an explicit off must persist"
@@ -240,6 +245,7 @@ def test_banner_hidden_when_cached_verdict_names_the_running_build(admin_page):
 
         # The Auto-update card agrees (it reads the same verdict).
         page.goto(f"{configured.handle.url}/admin/settings", wait_until="networkidle")
+        expand_settings_cards(page)
         page.wait_for_timeout(1500)
         assert "latest version" in page.locator("#auto-update-availability").inner_text().lower()
 
@@ -407,6 +413,7 @@ def test_update_applied_outcome_retires_once_the_page_runs_the_new_build(admin_p
         # The settings card's progress line is retired too (in the dev stack
         # it then shows the "disabled in this environment" note instead).
         page.goto(f"{base}/admin/settings", wait_until="networkidle")
+        expand_settings_cards(page)
         page.wait_for_timeout(1500)
         card_prog = page.locator("#auto-update-progress")
         if card_prog.is_visible():
@@ -497,6 +504,7 @@ def test_update_now_button_present_in_settings_card(admin_page):
         "checked_at": int(time.time()),
     })
     page.goto(f"{configured.handle.url}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1500)
 
     assert page.evaluate("!!document.getElementById('btn-update-now')")
@@ -523,6 +531,7 @@ def test_save_channel_button_persists(admin_page):
     page, configured = admin_page
     base = configured.handle.url
     page.goto(f"{base}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1200)
 
     assert _channel(page, base) == "main"

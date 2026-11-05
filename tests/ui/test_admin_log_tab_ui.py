@@ -15,6 +15,7 @@ import time
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -125,6 +126,7 @@ def test_suppress_invoice_errors_toggle_persists(
         lambda r: "get_invoice_error_settings" in (r.request.post_data or "")
     ) as load_info:
         page.locator('.nav-item[data-view="settings"]').click()
+        expand_settings_cards(page)
     load_info.value.finished()  # body parsed → checkbox written on the next tick
     page.wait_for_selector("#card-invoice-errors", state="attached")
 
@@ -155,6 +157,8 @@ def test_suppress_invoice_errors_toggle_persists(
             "() => document.getElementById('suppress-invoice-errors').checked === true"
         )
         page.wait_for_load_state("networkidle")
+        # The restored view starts with every card collapsed again.
+        expand_settings_cards(page)
 
         slider = page.locator("#card-invoice-errors .toggle-slider")
         slider.scroll_into_view_if_needed()

@@ -40,6 +40,7 @@ from fixtures.analytics_endpoint import (
 )
 from fixtures.payserver import PayserverHandle, start_payserver, stop_payserver
 from fixtures.setup_helpers import SetupWizard, wizard_error, wizard_heading
+from fixtures.browser import expand_settings_cards
 
 UUID_V4 = __import__("re").compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 MINT_URL = "https://mint.secret-fixture.example"
@@ -285,6 +286,7 @@ def test_settings_card_toggle_level_and_preview(request, endpoint, browser) -> N
     try:
         page = ctx.new_page()
         page.goto(f"{handle.url}/admin/settings", wait_until="networkidle")
+        expand_settings_cards(page)
         page.wait_for_selector("#card-usage-stats")
         page.wait_for_function(
             "() => document.getElementById('usage-stats-preview').textContent.includes('usage_report')"
@@ -341,6 +343,7 @@ def test_settings_card_toggle_level_and_preview(request, endpoint, browser) -> N
 
         # Survives a reload (state comes from the API, not the DOM).
         page.goto(f"{handle.url}/admin/settings", wait_until="networkidle")
+        expand_settings_cards(page)
         page.wait_for_function(
             "() => document.getElementById('usage-stats-status').textContent.includes('Last sent')"
         )

@@ -13,6 +13,7 @@ import time
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -51,6 +52,7 @@ def _open_store_settings(page, configured: ConfiguredPayserver) -> None:
     # assertions must target the per-test store's row.
     page.select_option("#store-select", configured.store_id)
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_selector("#card-payment-order", state="visible")
     # The card hydrates from the ?api=stores fetch; wait for Store Info to be
     # populated with this store's id so the radios reflect its row.

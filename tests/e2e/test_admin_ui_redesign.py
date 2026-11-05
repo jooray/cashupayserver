@@ -22,6 +22,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 
 @pytest.fixture
@@ -43,6 +44,8 @@ def admin_page(shared_server: ConfiguredPayserver, browser):
 def _goto(page, base, view):
     page.goto(f"{base}/admin/{view}", wait_until="networkidle")
     page.wait_for_timeout(1200)
+    if view in ("stores", "settings"):
+        expand_settings_cards(page)
 
 
 def test_export_button_removed_but_ledger_modal_present(admin_page):
@@ -85,7 +88,10 @@ def test_store_settings_collapsible_and_order(admin_page):
     # Submarine Swaps directly beneath On-chain Bitcoin payments.
     assert titles.index("Submarine Swaps (LN→on-chain)") == titles.index("On-chain Bitcoin payments") + 1
 
-    # Every section is collapsible and open by default.
+    # Every section is collapsible. _goto() expanded them all (the view
+    # starts with every card collapsed; see test_settings_cards_collapsed_on_view_entry
+    # in tests/ui/test_admin_cosmetic_polish_ui.py); clicking a header
+    # collapses it again.
     assert page.eval_on_selector_all("#store-settings-content > .card.collapsible", "e => e.length") >= 8
     card = page.query_selector("#store-settings-content > .card.collapsible")
     assert "collapsed" not in (card.get_attribute("class") or "")

@@ -28,6 +28,7 @@ import pytest
 
 from conftest import ConfiguredPayserver
 from fixtures.browser import (
+    expand_settings_cards,
     dashboard_seq,
     wait_for_dashboard_settled,
     wait_for_store_settings_loaded,
@@ -62,6 +63,7 @@ def _open_lightning_payments(page, configured: ConfiguredPayserver) -> None:
     page.click("#password-submit")
     page.wait_for_selector("#app", state="visible")
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     # The "Lightning payments" card is always visible — no cashout-mode click
     # needed. The list div (#auto-melt-address-list) starts empty and thus has
     # zero size, which Playwright treats as hidden — so wait on the

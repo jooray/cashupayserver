@@ -16,6 +16,7 @@ import json
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 
 @pytest.fixture
@@ -36,6 +37,7 @@ def admin_page(shared_server: ConfiguredPayserver, browser):
 
 def _goto_settings(page, base):
     page.goto(f"{base}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(1000)
 
 

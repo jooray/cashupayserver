@@ -5012,14 +5012,26 @@ header('Cache-Control: no-cache, must-revalidate');
             color: var(--text-secondary);
             text-decoration: none;
             font-size: 0.75rem;
-            transition: color 0.2s;
+            transition: color 0.2s, background-color 0.2s;
             cursor: pointer;
             background: none;
             border: none;
+            border-radius: 10px;
         }
 
         .nav-item.active {
             color: var(--accent);
+        }
+
+        /* Rollover: accent fill with black text/icon, for the active item
+           too (its resting state stays accent-on-transparent). Pointer-only,
+           so a tap on the mobile bottom bar doesn't leave a stuck highlight. */
+        @media (hover: hover) {
+            .nav-item:hover,
+            .nav-item.active:hover {
+                background: var(--accent);
+                color: #000;
+            }
         }
 
         .nav-item svg {
@@ -5232,12 +5244,15 @@ header('Cache-Control: no-cache, must-revalidate');
             }
         }
 
-        /* Collapsible cards (default open; add .collapsed to start closed) */
+        /* Collapsible cards. Cards in the Stores and Settings views start
+           collapsed (markup carries .collapsed and switchView() re-applies it
+           each time the view is shown); elsewhere the default is open. */
         .card.collapsible > .card-header {
             cursor: pointer;
             user-select: none;
             justify-content: flex-start;
             gap: 0.5rem;
+            transition: background-color 0.15s, color 0.15s;
         }
         .card.collapsible > .card-header > .card-title {
             margin-right: auto;
@@ -5261,6 +5276,31 @@ header('Cache-Control: no-cache, must-revalidate');
             display: none !important;
         }
 
+        /* Rollover on the collapsible headers (cards and the sub-section
+           toggles inside them): accent fill with black text, the chevron
+           following. Scoped to devices with a real pointer so a tap on a
+           touch screen doesn't leave the header stuck in its hover state. */
+        @media (hover: hover) {
+            .card.collapsible > .card-header:hover {
+                background: var(--accent);
+                color: #000;
+            }
+            .card.collapsible > .card-header:hover::after {
+                border-color: #000;
+            }
+            /* The ln-section variant sets its own colour with a more specific
+               selector, so the hover rule names it too. */
+            .subsection-toggle:hover,
+            .subsection.ln-section > .subsection-toggle:hover {
+                background: var(--accent);
+                color: #000;
+            }
+            .subsection-toggle:hover::after,
+            .subsection.ln-section > .subsection-toggle:hover::after {
+                border-color: #000;
+            }
+        }
+
         /* Collapsible subsection (e.g. Advanced inside a card) */
         .subsection-toggle {
             display: flex;
@@ -5270,8 +5310,11 @@ header('Cache-Control: no-cache, must-revalidate');
             user-select: none;
             font-weight: 600;
             font-size: 0.9rem;
-            padding: 0.5rem 0;
+            padding: 0.5rem 0.5rem;
+            margin: 0 -0.5rem;
+            border-radius: 8px;
             color: var(--text-secondary);
+            transition: background-color 0.15s, color 0.15s;
         }
         .subsection-toggle::after {
             content: "";
@@ -5300,7 +5343,7 @@ header('Cache-Control: no-cache, must-revalidate');
         .subsection.ln-section > .subsection-toggle {
             font-size: 0.95rem;
             color: var(--text-primary, inherit);
-            padding: 0.65rem 0;
+            padding: 0.65rem 0.5rem;
         }
         .subsection.ln-section > .subsection-body {
             padding-bottom: 0.5rem;
@@ -6461,7 +6504,7 @@ header('Cache-Control: no-cache, must-revalidate');
             <!-- Store Settings View -->
             <div class="view" id="view-stores">
                 <div id="store-settings-content">
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">Store Info</div>
                             <button class="btn btn-secondary" id="btn-edit-store">Edit</button>
@@ -6491,7 +6534,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible" id="card-payment-order">
+                    <div class="card collapsible collapsed" id="card-payment-order">
                         <div class="card-header">
                             <div class="card-title">Payment order</div>
                         </div>
@@ -6522,7 +6565,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible" id="card-lightning-payments">
+                    <div class="card collapsible collapsed" id="card-lightning-payments">
                         <div class="card-header">
                             <div class="card-title">Lightning payments</div>
                         </div>
@@ -6560,7 +6603,8 @@ header('Cache-Control: no-cache, must-revalidate');
                             </div>
 
                             <!-- The four payment-path sections (and the Cashu
-                                 section at the end) are collapsible. Markup
+                                 section after them, above the Save button) are
+                                 collapsible. Markup
                                  default is collapsed; applyLnSectionDefaults()
                                  expands each section that has saved entries
                                  once per store load. -->
@@ -6715,11 +6759,6 @@ header('Cache-Control: no-cache, must-revalidate');
                             </div><!-- /.subsection-body -->
                             </div><!-- /#ln-section-noffers -->
 
-                            <div id="lightning-payments-error" class="hidden" style="margin-top:0.75rem; color: var(--error); font-size: 0.85rem;"></div>
-                            <button class="btn btn-full" id="btn-save-lightning-payments" style="margin-top: 1rem;">
-                                Save Lightning payments
-                            </button>
-
                             <div class="subsection collapsed ln-section" id="ln-section-cashu">
                             <div class="subsection-toggle">Cashu</div>
                             <div class="subsection-body">
@@ -6834,10 +6873,15 @@ header('Cache-Control: no-cache, must-revalidate');
                             </div><!-- /#cashu-cashout-body -->
                             </div><!-- /.subsection-body -->
                             </div><!-- /#ln-section-cashu -->
+
+                            <div id="lightning-payments-error" class="hidden" style="margin-top:0.75rem; color: var(--error); font-size: 0.85rem;"></div>
+                            <button class="btn btn-full" id="btn-save-lightning-payments" style="margin-top: 1rem;">
+                                Save Lightning payments
+                            </button>
                         </div>
                     </div>
 
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">On-chain Bitcoin payments</div>
                         </div>
@@ -7032,7 +7076,7 @@ header('Cache-Control: no-cache, must-revalidate');
 
                     <!-- Per-store submarine-swap settings (there is no
                          site-wide layer; every knob lives on the store). -->
-                    <div class="card collapsible" id="card-store-swaps">
+                    <div class="card collapsible collapsed" id="card-store-swaps">
                         <div class="card-header">
                             <div class="card-title">Submarine Swaps (LN&rarr;on-chain)</div>
                         </div>
@@ -7151,7 +7195,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible" id="card-store-seed">
+                    <div class="card collapsible collapsed" id="card-store-seed">
                         <div class="card-header">
                             <div class="card-title">Recovery phrase</div>
                         </div>
@@ -7197,7 +7241,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible" id="card-store-selfserve">
+                    <div class="card collapsible collapsed" id="card-store-selfserve">
                         <div class="card-header">
                             <div class="card-title">Self-Serve Invoices</div>
                         </div>
@@ -7248,7 +7292,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">Email Notifications</div>
                         </div>
@@ -7360,7 +7404,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">Invoice Privacy</div>
                         </div>
@@ -7395,7 +7439,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">Exchange Rate Settings</div>
                         </div>
@@ -7435,7 +7479,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">Hosting Fee</div>
                         </div>
@@ -7464,7 +7508,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">API Keys</div>
                             <button class="btn" id="btn-create-api-key">+ New</button>
@@ -7474,7 +7518,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </div>
                     </div>
 
-                    <div class="card collapsible">
+                    <div class="card collapsible collapsed">
                         <div class="card-header">
                             <div class="card-title">Danger Zone</div>
                         </div>
@@ -7548,7 +7592,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         Open Store Settings &rarr;
                     </a>
                 </div>
-                <div class="card collapsible" data-admin-only="true" id="card-developer">
+                <div class="card collapsible collapsed" data-admin-only="true" id="card-developer">
                     <div class="card-header">
                         <div class="card-title">Developer / Debug</div>
                     </div>
@@ -7578,7 +7622,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </button>
                     </div>
                 </div>
-                <div class="card collapsible" data-admin-only="true" id="card-invoice-errors">
+                <div class="card collapsible collapsed" data-admin-only="true" id="card-invoice-errors">
                     <div class="card-header">
                         <div class="card-title">Invoice Page Errors</div>
                     </div>
@@ -7603,7 +7647,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         </button>
                     </div>
                 </div>
-                <div class="card collapsible" data-admin-only="true" id="card-notifications">
+                <div class="card collapsible collapsed" data-admin-only="true" id="card-notifications">
                     <div class="card-header">
                         <div class="card-title">Email Notifications</div>
                     </div>
@@ -7768,7 +7812,7 @@ header('Cache-Control: no-cache, must-revalidate');
                         <p class="form-help" id="notifications-pending" style="margin-top: 0.5rem;"></p>
                     </div>
                 </div>
-                <div class="card collapsible" data-admin-only="true">
+                <div class="card collapsible collapsed" data-admin-only="true">
                     <div class="card-header">
                         <div class="card-title">Server URL</div>
                     </div>
@@ -7811,7 +7855,7 @@ header('Cache-Control: no-cache, must-revalidate');
                     background tasks also fire opportunistically from admin
                     page-loads (5-min gate) and checkout views.
                 -->
-                <div class="card collapsible" data-admin-only="true" id="card-cron-url">
+                <div class="card collapsible collapsed" data-admin-only="true" id="card-cron-url">
                     <div class="card-header">
                         <div class="card-title">Cron URL</div>
                     </div>
@@ -7859,7 +7903,7 @@ header('Cache-Control: no-cache, must-revalidate');
                     if untouched. After applying, it probes health.php and
                     auto-rolls-back any build that fails to boot.
                 -->
-                <div class="card collapsible" data-admin-only="true" id="card-auto-update">
+                <div class="card collapsible collapsed" data-admin-only="true" id="card-auto-update">
                     <div class="card-header">
                         <div class="card-title">Auto-update</div>
                     </div>
@@ -7938,7 +7982,7 @@ header('Cache-Control: no-cache, must-revalidate');
                     level here or on the wizard's analytics screen. The preview
                     is the exact JSON the chosen level sends.
                 -->
-                <div class="card collapsible" data-admin-only="true" id="card-usage-stats">
+                <div class="card collapsible collapsed" data-admin-only="true" id="card-usage-stats">
                     <div class="card-header">
                         <div class="card-title">Anonymous usage statistics</div>
                     </div>
@@ -7992,7 +8036,7 @@ header('Cache-Control: no-cache, must-revalidate');
 
                 <!-- My Account card: own password + logout, available to every logged-in user.
                      Managed installs hide it: login is automatic via SSO from the shop admin. -->
-                <div class="card collapsible<?= $isManaged ? ' managed-hidden' : '' ?>" id="card-my-account">
+                <div class="card collapsible collapsed<?= $isManaged ? ' managed-hidden' : '' ?>" id="card-my-account">
                     <div class="card-header">
                         <div class="card-title">My Account</div>
                     </div>
@@ -8025,7 +8069,7 @@ header('Cache-Control: no-cache, must-revalidate');
                 </div>
 
                 <!-- Users card: admin-only. Managed installs hide it (SSO owns accounts). -->
-                <div class="card collapsible hidden<?= $isManaged ? ' managed-hidden' : '' ?>" id="card-users" data-admin-only="true">
+                <div class="card collapsible collapsed hidden<?= $isManaged ? ' managed-hidden' : '' ?>" id="card-users" data-admin-only="true">
                     <div class="card-header">
                         <div class="card-title">Users</div>
                         <button class="btn" id="btn-add-user" style="padding: 0.25rem 0.75rem; font-size: 0.85rem;">Add user</button>
@@ -8038,7 +8082,7 @@ header('Cache-Control: no-cache, must-revalidate');
                 <!-- Stuck Funds card: admin-only.
                      Hidden when no store has any sats stranded in a mint with
                      an active withdrawal-failure flag. -->
-                <div class="card collapsible hidden" id="card-stuck-funds" data-admin-only="true">
+                <div class="card collapsible collapsed hidden" id="card-stuck-funds" data-admin-only="true">
                     <div class="card-header">
                         <div class="card-title">Stuck Funds</div>
                     </div>
@@ -8058,7 +8102,7 @@ header('Cache-Control: no-cache, must-revalidate');
                 </div>
 
                 <!-- Mint Reliability card: admin-only -->
-                <div class="card collapsible hidden" id="card-mint-reliability" data-admin-only="true">
+                <div class="card collapsible collapsed hidden" id="card-mint-reliability" data-admin-only="true">
                     <div class="card-header">
                         <div class="card-title">Mint Reliability</div>
                         <button class="btn btn-secondary" id="btn-reset-all-mint-counters" style="padding: 0.25rem 0.75rem; font-size: 0.8rem;">Reset all counters</button>
@@ -8074,7 +8118,7 @@ header('Cache-Control: no-cache, must-revalidate');
                 </div>
 
                 <!-- Trusted Mints card: admin-only -->
-                <div class="card collapsible hidden" id="card-trusted-mints" data-admin-only="true">
+                <div class="card collapsible collapsed hidden" id="card-trusted-mints" data-admin-only="true">
                     <div class="card-header">
                         <div class="card-title">Trusted Mints</div>
                     </div>
@@ -8101,7 +8145,7 @@ header('Cache-Control: no-cache, must-revalidate');
                     </div>
                 </div>
 
-                <div class="card collapsible" id="card-diagnostics" data-admin-only="true">
+                <div class="card collapsible collapsed" id="card-diagnostics" data-admin-only="true">
                     <div class="card-header">
                         <div class="card-title">Diagnostic Report</div>
                     </div>
@@ -9548,6 +9592,10 @@ header('Cache-Control: no-cache, must-revalidate');
             document.getElementById(`view-${view}`).classList.add('active');
             document.querySelector(`[data-view="${view}"]`).classList.add('active');
 
+            // Settings cards start closed every time the operator lands on
+            // the Stores or Settings view (including the initial URL restore).
+            if (view === 'stores' || view === 'settings') collapseSettingsCards(view);
+
             const titles = {
                 dashboard: 'Dashboard',
                 invoices: 'Invoices',
@@ -9608,6 +9656,15 @@ header('Cache-Control: no-cache, must-revalidate');
                     loadInvoiceErrorSettings();
                 }
             }
+        }
+
+        // Collapse every collapsible card in the given view. Cards the operator
+        // opens stay open across store switches and dashboard refreshes within
+        // the view; only re-entering the view (or reloading) closes them again.
+        function collapseSettingsCards(view) {
+            document.querySelectorAll(`#view-${view} .card.collapsible`).forEach(card => {
+                card.classList.add('collapsed');
+            });
         }
 
         // Build a URL for a view, preserving the invoices ?status filter when

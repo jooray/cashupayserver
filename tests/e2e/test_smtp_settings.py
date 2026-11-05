@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import ConfiguredPayserver, DEFAULT_ADMIN_PASSWORD
+from fixtures.browser import expand_settings_cards
 
 
 @pytest.fixture
@@ -35,6 +36,7 @@ def admin_ctx(configured: ConfiguredPayserver, browser):
 
 def _goto_settings(page, base):
     page.goto(f"{base}/admin/settings", wait_until="networkidle")
+    expand_settings_cards(page)
     page.wait_for_timeout(800)
 
 

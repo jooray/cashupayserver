@@ -545,8 +545,9 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         }
 
         .logo {
-            font-size: 1.5rem;
-            line-height: 1;
+            height: 22px;
+            width: auto;
+            display: block;
         }
 
         .merchant-name {
@@ -750,7 +751,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             background: rgba(255, 255, 255, 0.15);
         }
 
-        /* Share stays compact so "Open in Wallet" + "Copy ..." keep their
+        /* Share stays compact so "Pay with BTC wallet" + "Copy ..." keep their
            room when the row holds three buttons; on narrow screens it
            collapses to just the icon (the aria-label keeps it accessible). */
         .btn-row .btn-share {
@@ -836,8 +837,12 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             100% { background: transparent; color: var(--text-secondary); }
         }
 
-        /* "Pay with [logos] or any Bitcoin wallet" row.
-           Each SVG carries its own brand fill; the row only sets size. */
+        /* "Pay with [logos]" row with "or any Bitcoin wallet" on its own
+           line beneath. Each SVG carries its own brand fill; the row only
+           sets size. Every logo is a wallet link equivalent to the "Pay with
+           BTC wallet" button of the active method (see
+           applyPaymentMethodLinks); on a view with nothing to open the
+           anchors carry no href and render inert. */
         .payment-methods {
             margin-top: 0.85rem;
             display: flex;
@@ -852,6 +857,11 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         .payment-methods .pm-label {
             white-space: nowrap;
         }
+        .payment-methods .pm-label-any {
+            flex-basis: 100%;
+            font-size: 0.95rem;
+            margin-top: 0.15rem;
+        }
         .payment-methods .pm-logos {
             display: inline-flex;
             flex-wrap: wrap;
@@ -859,8 +869,8 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             justify-content: center;
             gap: 0.5rem;
         }
-        /* Each brand is a logo stacked over its name, wrapped in a link to
-           the provider's site. */
+        /* Each brand is a logo stacked over its name, wrapped in a wallet
+           link (same target as the "Pay with BTC wallet" button). */
         .pm-item {
             display: inline-flex;
             flex-direction: column;
@@ -874,8 +884,11 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             line-height: 1;
             white-space: nowrap;
         }
-        .pm-item:hover .pm-name {
+        .pm-item[href]:hover .pm-name {
             color: var(--text-primary);
+        }
+        .pm-item:not([href]) {
+            cursor: default;
         }
         .pm-logo {
             display: inline-block;
@@ -1150,7 +1163,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
     <div class="container">
         <div class="payment-card">
             <div class="merchant-header">
-                <span class="logo">&#9889;</span>
+                <img class="logo" src="<?= htmlspecialchars(Urls::assets('img/barebits-logo.svg')) ?>" alt="BareBits">
                 <span class="merchant-name"><?= htmlspecialchars($storeName) ?></span>
             </div>
 
@@ -1337,7 +1350,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                             </svg>
-                            Open in Wallet
+                            Pay with BTC wallet
                         </a>
                         <button type="button" class="btn btn-secondary" data-copy="<?= htmlspecialchars($invoice['bolt11']) ?>">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1383,7 +1396,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                                 <circle cx="12" cy="12" r="10"></circle>
                                 <path d="M9.5 8h4a2.5 2.5 0 0 1 0 5h-4v-5zm0 5h4.5a2.5 2.5 0 0 1 0 5h-4.5v-5z"></path>
                             </svg>
-                            Open in Wallet
+                            Pay with BTC wallet
                         </a>
                         <button type="button" class="btn btn-secondary" data-copy="<?= htmlspecialchars($bip21) ?>">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1465,20 +1478,34 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 <?php
                 $initialMethod = $firstMethod;
                 $imgBase = Urls::images('payment-methods/');
-                // Logos shown in the "Pay with … or any Bitcoin wallet" row. Each links
-                // to the provider's site and carries a small name caption. `noLightning`
-                // brands (card apps that can't natively send Lightning) are hidden on the
-                // Lightning view via the pm-no-lightning class.
+                // Logos shown in the "Pay with … / or any Bitcoin wallet" row. Each
+                // carries a small name caption and acts as the "Pay with BTC wallet"
+                // button of the active method: the lightning: URI on the Lightning
+                // view, the BIP-21 URI on the on-chain view, and the lightning: URI
+                // again on the Cashu view (no link at all when the invoice has no
+                // Lightning leg). `noLightning` brands (card apps that can't natively
+                // send Lightning) are hidden on the Lightning view via the
+                // pm-no-lightning class.
                 $paymentBrands = [
-                    ['name' => 'Cash App', 'file' => 'cashapp.svg',  'url' => 'https://cash.app'],
-                    ['name' => 'Strike',   'file' => 'strike.png',   'url' => 'https://strike.me',         'class' => 'pm-strike'],
-                    ['name' => 'Coinbase', 'file' => 'coinbase.svg', 'url' => 'https://www.coinbase.com'],
-                    ['name' => 'Kraken',   'file' => 'kraken.svg',   'url' => 'https://www.kraken.com'],
-                    ['name' => 'Venmo',    'file' => 'venmo.svg',    'url' => 'https://venmo.com',          'class' => 'pm-card', 'noLightning' => true],
-                    ['name' => 'PayPal',   'file' => 'paypal.svg',   'url' => 'https://www.paypal.com',     'class' => 'pm-card', 'noLightning' => true],
+                    ['name' => 'Cash App', 'file' => 'cashapp.svg'],
+                    ['name' => 'Strike',   'file' => 'strike.png',   'class' => 'pm-strike'],
+                    ['name' => 'Coinbase', 'file' => 'coinbase.svg'],
+                    ['name' => 'Kraken',   'file' => 'kraken.svg'],
+                    ['name' => 'Venmo',    'file' => 'venmo.svg',    'class' => 'pm-card', 'noLightning' => true],
+                    ['name' => 'PayPal',   'file' => 'paypal.svg',   'class' => 'pm-card', 'noLightning' => true],
                 ];
+                $lightningUri = $hasLightning ? 'lightning:' . $invoice['bolt11'] : '';
+                $pmLinks = [
+                    'lightning' => $lightningUri,
+                    'onchain'   => $hasOnchain ? $bip21 : '',
+                    'cashu'     => $lightningUri,
+                ];
+                $pmInitialHref = $pmLinks[$initialMethod] ?? '';
                 ?>
-                <div class="payment-methods" id="payment-methods" data-method="<?= $initialMethod ?>">
+                <div class="payment-methods" id="payment-methods" data-method="<?= $initialMethod ?>"
+                     data-href-lightning="<?= htmlspecialchars($pmLinks['lightning']) ?>"
+                     data-href-onchain="<?= htmlspecialchars($pmLinks['onchain']) ?>"
+                     data-href-cashu="<?= htmlspecialchars($pmLinks['cashu']) ?>">
                     <span class="pm-label">Pay with</span>
                     <span class="pm-logos">
                         <?php foreach ($paymentBrands as $brand): ?>
@@ -1486,13 +1513,13 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                             $itemClass = 'pm-item' . (!empty($brand['noLightning']) ? ' pm-no-lightning' : '');
                             $logoClass = 'pm-logo' . (!empty($brand['class']) ? ' ' . $brand['class'] : '');
                             ?>
-                            <a class="<?= $itemClass ?>" href="<?= htmlspecialchars($brand['url']) ?>" target="_blank" rel="noopener noreferrer">
+                            <a class="<?= $itemClass ?>"<?= $pmInitialHref !== '' ? ' href="' . htmlspecialchars($pmInitialHref) . '"' : '' ?> aria-label="Pay with BTC wallet (<?= htmlspecialchars($brand['name']) ?>)">
                                 <img class="<?= $logoClass ?>" src="<?= htmlspecialchars($imgBase) ?><?= htmlspecialchars($brand['file']) ?>" alt="<?= htmlspecialchars($brand['name']) ?>" title="<?= htmlspecialchars($brand['name']) ?>">
                                 <span class="pm-name"><?= htmlspecialchars($brand['name']) ?></span>
                             </a>
                         <?php endforeach; ?>
                     </span>
-                    <span class="pm-label">or any Bitcoin wallet</span>
+                    <span class="pm-label pm-label-any">or any Bitcoin wallet</span>
                 </div>
 
                 <div class="barebits-notice">
@@ -1719,6 +1746,21 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             });
         }
 
+        // Point every brand logo in the "Pay with" row at the wallet URI of
+        // the given method (data-href-* on #payment-methods, kept current by
+        // the Lightning refresh). An empty URI drops the href so the logo is
+        // inert rather than a dead link.
+        function applyPaymentMethodLinks(method) {
+            const pm = document.getElementById('payment-methods');
+            if (!pm) return;
+            const key = 'href' + String(method || '').charAt(0).toUpperCase() + String(method || '').slice(1);
+            const href = pm.dataset[key] || '';
+            pm.querySelectorAll('a.pm-item').forEach(a => {
+                if (href) a.setAttribute('href', href);
+                else a.removeAttribute('href');
+            });
+        }
+
         // Tab switching between Lightning and on-chain payment methods.
         document.querySelectorAll('.method-tab').forEach(tab => {
             tab.addEventListener('click', () => {
@@ -1729,6 +1771,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 });
                 const pm = document.getElementById('payment-methods');
                 if (pm) pm.dataset.method = method;
+                applyPaymentMethodLinks(method);
             });
         });
 
@@ -1892,6 +1935,12 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     const open = block.querySelector('a.btn[href^="lightning:"]');
                     if (open) open.href = 'lightning:' + invoice;
                     block.querySelectorAll('button[data-copy]').forEach(b => { b.dataset.copy = invoice; });
+                }
+                const pm = document.getElementById('payment-methods');
+                if (pm) {
+                    pm.dataset.hrefLightning = 'lightning:' + invoice;
+                    pm.dataset.hrefCashu = 'lightning:' + invoice;
+                    applyPaymentMethodLinks(pm.dataset.method);
                 }
                 nofferSub = data.nofferSub || null;
                 restartNofferWatch();

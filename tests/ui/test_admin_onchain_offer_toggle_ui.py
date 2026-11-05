@@ -14,6 +14,7 @@ import time
 import pytest
 
 from conftest import ConfiguredPayserver
+from fixtures.browser import expand_settings_cards
 
 pytestmark = pytest.mark.ui
 
@@ -56,6 +57,7 @@ def test_per_store_onchain_offer_toggle_persists(
     # assertions below must target the per-test store's row.
     page.select_option("#store-select", configured.store_id)
     page.locator('.nav-item[data-view="stores"]').click()
+    expand_settings_cards(page)
     page.wait_for_selector("#onchain-offer-override", state="visible")
     # Wait until the card is populated from dashboardData ("Currently
     # effective" filled in).
@@ -105,6 +107,7 @@ def test_site_wide_onchain_card_is_gone(
     or save button under any id."""
     _login_admin(page, shared_configured)
     page.locator('.nav-item[data-view="settings"]').click()
+    expand_settings_cards(page)
     # The Email Notifications card survives the refactor — use it as the
     # signal that the Settings view has rendered.
     page.wait_for_selector("#card-notifications", state="visible")
