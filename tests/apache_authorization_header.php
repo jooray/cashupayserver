@@ -141,12 +141,20 @@ $boot = 'a2enmod rewrite headers >/dev/null'
     . ' && printf "<Directory /var/www/html/plain>\n    AllowOverride None\n</Directory>\n" > /etc/apache2/conf-enabled/zz-plain.conf'
     . ' && mkdir -p /data && chown www-data:www-data /data && chmod 700 /data'
     . ' && exec apache2-foreground';
+// Pulled on its own: a pull inside "docker run" writes its progress into the output
+// the container ID is read from.
+[$code, $out] = run(['docker', 'pull', '-q', $image]);
+check($code === 0, "pull $image: " . substr(trim($out), -300));
 [$code, $out] = run(['docker', 'run', '-d', '--rm', '-p', '127.0.0.1::80',
     '-v', "$src/www:/var/www/html:ro,z", '-v', "$src/setup.php:/setup.php:ro,z",
     $image, 'sh', '-c', $boot]);
-$container = trim($out);
+// The ID is the last line; anything Docker warns about comes before it.
+$lines = preg_split('/\R/', trim($out)) ?: [];
+$container = (string)end($lines);
+if (preg_match('/^[0-9a-f]{12,}$/', $container) === 1) {
+    $cleanup[] = fn() => run(['docker', 'rm', '-f', $container]);
+}
 check($code === 0 && preg_match('/^[0-9a-f]{12,}$/', $container) === 1, 'start the container: ' . substr(trim($out), -300));
-$cleanup[] = fn() => run(['docker', 'rm', '-f', $container]);
 
 [$code, $out] = run(['docker', 'port', $container, '80/tcp']);
 check($code === 0 && preg_match('/:(\d+)\s*$/m', $out, $m) === 1, "published port (" . trim($out) . ")");
