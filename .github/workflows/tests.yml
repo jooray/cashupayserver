@@ -33,3 +33,11 @@ jobs:
 
       - name: Run the test suite
         run: php tests/run.php
+
+      # The suite runs the API under PHP's built-in server, which always passes the
+      # Authorization header on; Apache does not, so this one goes through a real Apache.
+      - name: API keys through Apache (Docker)
+        if: ${{ matrix.php == '8.4' }}
+        env:
+          CASHUPAY_TEST_APACHE: '1'
+        run: php tests/apache_authorization_header.php
