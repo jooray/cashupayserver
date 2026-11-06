@@ -132,6 +132,13 @@ Server URL: https://yoursite.com/cashupayserver/router.php
 This works on any PHP host without server configuration. The e-commerce plugin will access URLs like:
 - `https://yoursite.com/cashupayserver/router.php/api/v1/stores/.../invoices`
 
+On Apache, the API key travels in the `Authorization` header, which Apache keeps from PHP
+by default. The included `.htaccess` passes it on, and with PHP as an Apache module
+(mod_php) CashuPayServer reads it even without `.htaccess`. With PHP-FPM or CGI behind
+Apache and `.htaccess` not honored, every API request is refused as "unauthenticated":
+add `CGIPassAuth On` (Apache 2.4.13+) for the CashuPayServer folder in the server
+configuration.
+
 #### Option 2: Apache with mod_rewrite
 
 If your host supports `.htaccess` and mod_rewrite (most do), use clean URLs:
