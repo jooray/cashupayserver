@@ -17,6 +17,9 @@ class Background {
     /** Budget of a run done in the visitor's request after the response was sent. */
     const IN_PROCESS_BUDGET = 20;
 
+    /** One after-response run per request, however many triggers fire in it. */
+    private static bool $shutdownRegistered = false;
+
     /** Whether this SAPI can send the response and keep running. */
     private static function canFinishResponse(): bool {
         // WordPress has WP-Cron and its own shutdown handlers; finishing its response
@@ -76,7 +79,12 @@ class Background {
         // often exceeds, and some hosts block such requests altogether; then nothing in
         // the background ever ran (R4, 2026-10-28).
         if (self::canFinishResponse()) {
-            register_shutdown_function([self::class, 'runAfterResponse']);
+            // A normal and an urgent trigger in one request (each past its own
+            // coalescing window) used to register two full runs back to back.
+            if (!self::$shutdownRegistered) {
+                self::$shutdownRegistered = true;
+                register_shutdown_function([self::class, 'runAfterResponse']);
+            }
             return;
         }
 

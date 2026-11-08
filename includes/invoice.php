@@ -1373,8 +1373,8 @@ class Invoice {
     }
 
     /** Local storage of the account that holds these proofs (see accountHoldingSecrets). */
-    private static function storageHoldingSecrets(string $storeId, array $secrets): ?WalletStorage {
-        $account = self::accountHoldingSecrets($storeId, $secrets);
+    private static function storageHoldingSecrets(string $storeId, array $secrets, ?string $mintUrl = null, ?string $unit = null): ?WalletStorage {
+        $account = self::accountHoldingSecrets($storeId, $secrets, $mintUrl, $unit);
         if ($account['mint_url'] === '') {
             return null;
         }
@@ -1387,12 +1387,16 @@ class Invoice {
      * Conditional, not a blind overwrite: proofs a melt or swap journal has reserved
      * are left to that journal, which settles them itself — overwriting them made the
      * journal's own finalization fail ("no longer owns a reserved input").
+     *
+     * $mintUrl/$unit name the exact wallet account (e.g. a transfer row's mint_url and
+     * unit), which may be a former or disabled mint; when null, the account holding the
+     * secrets is looked up among the store's current ones (CPS-11).
      */
-    public static function markProofsSpent(string $storeId, array $secrets): void {
+    public static function markProofsSpent(string $storeId, array $secrets, ?string $mintUrl = null, ?string $unit = null): void {
         if (empty($secrets)) {
             return;
         }
-        $storage = self::storageHoldingSecrets($storeId, $secrets);
+        $storage = self::storageHoldingSecrets($storeId, $secrets, $mintUrl, $unit);
         if (!$storage) {
             return;
         }
@@ -1405,12 +1409,6 @@ class Invoice {
     }
 
     /**
-     * Ask the mint what it thinks of these proofs.
-     *
-     * @param string[] $secrets
-     * @return array<string, string> secret => state, or [] when the mint could not be asked
-     */
-    /**
      * Which of a store's mints actually holds these proofs.
      *
      * A token handed out before a mint switch belongs to the mint it was minted on, which
@@ -1418,12 +1416,31 @@ class Invoice {
      * mint about proofs it has never seen — and a mint answers UNSPENT for secrets it does
      * not know, so the wrong answer looked like a confident one.
      *
+     * When $mintUrl is given, that exact account is used: a transfer row records where
+     * its proofs came from, and that mint may since have been switched away from or
+     * disabled, so it is no longer among the store's accounts and the lookup below would
+     * fall back to the primary (CPS-11). $unit defaults to the matching account's, else
+     * the store's.
+     *
      * @param string[] $secrets
      * @return array{mint_url: string, unit: string}
      */
-    private static function accountHoldingSecrets(string $storeId, array $secrets): array
+    private static function accountHoldingSecrets(string $storeId, array $secrets, ?string $mintUrl = null, ?string $unit = null): array
     {
         $store = Config::getStore($storeId);
+        if ($mintUrl !== null && trim($mintUrl) !== '') {
+            $mintUrl = rtrim(trim($mintUrl), '/');
+            if ($unit === null || trim($unit) === '') {
+                $unit = strtolower((string)($store['mint_unit'] ?? 'sat'));
+                foreach ($store ? Config::getStoreWalletAccounts($storeId) : [] as $account) {
+                    if ($account['mint_url'] === $mintUrl) {
+                        $unit = $account['unit'];
+                        break;
+                    }
+                }
+            }
+            return ['mint_url' => $mintUrl, 'unit' => strtolower(trim($unit))];
+        }
         $fallback = [
             'mint_url' => rtrim((string)($store['mint_url'] ?? ''), '/'),
             'unit' => strtolower((string)($store['mint_unit'] ?? 'sat')),
@@ -1451,7 +1468,14 @@ class Invoice {
         return $fallback;
     }
 
-    public static function checkProofStatesBySecrets(string $storeId, array $secrets): array {
+    /**
+     * NUT-07 states of a store's proofs, asked of the mint that holds them.
+     * $mintUrl/$unit: see accountHoldingSecrets() (null = look it up, as before).
+     *
+     * @param string[] $secrets
+     * @return array<string, string> secret => state, or [] when there is nothing to ask
+     */
+    public static function checkProofStatesBySecrets(string $storeId, array $secrets, ?string $mintUrl = null, ?string $unit = null): array {
         $secrets = array_values(array_filter($secrets, 'strlen'));
         if (empty($secrets)) {
             return [];
@@ -1467,7 +1491,7 @@ class Invoice {
             $Ys[] = bin2hex(\Cashu\Secp256k1::compressPoint(\Cashu\Crypto::hashToCurve($secret)));
         }
 
-        $account = self::accountHoldingSecrets($storeId, $secrets);
+        $account = self::accountHoldingSecrets($storeId, $secrets, $mintUrl, $unit);
         $client = new \Cashu\MintClient($account['mint_url']);
         $response = $client->post('checkstate', ['Ys' => $Ys]);
         $states = $response['states'] ?? null;
@@ -1496,16 +1520,19 @@ class Invoice {
      * Refuses unless the mint confirms every proof is still unspent — if the recipient
      * already redeemed it, there is nothing to take back.
      *
+     * $mintUrl/$unit: the exact account the token came from (see accountHoldingSecrets();
+     * null = look it up among the store's current accounts, as before).
+     *
      * @param string[] $secrets
      * @return int Amount returned to the spendable balance
      */
-    public static function reclaimExportedProofs(string $storeId, array $secrets): int {
+    public static function reclaimExportedProofs(string $storeId, array $secrets, ?string $mintUrl = null, ?string $unit = null): int {
         $secrets = array_values(array_filter($secrets, 'strlen'));
         if (empty($secrets)) {
             throw new Exception('Nothing to reclaim');
         }
 
-        $states = self::checkProofStatesBySecrets($storeId, $secrets);
+        $states = self::checkProofStatesBySecrets($storeId, $secrets, $mintUrl, $unit);
         foreach ($secrets as $secret) {
             if (($states[$secret] ?? null) !== ProofState::UNSPENT) {
                 throw new Exception(
@@ -1515,7 +1542,7 @@ class Invoice {
             }
         }
 
-        $account = self::accountHoldingSecrets($storeId, $secrets);
+        $account = self::accountHoldingSecrets($storeId, $secrets, $mintUrl, $unit);
         $wallet = self::getWalletForStore($storeId, $account['mint_url'], $account['unit']);
         $storage = $wallet->getStorage();
         $proofs = $storage->getProofsBySecretsAsObjects($secrets);
@@ -1783,8 +1810,20 @@ class Invoice {
         foreach (Database::fetchAll("SELECT DISTINCT mint_url FROM invoices WHERE mint_url IS NOT NULL AND mint_url <> ''") as $r) {
             $candidateMints[rtrim($r['mint_url'], '/')] = true;
         }
+        // Removed backup mints, and mints that outgoing transfers or payment requests used.
+        foreach (['store_mints', 'transfers', 'payment_requests'] as $table) {
+            try {
+                foreach (Database::fetchAll("SELECT DISTINCT mint_url FROM {$table} WHERE mint_url IS NOT NULL AND mint_url <> ''") as $r) {
+                    $candidateMints[rtrim($r['mint_url'], '/')] = true;
+                }
+            } catch (Throwable $e) {
+                // Table or column not in this database yet.
+            }
+        }
 
-        $units = ['sat', 'usd', 'eur', 'usdt', 'msat'];
+        // Every unit a namespace could have been made with, not a fixed five (CPS-08).
+        require_once __DIR__ . '/store_safety.php';
+        $units = StoreSafety::candidateUnits();
         $accountsToTry = array_merge([null], array_keys($accounts));
         $out = [];
         foreach ($rows as $r) {
@@ -1864,84 +1903,119 @@ class Invoice {
      * Check pending proofs at the mint and update their state
      */
     public static function checkPendingProofs(string $storeId): array {
+        // Every account of the store, backups included: proofs left PENDING on a backup
+        // mint were never looked at (REL-03). Local storage first; a mint is contacted
+        // only when that account has PENDING proofs to ask about.
+        $result = ['checked' => 0, 'spent' => 0, 'pending' => 0, 'recovered' => 0];
+        $errors = [];
+        foreach (Config::getStoreWalletAccounts($storeId) as $account) {
+            try {
+                $storage = self::accountStorage($storeId, $account['mint_url'], $account['unit']);
+                if ($storage === null) {
+                    continue;
+                }
+                $counts = self::checkPendingProofsAt($storage, $account['mint_url']);
+                foreach (['checked', 'spent', 'pending'] as $key) {
+                    $result[$key] += $counts[$key];
+                }
+            } catch (\Throwable $e) {
+                error_log("CashuPayServer: Error checking pending proofs at {$account['mint_url']}: " . $e->getMessage());
+                $errors[] = $e->getMessage();
+            }
+        }
+        if ($errors !== []) {
+            $result['error'] = $errors[0];
+        }
+        return $result;
+    }
+
+    /** checkPendingProofs() for one account. @return array{checked: int, spent: int, pending: int} */
+    private static function checkPendingProofsAt(WalletStorage $storage, string $mintUrl): array {
+        $none = ['checked' => 0, 'spent' => 0, 'pending' => 0];
+        $rows = $storage->getProofs(ProofState::PENDING);
+        if (empty($rows)) {
+            return $none;
+        }
+
+        // Melt/swap recovery exclusively owns these inputs. A mint may briefly report
+        // them UNSPENT after a timeout even though the original request is queued.
+        $reserved = array_flip($storage->getReservedInputSecrets());
+        $rows = array_values(array_filter(
+            $rows,
+            fn($row) => !isset($reserved[$row['secret']])
+        ));
+        if (empty($rows)) {
+            return $none;
+        }
+
+        // Build Y values for batch check
+        $Ys = [];
+        $proofMap = [];
+        foreach ($rows as $row) {
+            $secret = $row['secret'];
+            $Y = \Cashu\Crypto::hashToCurve($secret);
+            $YHex = bin2hex(\Cashu\Secp256k1::compressPoint($Y));
+            $Ys[] = $YHex;
+            $proofMap[$YHex] = $secret;
+        }
+
+        $client = new \Cashu\MintClient($mintUrl);
+        $response = $client->post('checkstate', ['Ys' => $Ys]);
+
+        $states = $response['states'] ?? null;
+        if (!is_array($states) || count($states) !== count($Ys)) {
+            throw new \Exception('Mint returned an incomplete proof state response');
+        }
+
+        // Only the SPENT transition is applied. Returning a proof to the spendable
+        // pool because the mint says UNSPENT is exactly how the same bearer proofs
+        // used to be handed out twice: "not redeemed yet" is not "still ours".
+        $spentSecrets = [];
+        $stillPending = 0;
+        foreach ($states as $i => $state) {
+            $YHex = $Ys[$i];
+            if (isset($state['Y']) && !hash_equals($YHex, strtolower((string)$state['Y']))) {
+                throw new \Exception('Mint returned proof states in an unexpected order');
+            }
+            if (!isset($proofMap[$YHex])) continue;
+
+            if (strtoupper($state['state'] ?? '') === ProofState::SPENT) {
+                $spentSecrets[] = $proofMap[$YHex];
+            } else {
+                $stillPending++;
+            }
+        }
+
+        if (!empty($spentSecrets)) {
+            $storage->transitionProofStates(
+                $spentSecrets, ProofState::SPENT, [ProofState::PENDING], $reserved
+            );
+        }
+
+        return ['checked' => count($rows), 'spent' => count($spentSecrets), 'pending' => $stillPending];
+    }
+
+    /**
+     * recoverPendingSwaps() for one store wallet, with the plans of swaps paying NUT-18
+     * requests recorded first (PaymentRequest::rememberSwapPlans(), CPS-01). Under the
+     * store's receive lock, so receive.php cannot journal a new request swap between the
+     * two steps; when a receive is in progress the swaps wait for the next run.
+     */
+    public static function recoverSwapsForStore(string $storeId, Wallet $wallet): array {
+        if ($wallet->getStorage()->getPendingOperations('swap') === []) {
+            return [];
+        }
+        require_once __DIR__ . '/payment_request.php';
+        require_once __DIR__ . '/locks.php';
+        $lock = cashupay_acquire_lock('receive_' . $storeId);
+        if (!$lock) {
+            return ['skipped' => 'receive in progress'];
+        }
         try {
-            $wallet = self::getWalletForStore($storeId);
-
-            $rows = [];
-            if ($wallet->hasStorage()) {
-                $rows = $wallet->getStorage()->getProofs(ProofState::PENDING);
-            }
-
-            if (empty($rows)) {
-                return ['checked' => 0, 'spent' => 0, 'recovered' => 0];
-            }
-
-            // Melt/swap recovery exclusively owns these inputs. A mint may briefly report
-            // them UNSPENT after a timeout even though the original request is queued.
-            $reserved = array_flip($wallet->getStorage()->getReservedInputSecrets());
-            $rows = array_values(array_filter(
-                $rows,
-                fn($row) => !isset($reserved[$row['secret']])
-            ));
-            if (empty($rows)) {
-                return ['checked' => 0, 'spent' => 0, 'recovered' => 0];
-            }
-
-            // Build Y values for batch check
-            $Ys = [];
-            $proofMap = [];
-            foreach ($rows as $row) {
-                $secret = $row['secret'];
-                $Y = \Cashu\Crypto::hashToCurve($secret);
-                $YHex = bin2hex(\Cashu\Secp256k1::compressPoint($Y));
-                $Ys[] = $YHex;
-                $proofMap[$YHex] = $secret;
-            }
-
-            // Check with mint
-            $store = Config::getStore($storeId);
-            $client = new \Cashu\MintClient($store['mint_url']);
-            $response = $client->post('checkstate', ['Ys' => $Ys]);
-
-            $states = $response['states'] ?? null;
-            if (!is_array($states) || count($states) !== count($Ys)) {
-                throw new \Exception('Mint returned an incomplete proof state response');
-            }
-
-            // Only the SPENT transition is applied. Returning a proof to the spendable
-            // pool because the mint says UNSPENT is exactly how the same bearer proofs
-            // used to be handed out twice: "not redeemed yet" is not "still ours".
-            $spentSecrets = [];
-            $stillPending = 0;
-            foreach ($states as $i => $state) {
-                $YHex = $Ys[$i];
-                if (isset($state['Y']) && !hash_equals($YHex, strtolower((string)$state['Y']))) {
-                    throw new \Exception('Mint returned proof states in an unexpected order');
-                }
-                if (!isset($proofMap[$YHex])) continue;
-
-                if (strtoupper($state['state'] ?? '') === ProofState::SPENT) {
-                    $spentSecrets[] = $proofMap[$YHex];
-                } else {
-                    $stillPending++;
-                }
-            }
-
-            if (!empty($spentSecrets)) {
-                $wallet->getStorage()->transitionProofStates(
-                    $spentSecrets, ProofState::SPENT, [ProofState::PENDING], $reserved
-                );
-            }
-
-            return [
-                'checked' => count($rows),
-                'spent' => count($spentSecrets),
-                'pending' => $stillPending,
-                'recovered' => 0,
-            ];
-        } catch (\Throwable $e) {
-            error_log("CashuPayServer: Error checking pending proofs: " . $e->getMessage());
-            return ['checked' => 0, 'spent' => 0, 'pending' => 0, 'recovered' => 0, 'error' => $e->getMessage()];
+            PaymentRequest::rememberSwapPlans($wallet);
+            return $wallet->recoverPendingSwaps();
+        } finally {
+            cashupay_release_lock($lock);
         }
     }
 
@@ -1964,7 +2038,7 @@ class Invoice {
                     }
                     $wallet = self::getWalletForStore($store['id'], $account['mint_url'], $account['unit']);
                     $melts = $wallet->recoverPendingMelts();
-                    $swaps = $wallet->recoverPendingSwaps();
+                    $swaps = self::recoverSwapsForStore($store['id'], $wallet);
                     // A mint whose response was lost leaves proofs the mint already
                     // signed and we never received; nothing used to look for them.
                     $mints = $wallet->recoverPendingMints();

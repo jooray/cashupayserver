@@ -397,16 +397,30 @@ class Config {
      * How many decimals a mint unit's smallest amount has, for display and input.
      *
      * The one rule every screen and the pricing code (ExchangeRates::toSmallestUnit)
-     * share: sat and msat are whole numbers, btc counts satoshis (8 decimals), and any
-     * other unit — a fiat currency or a dollar stablecoin — counts cents.
+     * share: sat and msat are whole numbers, btc counts satoshis (8 decimals), currencies
+     * that have no minor unit (ISO 4217 exponent 0: yen, won, …) are whole numbers too,
+     * and any other unit — a fiat currency or a dollar stablecoin — counts cents.
+     * Pricing 1000 JPY as 100,000 "cents" charged a yen store 100 times the price.
+     * Mirrored by unitDecimals() in admin.php's script.
      */
     public static function unitDecimals(string $unit): int {
-        return match (strtolower(trim($unit))) {
-            'sat', 'sats', 'msat' => 0,
+        $unit = strtolower(trim($unit));
+        if (in_array($unit, self::ZERO_DECIMAL_UNITS, true)) {
+            return 0;
+        }
+        return match ($unit) {
             'btc' => 8,
             default => 2,
         };
     }
+
+    /** Units whose smallest amount is one whole unit. */
+    public const ZERO_DECIMAL_UNITS = [
+        'sat', 'sats', 'msat',
+        // ISO 4217 currencies with no minor unit
+        'bif', 'clp', 'djf', 'gnf', 'isk', 'jpy', 'kmf', 'krw', 'pyg', 'rwf', 'ugx',
+        'vnd', 'vuv', 'xaf', 'xof', 'xpf',
+    ];
 
     /** The library's Unit for this mint unit, with this application's decimals. */
     public static function unitFor(string $unit): \Cashu\Unit {

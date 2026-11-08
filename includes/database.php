@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 12;
+    private const SCHEMA_VERSION = 13;
 
     /** Set when ensureCurrentSchema() failed, so callers can tell "broken" from "new". */
     private static ?string $migrationError = null;
@@ -612,6 +612,7 @@ HTACCESS;
             result TEXT,
             input_secrets TEXT,
             receiving_since INTEGER,
+            swap_plan TEXT,
             expires_at INTEGER NOT NULL,
             created_at INTEGER NOT NULL,
             FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE
@@ -810,6 +811,17 @@ HTACCESS;
                     self::addColumnIfMissing($pdo, 'payment_requests', 'receiving_since', 'INTEGER');
                 }
                 $pdo->exec('PRAGMA user_version = 12');
+            }
+            if ($version < 13) {
+                // The output plan (keyset, counter range, amounts) of the swap paying a
+                // claimed request, copied from the wallet's swap journal before any
+                // background recovery may settle it. Inputs SPENT in our wallet do not
+                // prove the swap credited us (the mint may have spent them for someone
+                // else); the plan's outputs being in the wallet does (CPS-01).
+                if (self::tableExists($pdo, 'payment_requests')) {
+                    self::addColumnIfMissing($pdo, 'payment_requests', 'swap_plan', 'TEXT');
+                }
+                $pdo->exec('PRAGMA user_version = 13');
             }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()

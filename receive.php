@@ -313,6 +313,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $mintUrl = Config::getStoreMintUrl($storeId);
         $seed = Config::getStoreSeedPhrase($storeId);
         $dbPath = Database::getDbPath();
+        if ($paymentRequest !== null) {
+            // A published request names the mint and unit it asked to be paid in. Pay it
+            // there while that mint is still one the shop receives with (primary or an
+            // enabled backup); after the shop dropped it, ask for a new request instead
+            // of receiving into a wallet nobody looks at (REL-06).
+            $requestMint = \Cashu\MintClient::canonicalizeMintUrl((string)$paymentRequest['mint_url']);
+            $requestUnit = strtolower((string)$paymentRequest['unit']);
+            $usable = false;
+            foreach (Config::getStoreWalletAccounts($storeId) as $account) {
+                if ($account['enabled'] && $account['unit'] === $requestUnit
+                    && \Cashu\MintClient::canonicalizeMintUrl($account['mint_url']) === $requestMint) {
+                    $usable = true;
+                    $mintUrl = $account['mint_url'];
+                    $unit = $account['unit'];
+                    break;
+                }
+            }
+            if (!$usable) {
+                throw new ReceiveRefusal('This payment request is out of date: the shop has changed how it accepts payments. Ask the shop for a new payment request. Your ecash has not been taken.');
+            }
+        }
 
         // Reject a token for the wrong mint or unit before loading keysets from it.
         if (\Cashu\MintClient::canonicalizeMintUrl($parsed->mint) !== \Cashu\MintClient::canonicalizeMintUrl($mintUrl)) {
@@ -326,6 +347,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $wallet = new Wallet($mintUrl, $unit, $dbPath, $accountId);
         $wallet->loadMint();
         $wallet->initFromMnemonic($seed);
+        if ($wallet->requiresRecovery()) {
+            // The shop's wallet is still being restored and cannot take payments yet.
+            // Refuse before claiming, with words the payer can act on (REL-06).
+            throw new ReceiveRefusal('This shop cannot accept ecash payments at the moment. Your ecash has not been taken; please try again later or pay another way.');
+        }
         $wallet->resolveShortKeysetIds($parsed->proofs);
         $secrets = array_map(fn($p) => $p->secret, $parsed->proofs);
 
@@ -354,9 +380,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // that journal under it would race it, so only older claims are driven.
                 $current = PaymentRequest::getById($paymentRequest['id']);
                 if (time() - (int)($current['receiving_since'] ?? 0) >= 120) {
+                    // Record the swap's output plan before recovery may settle it, so
+                    // spent inputs alone never count as paid (CPS-01).
+                    PaymentRequest::rememberSwapPlans($wallet);
                     $wallet->recoverPendingSwaps();
+                    $current = PaymentRequest::getById($paymentRequest['id']);
                 }
-                $state = PaymentRequest::receiptState($wallet, $secrets, (int)($current['receiving_since'] ?? PHP_INT_MAX));
+                $state = PaymentRequest::receiptState($wallet, $secrets, (int)($current['receiving_since'] ?? PHP_INT_MAX),
+                    PaymentRequest::swapPlan($current ?? []));
                 if ($state['state'] === 'paid') {
                     $response = ['success' => true, 'id' => $paymentRequest['id'], 'amount' => $state['amount'], 'unit' => $unit];
                     PaymentRequest::markPaid($paymentRequest, $state['amount'], $response);
@@ -452,8 +483,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Did the money move? Only a refused token frees the request; a swap left
             // in flight keeps it bound so the payer is told not to pay again.
             try {
+                // A swap left in flight keeps its journal; record its plan now (CPS-01).
+                PaymentRequest::rememberSwapPlans($wallet);
                 $current = PaymentRequest::getById($paymentRequest['id']);
-                $state = PaymentRequest::receiptState($wallet, $secrets, (int)($current['receiving_since'] ?? PHP_INT_MAX));
+                $state = PaymentRequest::receiptState($wallet, $secrets, (int)($current['receiving_since'] ?? PHP_INT_MAX),
+                    PaymentRequest::swapPlan($current ?? []));
             } catch (Throwable $stateError) {
                 $state = ['state' => 'pending', 'amount' => 0];
             }
@@ -496,6 +530,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         echo json_encode([
             'status' => PaymentRequest::isExpired($row) ? 'expired' : $row['status'],
             'receivedAmount' => $row['received_amount'] !== null ? (int)$row['received_amount'] : null,
+            // receivedAmount is in the unit's smallest step (cents for USD): show this.
+            'receivedFormatted' => $row['received_amount'] !== null
+                ? Config::unitFor((string)$row['unit'])->format((int)$row['received_amount']) : null,
             'unit' => $row['unit'],
         ]);
         exit;
@@ -968,12 +1005,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
         // Copy to clipboard
         function copyRequest() {
-            navigator.clipboard.writeText(requests[shown]).then(() => {
+            const text = requests[shown];
+            const done = (ok) => {
                 const status = document.getElementById('status');
                 if (status.dataset.final) return;
-                status.textContent = 'Copied to clipboard!';
+                status.textContent = ok ? 'Copied to clipboard!' : 'Could not copy. Press and hold the code to copy it.';
                 setTimeout(() => { if (!status.dataset.final) status.textContent = idleText; }, 2000);
-            });
+            };
+            // navigator.clipboard only exists on HTTPS pages (and localhost).
+            if (navigator.clipboard && window.isSecureContext) {
+                navigator.clipboard.writeText(text).then(() => done(true), () => done(fallbackCopy(text)));
+            } else {
+                done(fallbackCopy(text));
+            }
+        }
+
+        function fallbackCopy(text) {
+            const area = document.createElement('textarea');
+            area.value = text;
+            area.setAttribute('readonly', '');
+            area.style.position = 'fixed';
+            area.style.opacity = '0';
+            document.body.appendChild(area);
+            area.select();
+            let ok = false;
+            try {
+                ok = document.execCommand('copy');
+            } catch (e) {
+                ok = false;
+            }
+            document.body.removeChild(area);
+            return ok;
         }
 
         // Tell the person holding this screen when the money has arrived.
@@ -984,7 +1046,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 const status = document.getElementById('status');
                 if (data.status === 'paid') {
                     status.dataset.final = '1';
-                    status.textContent = 'Paid ✓' + (data.receivedAmount !== null ? ` (${data.receivedAmount} ${String(data.unit).toUpperCase()} received)` : '');
+                    const received = data.receivedFormatted
+                        ?? (data.receivedAmount !== null ? `${data.receivedAmount} ${String(data.unit).toUpperCase()}` : null);
+                    status.textContent = 'Paid ✓' + (received !== null ? ` (${received} received)` : '');
                     status.style.color = '#48bb78';
                     status.style.fontWeight = '600';
                     return;

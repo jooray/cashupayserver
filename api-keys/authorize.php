@@ -589,6 +589,27 @@ $redirectHostLabel = $redirect !== null ? (string)parse_url($redirect, PHP_URL_H
                 <div class="error"><?php echo htmlspecialchars($error); ?></div>
             <?php endif; ?>
 
+            <?php if (Urls::isWordPress()): ?>
+                <?php
+                // WordPress has no CashuPay password: the admin is whoever WordPress says
+                // is signed in, so the password form could never succeed (ARGON UX-06.3).
+                // Back to this page after the WordPress login, as a root-relative path (see
+                // the login handler above for why not the raw REQUEST_URI).
+                $wpSelfPath = '/' . ltrim((string)(parse_url((string)($_SERVER['REQUEST_URI'] ?? '/'), PHP_URL_PATH) ?? '/'), "/\\");
+                $wpSelfQuery = (string)($_SERVER['QUERY_STRING'] ?? '');
+                $wpSignedIn = function_exists('is_user_logged_in') && is_user_logged_in();
+                ?>
+                <?php if ($wpSignedIn): ?>
+                    <p class="subtitle">
+                        Your WordPress account is not allowed to connect apps to CashuPay. Ask the
+                        site administrator to open this page while signed in with their account.
+                    </p>
+                <?php else: ?>
+                    <p class="subtitle">Sign in to WordPress with your administrator account; you come back to this page afterwards.</p>
+                    <a href="<?php echo htmlspecialchars(wp_login_url($wpSelfPath . ($wpSelfQuery !== '' ? '?' . $wpSelfQuery : ''))); ?>"
+                       class="btn btn-primary" style="text-decoration: none; text-align: center;">Sign in to WordPress</a>
+                <?php endif; ?>
+            <?php else: ?>
             <form method="POST">
                 <input type="hidden" name="action" value="login">
                 <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
@@ -600,6 +621,7 @@ $redirectHostLabel = $redirect !== null ? (string)parse_url($redirect, PHP_URL_H
 
                 <button type="submit" class="btn btn-primary">Sign In</button>
             </form>
+            <?php endif; ?>
 
             <?php if ($redirect): ?>
                 <form method="POST" style="margin-top: 0.5rem;">

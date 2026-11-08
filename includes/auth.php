@@ -117,19 +117,31 @@ class Auth {
             // M4: Log successful login
             error_log("CashuPayServer: Admin login successful from {$clientIp}");
 
-            self::initSession();
-            $_SESSION['admin_logged_in'] = true;
-            $_SESSION['login_time'] = time();
-            $_SESSION['last_seen'] = time();
-            $_SESSION['password_version'] = self::passwordVersion();
-            session_regenerate_id(true);
-            self::rotateCsrfToken();
+            self::startAdminSession();
             return true;
         }
 
         // M4: Log failed login attempt
         error_log("CashuPayServer: Failed admin login attempt from {$clientIp}");
         return false;
+    }
+
+    /**
+     * Make this browser's session an admin session: the one code path behind a password
+     * login and the setup wizard's "the password you just chose logs you in" (ARGON
+     * UX-04). The session id is regenerated and the CSRF token rotated, so an id or token
+     * handed to the anonymous visitor before (or planted from a sibling subdomain) is
+     * worthless afterwards. Callers that render a form after this must fetch the CSRF
+     * token again.
+     */
+    public static function startAdminSession(): void {
+        self::initSession();
+        $_SESSION['admin_logged_in'] = true;
+        $_SESSION['login_time'] = time();
+        $_SESSION['last_seen'] = time();
+        $_SESSION['password_version'] = self::passwordVersion();
+        session_regenerate_id(true);
+        self::rotateCsrfToken();
     }
 
     /**

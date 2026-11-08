@@ -102,4 +102,37 @@ check($status === 404, 'canmodifyinvoices still implies it');
     $p + ['invoiceId' => 'inv_missing'], ['status' => 'Invalid']);
 check($status === 403, 'a view-only key does not');
 
+echo "Invoice payment methods match BTCPay 2.x (CPS-05)\n";
+$now = time();
+foreach (['inv_new' => 'New', 'inv_paid' => 'Settled'] as $id => $st) {
+    Database::insert('invoices', [
+        'id' => $id, 'store_id' => 'store_a', 'status' => $st, 'amount' => '25.00', 'currency' => 'EUR',
+        'amount_sats' => 2500, 'exchange_rate' => 100000.0, 'quote_id' => "q-$id", 'bolt11' => 'lnbc25u1pmock',
+        'mint_url' => 'https://mint.example.com', 'mint_unit' => 'sat',
+        'created_at' => $now - 60, 'expiration_time' => $now + 900, 'last_polled_at' => $now - 5,
+    ]);
+}
+$viewKey = ['store_id' => 'store_a', 'permissions' => ['btcpay.store.canviewinvoices']];
+// Every key BTCPay's greenfield-php InvoicePaymentMethod/InvoicePayment getters read
+// (WooCommerce's updateWCOrderPayments uses them; a missing one is a TypeError).
+$pmKeys = ['activated', 'destination', 'paymentLink', 'rate', 'paymentMethodPaid', 'totalPaid', 'due', 'amount',
+    'paymentMethodFee', 'payments', 'paymentMethodId', 'additionalData', 'currency'];
+[$status, $pm] = callApi('handleInvoicePaymentMethods', $viewKey, $p + ['invoiceId' => 'inv_new']);
+check($status === 200 && count($pm) === 1, 'one payment method');
+check(array_diff($pmKeys, array_keys($pm[0])) === [], 'every BTCPay field is present (missing: '
+    . implode(', ', array_diff($pmKeys, array_keys($pm[0]))) . ')');
+check($pm[0]['currency'] === 'BTC' && $pm[0]['amount'] === '0.00002500' && $pm[0]['due'] === '0.00002500',
+    'amounts are in BTC: a EUR 25 order at 100000 EUR/BTC is 0.00002500');
+check($pm[0]['rate'] === '100000' && $pm[0]['paymentMethodPaid'] === '0.00000000' && $pm[0]['payments'] === [],
+    'rate is EUR per BTC, and nothing is paid yet');
+check($pm[0]['paymentLink'] === 'lightning:lnbc25u1pmock' && $pm[0]['paymentMethodId'] === 'BTC-LN', 'BTCPay 2.x ids and link');
+[, $pm] = callApi('handleInvoicePaymentMethods', $viewKey, $p + ['invoiceId' => 'inv_paid']);
+check($pm[0]['paymentMethodPaid'] === '0.00002500' && $pm[0]['totalPaid'] === '0.00002500' && $pm[0]['due'] === '0.00000000',
+    'a settled invoice is fully paid');
+$pay = $pm[0]['payments'][0] ?? [];
+check(array_diff(['id', 'receivedDate', 'value', 'fee', 'status', 'destination'], array_keys($pay)) === []
+    && $pay['status'] === 'Settled' && $pay['value'] === '0.00002500' && $pay['receivedDate'] === $now - 5,
+    'and lists its payment the way BTCPay does');
+check(json_encode($pm[0]['additionalData']) === '{}', 'additionalData is a JSON object, as upstream');
+
 echo "All webhook and store API checks passed.\n";

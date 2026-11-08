@@ -8,6 +8,7 @@
 
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/http.php';
 
 /**
  * Price provider interface
@@ -45,11 +46,15 @@ class CoinGeckoProvider implements PriceProvider {
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER => [
                 'Accept: application/json',
                 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             ],
-        ]);
+        ] + cashupay_curl_protocol_options());
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -103,8 +108,12 @@ class BinanceProvider implements PriceProvider {
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER => ['Accept: application/json'],
-        ]);
+        ] + cashupay_curl_protocol_options());
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -157,8 +166,12 @@ class KrakenProvider implements PriceProvider {
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_FOLLOWLOCATION => false,
+            CURLOPT_SSL_VERIFYPEER => true,
+            CURLOPT_SSL_VERIFYHOST => 2,
             CURLOPT_HTTPHEADER => ['Accept: application/json'],
-        ]);
+        ] + cashupay_curl_protocol_options());
 
         $response = curl_exec($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
@@ -529,14 +542,18 @@ class ExchangeRates {
     ): int {
         $requestCurrency = strtoupper($requestCurrency);
         $mintUnit = strtoupper($mintUnit);
+        // A float amount below 0.0001 reaches here as "5.0E-5", which BCMath rejects
+        // with a ValueError (a 500 at checkout).
+        $amount = self::normalizeDecimal($amount);
 
         // Normalize sat/sats
         if ($requestCurrency === 'SATS') $requestCurrency = 'SAT';
         if ($mintUnit === 'SATS') $mintUnit = 'SAT';
 
-        // Same unit - no conversion needed
+        // Same unit - no conversion needed. Round up like the cross-currency path: a
+        // price with more decimals than the unit has must not be undercharged.
         if ($requestCurrency === $mintUnit) {
-            return self::toSmallestUnit($amount, $mintUnit);
+            return self::toSmallestUnit($amount, $mintUnit, true);
         }
 
         // Convert through BTC as intermediate
@@ -550,7 +567,7 @@ class ExchangeRates {
         // 0–100 % bound, so a payout cannot deduct a different fee than an invoice adds.
         $exchangeFeePercent = max(0.0, min(100.0, $exchangeFeePercent));
         if ($exchangeFeePercent != 0) {
-            $mintAmount = bcmul($mintAmount, (string)(1 + $exchangeFeePercent / 100), self::SCALE);
+            $mintAmount = bcmul($mintAmount, self::normalizeDecimal(1 + $exchangeFeePercent / 100), self::SCALE);
         }
 
         // Round UP to the mint's smallest unit for invoice pricing, so rounding never
@@ -583,7 +600,7 @@ class ExchangeRates {
             throw self::rateUnavailable($currency);
         }
 
-        return bcdiv($amount, (string)$btcPrice, self::SCALE);
+        return bcdiv($amount, self::normalizeDecimal($btcPrice), self::SCALE);
     }
 
     /**
@@ -610,11 +627,56 @@ class ExchangeRates {
             throw self::rateUnavailable($currency);
         }
 
-        return bcmul($btcAmount, (string)$btcPrice, self::SCALE);
+        return bcmul($btcAmount, self::normalizeDecimal($btcPrice), self::SCALE);
     }
 
     /**
-     * Convert amount to smallest unit (sats for BTC, cents for fiat)
+     * A number as a plain decimal string BCMath accepts.
+     *
+     * PHP prints floats below 0.0001 (and very large ones) in scientific notation, and
+     * every bc*() function throws a ValueError on "5.0E-5". The exponent is applied to
+     * the digits as written, so no float rounding creeps in.
+     */
+    public static function normalizeDecimal(string|int|float $value): string {
+        if (is_int($value)) {
+            return (string)$value;
+        }
+        if (is_float($value) && !is_finite($value)) {
+            throw new InvalidArgumentException('Invalid amount');
+        }
+        $str = trim((string)$value);
+        if (preg_match('/^([+-]?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d{1,3}))?$/', $str, $m) !== 1
+            || ($m[2] === '' && ($m[3] ?? '') === '')) {
+            throw new InvalidArgumentException('Invalid amount: ' . mb_substr($str, 0, 40));
+        }
+        $int = $m[2];
+        $frac = $m[3] ?? '';
+        $exp = isset($m[4]) && $m[4] !== '' ? (int)$m[4] : 0;
+        if (abs($exp) > 64) {
+            throw new InvalidArgumentException('Invalid amount: ' . mb_substr($str, 0, 40));
+        }
+        $digits = $int . $frac;
+        $point = strlen($int) + $exp;
+        if ($point < 0) {
+            $digits = str_repeat('0', -$point) . $digits;
+            $point = 0;
+        }
+        if ($point > strlen($digits)) {
+            $digits .= str_repeat('0', $point - strlen($digits));
+        }
+        $whole = ltrim(substr($digits, 0, $point), '0');
+        $fraction = rtrim(substr($digits, $point), '0');
+        $out = ($whole === '' ? '0' : $whole) . ($fraction === '' ? '' : '.' . $fraction);
+        return ($m[1] === '-' && $out !== '0') ? '-' . $out : $out;
+    }
+
+    /** 10^decimals of a unit as a BCMath string: '100' for cents, '1' for yen. */
+    private static function unitScale(string $unit): string {
+        return '1' . str_repeat('0', Config::unitDecimals($unit));
+    }
+
+    /**
+     * Convert amount to smallest unit (sats for BTC, cents or whole yen for fiat)
      */
     private static function toSmallestUnit(string $amount, string $currency, bool $roundUp = false): int {
         $currency = strtoupper($currency);
@@ -633,8 +695,8 @@ class ExchangeRates {
             return self::toInt(bcmul($amount, '100000000', self::SCALE), $roundUp);
         }
 
-        // Fiat currencies - convert to cents (multiply by 100)
-        return self::toInt(bcmul($amount, '100', self::SCALE), $roundUp);
+        // Fiat currencies: to the smallest unit (cents; whole units for yen and the like)
+        return self::toInt(bcmul($amount, self::unitScale($currency), self::SCALE), $roundUp);
     }
 
     /**
@@ -676,8 +738,8 @@ class ExchangeRates {
 
         // If mint uses the same fiat unit, convert to cents
         if (strtolower($mintUnit) === strtolower($currency)) {
-            // For fiat mints: convert to smallest unit (cents)
-            return (int)bcmul($amount, '100', 0);
+            // For fiat mints: convert to smallest unit (cents, or whole yen)
+            return (int)bcmul(self::normalizeDecimal($amount), self::unitScale($mintUnit), 0);
         }
 
         // Convert fiat to sats
@@ -686,7 +748,7 @@ class ExchangeRates {
             throw self::rateUnavailable($currency);
         }
 
-        $btcAmount = bcdiv($amount, (string)$btcPrice, 8);
+        $btcAmount = bcdiv(self::normalizeDecimal($amount), self::normalizeDecimal($btcPrice), 8);
         $sats = bcmul($btcAmount, '100000000', 0);
 
         return (int)$sats;
@@ -708,7 +770,7 @@ class ExchangeRates {
         }
 
         $btcAmount = bcdiv((string)$sats, '100000000', 8);
-        $fiatAmount = bcmul($btcAmount, (string)$btcPrice, 2);
+        $fiatAmount = bcmul($btcAmount, self::normalizeDecimal($btcPrice), 2);
 
         return $fiatAmount;
     }
@@ -770,24 +832,25 @@ class ExchangeRates {
             return $amountInSmallestUnit;
         }
 
-        // msat to sats
+        // msat to sats. Round down: 1500 msat buys 1 sat, not 2 (ceil overstated what a
+        // balance could pay, the same rule as LightningAddress::mintAmountToSats).
         if ($mintUnit === 'MSAT') {
-            return (int)ceil($amountInSmallestUnit / 1000);
+            return intdiv($amountInSmallestUnit, 1000);
         }
 
-        // Fiat: convert from cents to sats
-        // Step 1: Convert cents to fiat amount (divide by 100)
-        $fiatAmount = bcdiv((string)$amountInSmallestUnit, '100', 8);
+        // Fiat: convert from the smallest unit (cents, or whole yen) to sats
+        // Step 1: Convert to the fiat amount
+        $fiatAmount = bcdiv((string)$amountInSmallestUnit, self::unitScale($mintUnit), self::SCALE);
 
         // Step 2: Convert fiat to BTC
         $btcAmount = self::toBtc($fiatAmount, $mintUnit, $primaryProvider, $secondaryProvider);
 
         // Step 3: Convert BTC to sats. The fee is taken out of the payout, the mirror of
         // the invoice path where it is added to what the customer pays.
-        $sats = bcmul($btcAmount, '100000000', 8);
+        $sats = bcmul($btcAmount, '100000000', self::SCALE);
         $feePercent = max(0.0, min(100.0, $exchangeFeePercent));
         if ($feePercent > 0) {
-            $sats = bcmul($sats, (string)(1 - $feePercent / 100), 8);
+            $sats = bcmul($sats, self::normalizeDecimal(1 - $feePercent / 100), self::SCALE);
         }
         return (int)bcadd($sats, '0', 0);
     }
@@ -821,13 +884,13 @@ class ExchangeRates {
 
         // Sats to fiat: convert to cents
         // Step 1: Convert sats to BTC
-        $btcAmount = bcdiv((string)$sats, '100000000', 8);
+        $btcAmount = bcdiv((string)$sats, '100000000', self::SCALE);
 
         // Step 2: Convert BTC to fiat
         $fiatAmount = self::fromBtc($btcAmount, $mintUnit, $primaryProvider, $secondaryProvider);
 
-        // Step 3: Convert fiat to cents (multiply by 100)
-        return (int)bcmul($fiatAmount, '100', 0);
+        // Step 3: Convert fiat to its smallest unit (cents, or whole yen)
+        return (int)bcmul($fiatAmount, self::unitScale($mintUnit), 0);
     }
 
     /**

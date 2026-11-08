@@ -176,7 +176,9 @@ foreach ([23.1, 23.25, 23.4, 23.3, 23.5] as $i => $step) {
     $rate = ExchangeRates::getBtcPrice('CZK', 'coingecko', 'binance');
     check($rate !== null && abs($rate - $usd * $step) < 0.01, "hour $i: CZK follows a normal FX move to $step ($rate)");
     $anchor = (float)Config::get('fx_anchor_czk')['rate'];
-    check(abs($anchor - $prevAnchor) <= $prevAnchor * 0.02 / 24 + 1e-9, "hour $i: the anchor moved at most 2%/day ($anchor)");
+    // The cap is time-scaled from the anchor's timestamp: passTime() rewinds it by 3600 s,
+    // but a clock second can tick over during the run, so allow a few seconds of slack.
+    check(abs($anchor - $prevAnchor) <= $prevAnchor * 0.02 * 3605 / 86400, "hour $i: the anchor moved at most 2%/day ($anchor)");
     $prevAnchor = $anchor;
 }
 

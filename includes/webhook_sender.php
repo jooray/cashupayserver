@@ -434,7 +434,9 @@ class WebhookSender {
      * Put a delivery back in the outbox for another attempt.
      *
      * Attempts are reset so a redelivery gets the full retry budget again, and the
-     * delivered marker is cleared so the outbox picks the row up.
+     * delivered marker is cleared so the outbox picks the row up. A deleted webhook's
+     * rows stay where they are: the outbox does not look at the webhook again, so a
+     * requeue would send to an endpoint the shop removed (REL-06).
      */
     public static function requeueDelivery(string $deliveryId): void {
         // Sent to where the webhook points now, signed with its current secret, as
@@ -445,7 +447,9 @@ class WebhookSender {
                  leased_until = NULL, lease_token = NULL,
                  target_url = (SELECT w.url FROM webhooks w WHERE w.id = webhook_deliveries.webhook_id),
                  signing_secret = (SELECT w.secret FROM webhooks w WHERE w.id = webhook_deliveries.webhook_id)
-             WHERE id = ?",
+             WHERE id = ?
+               AND EXISTS (SELECT 1 FROM webhooks w
+                            WHERE w.id = webhook_deliveries.webhook_id AND w.deleted_at IS NULL)",
             [$deliveryId]
         );
     }

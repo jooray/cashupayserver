@@ -15,8 +15,12 @@
 
 require_once __DIR__ . '/database.php';
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/locks.php';
 
 class PaymentRequest {
+    /** Secrets per IN (...) list: old SQLite builds cap bound variables at 999. */
+    private const SQL_IN_CHUNK = 400;
+
     const STATUS_PENDING = 'pending';
     /** A token is being swapped for this request; it names the proofs paying it. */
     const STATUS_RECEIVING = 'receiving';
@@ -100,7 +104,7 @@ class PaymentRequest {
         $key = self::secretsKey($secrets);
         $claimed = Database::update(
             'payment_requests',
-            ['status' => self::STATUS_RECEIVING, 'input_secrets' => $key, 'receiving_since' => time()],
+            ['status' => self::STATUS_RECEIVING, 'input_secrets' => $key, 'receiving_since' => time(), 'swap_plan' => null],
             'id = ? AND status = ?',
             [$request['id'], self::STATUS_PENDING]
         );
@@ -122,7 +126,7 @@ class PaymentRequest {
     public static function release(array $request, array $secrets): void {
         Database::update(
             'payment_requests',
-            ['status' => self::STATUS_PENDING, 'input_secrets' => null, 'receiving_since' => null],
+            ['status' => self::STATUS_PENDING, 'input_secrets' => null, 'receiving_since' => null, 'swap_plan' => null],
             'id = ? AND status = ? AND input_secrets = ?',
             [$request['id'], self::STATUS_RECEIVING, self::secretsKey($secrets)]
         );
@@ -131,11 +135,11 @@ class PaymentRequest {
     /**
      * What happened to the proofs a claimed request is bound to, from the wallet itself.
      *
-     * 'paid'     every input is SPENT in our wallet and no swap still holds it: the
-     *            swap finished (possibly via the background recovery). $amount is what
-     *            it credited (inputs minus the mint's input fee).
+     * 'paid'     every input is SPENT in our wallet, no swap still holds it, and the
+     *            swap's outputs are ours: the swap finished (possibly via the background
+     *            recovery). $amount is what it credited.
      * 'released' none of them is ours and no swap holds them: the mint refused the
-     *            token, or it never got that far.
+     *            token, it never got that far, or someone else spent it first.
      * 'pending'  a swap journal still holds them, or the picture is mixed: wait.
      *
      * Only rows created at or after $since (the claim's receiving_since) count. A token
@@ -144,11 +148,21 @@ class PaymentRequest {
      * no new funds (C3/M-1). storeProofs() and preparePendingSpend() never overwrite an
      * existing row's created_at, so such secrets stay invisible here.
      *
+     * SPENT inputs alone do not prove a payment (CPS-01): when the background recovery
+     * (recoverPendingSwaps) settles a swap whose inputs the mint reports spent and whose
+     * outputs it never signed, older wallet libraries keep the imported inputs as SPENT
+     * rows. That is what a double-spent token looks like too. So when $plan is known
+     * (rememberSwapPlans() copies it from the journal before every recovery), the plan's
+     * deterministic outputs must be in the wallet. Without a plan, the swap never went
+     * through recovery: it was settled inside receive() itself, which removes imported
+     * inputs it did not get paid for, so SPENT rows there are a finished swap.
+     *
      * @param string[] $secrets
      * @param int      $since   receiving_since of the claim bound to these secrets
+     * @param ?array   $plan    swapPlan() of the request row, when one was recorded
      * @return array{state: string, amount: int}
      */
-    public static function receiptState(\Cashu\Wallet $wallet, array $secrets, int $since): array {
+    public static function receiptState(\Cashu\Wallet $wallet, array $secrets, int $since, ?array $plan = null): array {
         $storage = $wallet->getStorage();
         $reserved = array_flip($storage->getReservedInputSecrets());
         foreach ($secrets as $secret) {
@@ -156,16 +170,33 @@ class PaymentRequest {
                 return ['state' => 'pending', 'amount' => 0];
             }
         }
-        $in = implode(',', array_fill(0, count($secrets), '?'));
-        $rows = Database::fetchAll(
-            "SELECT secret, state FROM cashu_proofs WHERE wallet_id = ? AND created_at >= ? AND secret IN ($in)",
-            array_merge([$storage->getWalletId(), $since], $secrets)
-        );
+        $rows = [];
+        foreach (array_chunk($secrets, self::SQL_IN_CHUNK) as $chunk) {
+            $in = implode(',', array_fill(0, count($chunk), '?'));
+            array_push($rows, ...Database::fetchAll(
+                "SELECT secret, state FROM cashu_proofs WHERE wallet_id = ? AND created_at >= ? AND secret IN ($in)",
+                array_merge([$storage->getWalletId(), $since], $chunk)
+            ));
+        }
         if (empty($rows)) {
             return ['state' => 'released', 'amount' => 0];
         }
         $spent = array_filter($rows, fn($r) => $r['state'] === \Cashu\ProofState::SPENT);
         if (count($spent) === count($secrets)) {
+            if ($plan !== null) {
+                $held = self::planOutputsHeld($wallet, $plan);
+                if ($held === 'all') {
+                    return ['state' => 'paid', 'amount' => array_sum($plan['amounts'])];
+                }
+                if ($held === 'none') {
+                    // The journal is gone, the inputs are spent and none of the outputs
+                    // were signed for us: someone else spent this token first.
+                    error_log('CashuPayServer: payment request inputs were spent at the mint, '
+                        . 'but the swap credited nothing; not marking it paid');
+                    return ['state' => 'released', 'amount' => 0];
+                }
+                return ['state' => 'pending', 'amount' => 0];
+            }
             $proofs = $storage->getProofsBySecretsAsObjects($secrets);
             $amount = \Cashu\Wallet::sumProofs($proofs) - $wallet->calculateFee($proofs);
             return ['state' => 'paid', 'amount' => max(0, $amount)];
@@ -176,6 +207,73 @@ class PaymentRequest {
             return ['state' => 'released', 'amount' => 0];
         }
         return ['state' => 'pending', 'amount' => 0];
+    }
+
+    /**
+     * Copy the output plan of every swap journal that pays a claimed request onto that
+     * request, before anything may settle the journal. Must run before every
+     * recoverPendingSwaps() on a store's wallet (see receiptState()). Throws on a write
+     * failure so the caller skips the recovery instead of settling unrecorded swaps.
+     */
+    public static function rememberSwapPlans(\Cashu\Wallet $wallet): void {
+        foreach ($wallet->getStorage()->getPendingOperations('swap') as $op) {
+            $data = is_array($op['data'] ?? null) ? $op['data'] : [];
+            $inputs = $data['input_secrets'] ?? null;
+            if (!is_array($inputs) || $inputs === [] || !isset($data['keyset_id'], $data['counter_start'], $data['amounts'])) {
+                continue;
+            }
+            $plan = json_encode([
+                'keyset_id' => (string)$data['keyset_id'],
+                'counter_start' => (int)$data['counter_start'],
+                'amounts' => array_values(array_map('intval', (array)$data['amounts'])),
+            ]);
+            Database::update(
+                'payment_requests',
+                ['swap_plan' => $plan],
+                'status = ? AND input_secrets = ? AND swap_plan IS NULL',
+                [self::STATUS_RECEIVING, self::secretsKey($inputs)]
+            );
+        }
+    }
+
+    /** The recorded swap plan of a request row, or null when none (or unreadable). */
+    public static function swapPlan(array $request): ?array {
+        $plan = json_decode((string)($request['swap_plan'] ?? ''), true);
+        if (!is_array($plan) || !is_string($plan['keyset_id'] ?? null) || !is_int($plan['counter_start'] ?? null)
+            || $plan['counter_start'] < 0 || !is_array($plan['amounts'] ?? null) || $plan['amounts'] === []
+            || count($plan['amounts']) > 1000) {
+            return null;
+        }
+        foreach ($plan['amounts'] as $amount) {
+            if (!is_int($amount) || $amount <= 0) {
+                return null;
+            }
+        }
+        $plan['amounts'] = array_values($plan['amounts']);
+        return $plan;
+    }
+
+    /**
+     * Whether the wallet holds the plan's deterministic outputs (in any state: they may
+     * have been spent since, by an automatic withdrawal).
+     *
+     * @return string 'all', 'none' or 'some'
+     */
+    private static function planOutputsHeld(\Cashu\Wallet $wallet, array $plan): string {
+        $secrets = [];
+        foreach ($plan['amounts'] as $i => $amount) {
+            $secrets[] = $wallet->generateDeterministicSecret($plan['keyset_id'], $plan['counter_start'] + $i)['secret'];
+        }
+        $n = 0;
+        foreach (array_chunk($secrets, self::SQL_IN_CHUNK) as $chunk) {
+            $in = implode(',', array_fill(0, count($chunk), '?'));
+            $row = Database::fetchOne(
+                "SELECT COUNT(*) AS n FROM cashu_proofs WHERE wallet_id = ? AND secret IN ($in)",
+                array_merge([$wallet->getStorage()->getWalletId()], $chunk)
+            );
+            $n += (int)($row['n'] ?? 0);
+        }
+        return $n === count($secrets) ? 'all' : ($n === 0 ? 'none' : 'some');
     }
 
     /**
@@ -195,12 +293,17 @@ class PaymentRequest {
                 return true;
             }
         }
-        $in = implode(',', array_fill(0, count($secrets), '?'));
-        $row = Database::fetchOne(
-            "SELECT 1 AS known FROM cashu_proofs WHERE wallet_id = ? AND secret IN ($in) LIMIT 1",
-            array_merge([$storage->getWalletId()], $secrets)
-        );
-        return !empty($row);
+        foreach (array_chunk($secrets, self::SQL_IN_CHUNK) as $chunk) {
+            $in = implode(',', array_fill(0, count($chunk), '?'));
+            $row = Database::fetchOne(
+                "SELECT 1 AS known FROM cashu_proofs WHERE wallet_id = ? AND secret IN ($in) LIMIT 1",
+                array_merge([$storage->getWalletId()], $chunk)
+            );
+            if (!empty($row)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -218,14 +321,29 @@ class PaymentRequest {
         );
         foreach ($rows as $request) {
             $result['checked']++;
+            // receive.php holds this lock from before the claim until its answer is
+            // sent. While it does, the claim may be fresh and its swap not journaled
+            // yet: the secrets look unknown, and releasing then let a second token pay
+            // the same request while the first swap was still going (REL-01).
+            $lock = cashupay_acquire_lock('receive_' . $request['store_id']);
+            if (!$lock) {
+                continue;
+            }
             try {
+                // Re-read under the lock: a receive that just finished may have paid it.
+                $current = self::getById((string)$request['id']);
+                if ($current === null || $current['status'] !== self::STATUS_RECEIVING) {
+                    continue;
+                }
+                $request = $current;
                 $secrets = json_decode((string)$request['input_secrets'], true);
                 if (!is_array($secrets) || $secrets === []) {
                     continue;
                 }
                 $wallet = Invoice::getWalletForStore((string)$request['store_id'], (string)$request['mint_url'], (string)$request['unit']);
                 $wallet->loadMint();
-                $state = self::receiptState($wallet, $secrets, (int)($request['receiving_since'] ?? PHP_INT_MAX));
+                $state = self::receiptState($wallet, $secrets, (int)($request['receiving_since'] ?? PHP_INT_MAX),
+                    self::swapPlan($request));
                 if ($state['state'] === 'paid') {
                     $response = [
                         'success' => true,
@@ -244,6 +362,8 @@ class PaymentRequest {
             } catch (Throwable $e) {
                 $result['errors']++;
                 error_log("CashuPayServer: payment request {$request['id']} check failed: " . $e->getMessage());
+            } finally {
+                cashupay_release_lock($lock);
             }
         }
         return $result;

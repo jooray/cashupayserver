@@ -26,6 +26,16 @@ function handleCreateInvoice(array $auth, array $params, array $body): void {
         errorResponse('validation-error', 'Amount is required');
     }
 
+    // A JSON number below 0.0001 decodes to a float that PHP prints as "5.0E-5"; write it
+    // out as a plain decimal first so a small BTC amount is not refused.
+    if (is_float($amount)) {
+        try {
+            $amount = ExchangeRates::normalizeDecimal($amount);
+        } catch (InvalidArgumentException $e) {
+            errorResponse('validation-error', 'Amount must be a positive decimal number');
+        }
+    }
+
     // `is_numeric()` accepts "1e308", hex-ish forms and negatives, all of which reach
     // the BCMath converter and fatal there. Require a plain, bounded decimal instead.
     if (!is_scalar($amount) || !preg_match('/^\d{1,15}(\.\d{1,8})?$/', (string)$amount)

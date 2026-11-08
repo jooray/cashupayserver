@@ -77,8 +77,9 @@ function cashupay_configure_btcpay_plugin(string $store_id, string $api_key): ar
             'success' => false,
             'error' => 'existing_btcpay',
             'current_url' => get_option('btcpay_gf_url', ''),
-            'message' => 'A real BTCPay Server is already configured. '
-                       . 'Disconnect it first via WooCommerce > Settings > Payments > BTCPay.'
+            'message' => 'Your shop is connected to another BTCPay Server. To use CashuPay instead, '
+                       . 'open WooCommerce > Settings > BTCPay Settings, delete the address in the "BTCPay Server URL" box '
+                       . 'and click "Save changes".'
         ];
     }
 
@@ -94,6 +95,45 @@ function cashupay_configure_btcpay_plugin(string $store_id, string $api_key): ar
         'success' => true,
         'webhook' => $webhookResult
     ];
+}
+
+/**
+ * Connect the BTCPay for WooCommerce gateway to a CashuPay store: a dedicated key, the
+ * gateway's settings and the webhook. Shared by the setup wizard's last step and the
+ * wp-admin notice's "Connect" button, so both do exactly the same (ARGON UX-05).
+ *
+ * @return array{success: bool, message?: string, error?: string, webhook?: array}
+ */
+function cashupay_connect_woocommerce_store(string $store_id): array {
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/auth.php';
+
+    if (cashupay_is_real_btcpay_configured()) {
+        // Checked before a key is minted, so a refusal leaves nothing behind.
+        return cashupay_configure_btcpay_plugin($store_id, '');
+    }
+    // A dedicated integration key, not the least-privilege dashboard one: the
+    // WooCommerce gateway refetches the invoice on InvoiceSettled and refuses to mark the
+    // order paid if that lookup fails, so it needs canviewinvoices as well.
+    $createdKey = Auth::createApiKey(
+        $store_id,
+        'WooCommerce (auto-configured)',
+        [
+            'btcpay.store.cancreateinvoice',
+            'btcpay.store.canviewinvoices',
+            'btcpay.store.canmodifyinvoices',
+            // Required by the gateway's own key check on settings save.
+            'btcpay.store.canviewstoresettings',
+            'btcpay.store.webhooks.canmodifywebhooks',
+        ],
+        'woocommerce'
+    );
+    $result = cashupay_configure_btcpay_plugin($store_id, $createdKey['key']);
+    if (!($result['success'] ?? false)) {
+        // The key just minted would otherwise stay live and invisible.
+        Auth::deleteApiKey((string)($createdKey['id'] ?? ''));
+    }
+    return $result;
 }
 
 /**
@@ -120,12 +160,33 @@ function cashupay_register_webhook(string $store_id): array {
             ];
         }
 
+        // Events the BTCPay WooCommerce plugin subscribes to.
+        $events = json_encode([
+            'InvoiceCreated',
+            'InvoiceReceivedPayment',
+            'InvoiceProcessing',
+            'InvoiceSettled',
+            'InvoiceExpired',
+            'InvoiceInvalid',
+        ]);
+
         $existing = Database::fetchOne(
             "SELECT id, secret FROM webhooks WHERE store_id = ? AND url = ? AND deleted_at IS NULL",
             [$store_id, $webhookUrl]
         );
 
         if ($existing) {
+            // Configuring is an explicit "make WooCommerce work" action: turn the row back
+            // on. uninstall.php disables it (enabled = 0, deleted_at left NULL), so a
+            // reinstall used to report success while no order was ever marked paid
+            // (ARGON CPS-02). Refresh the event list too, in case an older version or an
+            // API edit narrowed it.
+            Database::update(
+                'webhooks',
+                ['enabled' => 1, 'events' => $events],
+                'id = ?',
+                [$existing['id']]
+            );
             update_option('btcpay_gf_webhook', [
                 'id' => $existing['id'],
                 'url' => $webhookUrl,
@@ -141,16 +202,6 @@ function cashupay_register_webhook(string $store_id): array {
 
         $webhookId = Database::generateId('wh');
         $secret = bin2hex(random_bytes(32));
-
-        // Events the BTCPay WooCommerce plugin subscribes to.
-        $events = json_encode([
-            'InvoiceCreated',
-            'InvoiceReceivedPayment',
-            'InvoiceProcessing',
-            'InvoiceSettled',
-            'InvoiceExpired',
-            'InvoiceInvalid',
-        ]);
 
         Database::insert('webhooks', [
             'id' => $webhookId,

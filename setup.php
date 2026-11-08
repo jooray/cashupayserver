@@ -330,6 +330,14 @@ if ($isPost) {
                 }
 
                 Auth::setAdminPassword($password);
+                // The browser that chose the password is the admin: log it in, so the
+                // dashboard and pairing links at the end of setup do not ask for the
+                // password just typed (ARGON UX-04). Same code path as a normal login
+                // (new session id, new CSRF token), so the forms below need the new token.
+                if (!$isWordPressSetup) {
+                    Auth::startAdminSession();
+                    $csrfToken = Auth::generateCsrfToken();
+                }
                 // Go directly to step 4 (create store) - step 3 is merged into step 1
                 $step = 4;
                 break;
@@ -545,12 +553,26 @@ if ($isPost) {
                 if ($action === 'save') {
                     require_once __DIR__ . '/includes/lightning_address.php';
                     $address = trim(setupField('payout_address'));
-                    $threshold = (int)setupField('payout_threshold', '10000');
-                    $_SESSION['payout_form'] = ['address' => $address, 'threshold' => $threshold];
-                    if ($threshold < 1) {
-                        throw new Exception('Enter a withdrawal amount of at least 1.');
-                    }
+                    // The amount is typed in the store's unit, as the dashboard shows it
+                    // ("20.00" EUR), and stored in the unit's smallest amount (cents), which
+                    // is how LightningAddress and the dashboard read auto_melt_threshold
+                    // (ARGON UX-02). Exact decimal parsing, so "1e3" is refused rather than
+                    // guessed at. Unit::parse() drops commas as thousands separators, which
+                    // would read a European "20,50" as 2050: a comma is refused instead.
                     $unit = strtolower((string)($payoutStore['mint_unit'] ?? 'sat'));
+                    $rawThreshold = trim(setupField('payout_threshold', ''));
+                    $_SESSION['payout_form'] = ['address' => $address, 'threshold' => $rawThreshold];
+                    try {
+                        $threshold = str_contains($rawThreshold, ',') ? 0 : Config::unitFor($unit)->parse($rawThreshold);
+                    } catch (InvalidArgumentException $e) {
+                        $threshold = 0;
+                    }
+                    if ($threshold < 1) {
+                        throw new Exception(Config::unitDecimals($unit) === 0
+                            ? 'Enter a withdrawal amount of at least 1, as a whole number (for example 10000).'
+                            : 'Enter a withdrawal amount of at least ' . number_format(1 / 10 ** Config::unitDecimals($unit), Config::unitDecimals($unit), '.', '')
+                                . ', with a dot for decimals (for example 20.00).');
+                    }
                     $check = LightningAddress::checkPayoutAddress($address,
                         in_array($unit, ['sat', 'sats'], true) ? $threshold : null);
                     if (!$check['ok']) {
@@ -1152,14 +1174,15 @@ $csrfToken = Auth::generateCsrfToken();
                 $isWpMode = Urls::isWordPress();
                 // WordPress: 5 steps (skip password step 2)
                 // Standalone: 6 steps
-                $totalSteps = $isWpMode ? 5 : 6;
+                $totalSteps = $isWpMode ? 6 : 7;
 
-                // Map internal step numbers to display step numbers
-                // Internal: 1(welcome+security), 2(password), 4(store), 5(mint), 6(seed), 7(complete)
-                // Step 3 no longer exists (merged into 1)
+                // Map internal step numbers to display step numbers, in the order the
+                // operator sees them. Internal: 1(welcome+security), 2(password), 4(store),
+                // 5(mint), 6(seed), 8(where the money goes), 7(complete). Step 3 no longer
+                // exists (merged into 1); step 8 was added after 7 and runs before it.
                 $stepMapping = $isWpMode
-                    ? [1 => 1, 4 => 2, 5 => 3, 6 => 4, 7 => 5]  // Skip step 2 (password)
-                    : [1 => 1, 2 => 2, 4 => 3, 5 => 4, 6 => 5, 7 => 6];
+                    ? [1 => 1, 4 => 2, 5 => 3, 6 => 4, 8 => 5, 7 => 6]  // Skip step 2 (password)
+                    : [1 => 1, 2 => 2, 4 => 3, 5 => 4, 6 => 5, 8 => 6, 7 => 7];
                 $displayStep = $stepMapping[$step] ?? $step;
                 ?>
                 <p class="subtitle">Step <?php echo $displayStep; ?> of <?php echo $totalSteps; ?></p>
@@ -1298,26 +1321,52 @@ $csrfToken = Auth::generateCsrfToken();
                         <?php endif; ?>
                     </div>
                     <?php else: ?>
-                    <!-- Recommended: Outside webroot (shown prominently, not collapsed) -->
+                    <?php if (!$isOutsideWebroot && $serverProbe['status'] !== 'exposed'): ?>
+                    <!-- Recommended: outside the website folder. One click first; the manual way
+                         (a terminal and a config file) only as a fallback (ARGON UX-06.1). Not
+                         shown once the data is outside, and not when the database is exposed:
+                         the check below then offers the same button as the required fix. -->
                     <div style="background: rgba(72, 187, 120, 0.1); border: 1px solid rgba(72, 187, 120, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1rem;">
                         <p style="margin-bottom: 0.75rem; font-weight: 500; color: #68d391;">
-                            Recommended: Store data outside web root
+                            Recommended: keep your data outside the website folder
                         </p>
                         <p style="margin-bottom: 0.75rem; color: #a0aec0; font-size: 0.9rem;">
-                            For maximum security, store your database outside the web-accessible directory.
-                            Even if server configuration is wrong, your data cannot be downloaded.
+                            Your data folder is inside your website. It is safest next to it, where the
+                            internet cannot reach it even if a server setting changes later.
                         </p>
+                        <?php if (!defined('CASHUPAY_DATA_DIR')): ?>
+                        <form method="post" style="margin-bottom: 0.5rem;">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars(Auth::generateCsrfToken()); ?>">
+                            <input type="hidden" name="action" value="relocate_data">
+                            <button type="submit" class="btn" style="width: 100%;">Move my data to a safe place</button>
+                        </form>
+                        <p style="font-size: 0.85rem; color: #a0aec0; margin-bottom: 0.75rem;">
+                            This moves the data folder next to your website folder. Nothing is set up yet, so
+                            nothing can be lost. If your hosting does not allow it, this page says so.
+                        </p>
+                        <?php if ($relocateError !== null): ?>
+                        <p style="font-size: 0.85rem; color: #fc8181; margin-bottom: 0.75rem;">
+                            <?php echo htmlspecialchars($relocateError); ?>
+                            The data stays where it is. You can continue setup, or ask your hosting provider
+                            to do the steps below.
+                        </p>
+                        <?php endif; ?>
+                        <?php endif; ?>
 
-                        <p style="margin-bottom: 0.5rem; font-size: 0.9rem;"><strong>1. Create a directory outside your web root:</strong></p>
-                        <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.75rem; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">mkdir -p /home/youruser/cashupay-data
+                        <details>
+                            <summary style="cursor: pointer; color: #a0aec0; font-size: 0.9rem;">Manual instructions (for your hosting provider or a technical helper)</summary>
+                            <p style="margin: 0.75rem 0 0.5rem; font-size: 0.9rem;"><strong>1. Create a folder outside the web root</strong> (for example in a terminal):</p>
+                            <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.75rem; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">mkdir -p /home/youruser/cashupay-data
 chmod 750 /home/youruser/cashupay-data</pre>
 
-                        <p style="margin-bottom: 0.5rem; font-size: 0.9rem;"><strong>2. Create <code>includes/config.local.php</code>:</strong></p>
-                        <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.75rem; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">&lt;?php
+                            <p style="margin-bottom: 0.5rem; font-size: 0.9rem;"><strong>2. Create the file <code>includes/config.local.php</code></strong> in the CashuPayServer folder:</p>
+                            <pre style="background: rgba(0,0,0,0.3); padding: 0.5rem; border-radius: 4px; font-size: 0.85rem; margin-bottom: 0.75rem; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word;">&lt;?php
 define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
-                        <p style="margin-bottom: 0; font-size: 0.9rem;"><strong>3. Re-run the setup wizard</strong> to verify the new location.</p>
+                            <p style="margin-bottom: 0; font-size: 0.9rem;"><strong>3. Reload this page</strong> to check the new location.</p>
+                        </details>
                     </div>
+                    <?php endif; ?>
 
                     <p style="color: #a0aec0; font-size: 0.85rem; margin-bottom: 1rem;">
                         Current data location: <code><?php echo htmlspecialchars(Setup::relativeDataDirForDisplay()); ?></code>
@@ -1893,7 +1942,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <label for="seed_confirmed">I have written down my seed phrase and stored it safely</label>
                         </div>
 
-                        <button type="submit" class="btn" style="width: 100%;"><?php echo $mode === 'add_store' ? 'Create Store' : 'Complete Setup'; ?></button>
+                        <button type="submit" class="btn" style="width: 100%;"><?php echo $mode === 'add_store' ? 'Create Store' : 'Continue'; ?></button>
                     </form>
                 <?php else: ?>
                     <p style="margin-bottom: 1.5rem;">
@@ -1937,7 +1986,21 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
             <?php elseif ($step === 8): ?>
                 <!-- Step 8: Where should the money go? -->
-                <?php $payoutForm = $_SESSION['payout_form'] ?? ['address' => '', 'threshold' => 10000]; ?>
+                <?php
+                // The threshold is shown and typed in the store's unit (EUR for a euro
+                // mint), like the dashboard's automatic-withdrawal setting (ARGON UX-02).
+                $payoutUnitStore = isset($_SESSION['setup_store_id']) ? Config::getStore((string)$_SESSION['setup_store_id']) : null;
+                $payoutUnit = strtolower((string)($payoutUnitStore['mint_unit'] ?? 'sat'));
+                $payoutDecimals = Config::unitDecimals($payoutUnit);
+                // 10,000 sats, or 20.00 of a currency counted in cents.
+                $payoutDefault = $payoutDecimals === 2 ? 2000 : 10000;
+                $payoutDefaultText = $payoutDecimals === 0
+                    ? (string)$payoutDefault
+                    : number_format($payoutDefault / 10 ** $payoutDecimals, $payoutDecimals, '.', '');
+                $payoutStep = $payoutDecimals === 0 ? '1' : number_format(1 / 10 ** $payoutDecimals, $payoutDecimals, '.', '');
+                $payoutUnitLabel = in_array($payoutUnit, ['sat', 'sats'], true) ? 'sats' : strtoupper($payoutUnit);
+                $payoutForm = $_SESSION['payout_form'] ?? ['address' => '', 'threshold' => $payoutDefaultText];
+                ?>
                 <h2 style="margin-bottom: 1rem;">Where should your money go?</h2>
                 <p style="color: #a0aec0; margin-bottom: 1rem;">
                     Payments first arrive at the payment service you chose. They are safest in your own
@@ -1956,9 +2019,10 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                value="<?php echo htmlspecialchars((string)$payoutForm['address']); ?>" required>
                     </div>
                     <div class="form-group">
-                        <label for="payout_threshold">Send it when the balance reaches (sats)</label>
-                        <input type="number" id="payout_threshold" name="payout_threshold" min="1" step="1"
-                               value="<?php echo (int)$payoutForm['threshold']; ?>">
+                        <label for="payout_threshold">Send it when the balance reaches (<?php echo htmlspecialchars($payoutUnitLabel); ?>)</label>
+                        <input type="number" id="payout_threshold" name="payout_threshold"
+                               min="<?php echo $payoutStep; ?>" step="<?php echo $payoutStep; ?>"
+                               value="<?php echo htmlspecialchars((string)$payoutForm['threshold']); ?>">
                         <p style="color: #718096; font-size: 0.85rem; margin-top: 0.4rem;">
                             Smaller amounts keep less money at the payment service; each payout costs a small fee.
                             You can change this later under Store settings.
@@ -1990,21 +2054,33 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 $cronEndpoint = Urls::cron();
                 $cronKeyValue = (string)Config::get('cron_key', '');
                 ?>
-                <div style="background: rgba(247, 147, 26, 0.08); border: 1px solid rgba(247, 147, 26, 0.3); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
-                    <p style="margin-bottom: 0.5rem; font-weight: 600; color: #f7931a;">Recommended: set up a cron job</p>
+                <?php if (Urls::isWordPress()): ?>
+                <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 1.5rem;">
+                    Nothing else to set up: CashuPay checks for payments by itself whenever your site has visitors.
+                </p>
+                <?php else: ?>
+                <!-- Background work runs on page and API visits (Background::trigger); a timed
+                     job is optional, for quiet shops (ARGON UX-06.2). -->
+                <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem;">
                     <p style="color: #a0aec0; font-size: 0.9rem; margin-bottom: 0.5rem;">
-                        Payments still settle when your payment/admin pages are visited, but a
-                        1-minute cron makes settlement, auto-withdrawal and recovery reliable
-                        even with no traffic. In your hosting control panel (cPanel &rarr; Cron Jobs),
-                        add a job that runs every minute:
+                        Nothing else to set up: CashuPayServer checks for payments, sends your automatic payouts and
+                        finishes interrupted work by itself whenever your shop or dashboard is visited.
                     </p>
-                    <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem;">* * * * * curl -s -H "X-Cron-Key: <?php echo htmlspecialchars($cronKeyValue); ?>" "<?php echo htmlspecialchars($cronEndpoint); ?>" &gt;/dev/null 2&gt;&amp;1</code>
-                    <p style="color: #718096; font-size: 0.8rem; margin-top: 0.5rem;">
-                        The key travels in a header, not the URL, so it does not end up in web-server
-                        or CDN access logs. If your host cannot send headers, the query form
-                        <code>?key=…</code> also works — keep that URL private.
-                    </p>
+                    <details>
+                        <summary style="cursor: pointer; color: #a0aec0; font-size: 0.9rem;">Optional, for shops with few visitors: a timed check every minute</summary>
+                        <p style="color: #a0aec0; font-size: 0.9rem; margin: 0.5rem 0;">
+                            If your shop sometimes goes hours without visitors, a timed job makes payouts happen on time.
+                            In your hosting control panel, open <strong>Cron Jobs</strong> (in cPanel: Advanced &rarr; Cron Jobs),
+                            choose <strong>Once Per Minute</strong> and paste this as the command:
+                        </p>
+                        <code style="display: block; word-break: break-all; background: rgba(0,0,0,0.3); padding: 0.6rem; border-radius: 6px; font-size: 0.8rem;">curl -s -H "X-Cron-Key: <?php echo htmlspecialchars($cronKeyValue); ?>" "<?php echo htmlspecialchars($cronEndpoint); ?>" &gt;/dev/null 2&gt;&amp;1</code>
+                        <p style="color: #718096; font-size: 0.8rem; margin-top: 0.5rem;">
+                            The key in this command works like a password; keep it private. If your host's timed jobs
+                            cannot send it this way, add <code>?key=</code> followed by the key to the end of the address instead.
+                        </p>
+                    </details>
                 </div>
+                <?php endif; ?>
 
                 <?php
                 // Check for restore result from previous step
@@ -2073,32 +2149,10 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     if ($error === null
                         && $_SERVER['REQUEST_METHOD'] === 'POST'
                         && isset($_POST['configure_woocommerce'])) {
-                        // A dedicated integration key, not the least-privilege dashboard
-                        // one: the WooCommerce gateway refetches the invoice on
-                        // InvoiceSettled and refuses to mark the order paid if that
-                        // lookup fails, so it needs canviewinvoices as well.
-                        $createdKey = Auth::createApiKey(
-                            $storeId,
-                            'WooCommerce (auto-configured)',
-                            [
-                                'btcpay.store.cancreateinvoice',
-                                'btcpay.store.canviewinvoices',
-                                'btcpay.store.canmodifyinvoices',
-                                // Required by the gateway's own key check on settings save.
-                                'btcpay.store.canviewstoresettings',
-                                'btcpay.store.webhooks.canmodifywebhooks',
-                            ],
-                            'woocommerce'
-                        );
-                        $apiKey = $createdKey['key'];
-
-                        $configResult = cashupay_configure_btcpay_plugin($storeId, $apiKey);
+                        // Same code path as the wp-admin notice's "Connect" button:
+                        // a dedicated key, the gateway settings and the webhook.
+                        $configResult = cashupay_connect_woocommerce_store($storeId);
                         $wooConfigured = $configResult['success'] ?? false;
-                        if (!$wooConfigured) {
-                            // The guard refused (a real BTCPay Server is configured), so the
-                            // key just minted would otherwise stay live and invisible.
-                            Auth::deleteApiKey((string)($createdKey['id'] ?? ''));
-                        }
                     }
                 }
                 ?>
@@ -2129,9 +2183,10 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                             <?php echo htmlspecialchars($configResult['message']); ?>
                         </div>
                         <p style="color: #a0aec0; font-size: 0.9rem; margin-top: 0.75rem;">
-                            Disconnect your existing BTCPay Server via WooCommerce &rarr; Settings &rarr; Payments &rarr; BTCPay, then return here.
+                            When you have done that, open your WordPress dashboard: CashuPay shows a
+                            <strong>Connect my shop to CashuPay</strong> button there that finishes the connection in one click.
                         </p>
-                        <a href="<?php echo admin_url('admin.php?page=wc-settings&tab=checkout&section=btcpay_greenfield'); ?>" class="btn btn-secondary" style="display: inline-block; margin-top: 0.5rem;">
+                        <a href="<?php echo esc_url(admin_url('admin.php?page=wc-settings&tab=btcpay_settings')); ?>" class="btn btn-secondary" style="display: inline-block; margin-top: 0.5rem;">
                             Go to BTCPay Settings
                         </a>
                     <?php else: ?>
@@ -2141,10 +2196,15 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                 <code style="display: block; margin-top: 0.5rem; word-break: break-all;"><?php echo htmlspecialchars(get_option('btcpay_gf_url', '')); ?></code>
                             </div>
                             <p style="color: #a0aec0; font-size: 0.9rem; margin: 0.75rem 0;">
-                                A real BTCPay Server is configured. To use CashuPay instead, disconnect it first via WooCommerce settings.
+                                Your shop is connected to another BTCPay Server. To use CashuPay instead, open
+                                <strong>Go to BTCPay Settings</strong> below, delete the address in the
+                                <strong>BTCPay Server URL</strong> box and click <strong>Save changes</strong>.
+                                Then open your WordPress dashboard: CashuPay shows a
+                                <strong>Connect my shop to CashuPay</strong> button there. If you want to keep the
+                                other server, click Skip.
                             </p>
                             <div class="btn-group">
-                                <a href="<?php echo admin_url('admin.php?page=wc-settings&tab=checkout&section=btcpay_greenfield'); ?>" class="btn btn-secondary" style="text-align: center;">Go to BTCPay Settings</a>
+                                <a href="<?php echo esc_url(admin_url('admin.php?page=wc-settings&tab=btcpay_settings')); ?>" class="btn btn-secondary" style="text-align: center;">Go to BTCPay Settings</a>
                                 <a href="<?php echo admin_url('admin.php?page=cashupay'); ?>" class="btn" style="text-align: center;">Skip</a>
                             </div>
                         <?php else: ?>
@@ -2409,12 +2469,9 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 } else {
                     discoveredMints.push(mint);
                 }
-                // Sort by reviewsCount desc, then averageRating desc
-                discoveredMints.sort(function(a, b) {
-                    var countDiff = (b.reviewsCount || 0) - (a.reviewsCount || 0);
-                    if (countDiff !== 0) return countDiff;
-                    return (b.averageRating || 0) - (a.averageRating || 0);
-                });
+                // Same ranking as discover(): reachable first, then rating score
+                // (so many low ratings never outrank good ones), then count.
+                discoveredMints.sort(MintDiscovery.compareRecommendations);
                 // Hide loading spinner once we have mints
                 if (discoveredMints.length > 0) {
                     loadingEl.style.display = 'none';

@@ -252,18 +252,83 @@ function handleInvoicePaymentMethods(array $auth, array $params, array $body): v
 
     $paid = in_array($invoice['status'], ['Settled', 'Processing'], true);
 
+    // Shape follows BTCPay 2.x InvoicePaymentMethodDataModel (GreenfieldInvoiceController
+    // ::ToPaymentMethodModels): amounts are in the payment method's currency (BTC), and
+    // `rate` is the price of one BTC in the invoice currency. Returning the invoice's own
+    // amount ("25.00" for a EUR 25 order) told clients 25 BTC.
+    //
+    // Every key the greenfield-php client reads must be present: its getters are typed
+    // `string` and read the array directly, so a missing `paymentMethodPaid` made
+    // WooCommerce's updateWCOrderPayments() throw (caught, so silently no payment meta).
+    $btcAmount = invoicePaymentMethodBtcAmount($invoice);
+    $bolt11 = (string)($invoice['bolt11'] ?? '');
+    $paidAmount = $paid ? $btcAmount : '0.00000000';
+
+    $payments = [];
+    if ($paid) {
+        $payments[] = [
+            // greenfield-php's getTransactionId() takes the part before the first '-'.
+            'id' => (string)($invoice['quote_id'] ?: $invoice['id']),
+            // No separate paid-at column: the last poll is when the payment was seen.
+            'receivedDate' => (int)($invoice['last_polled_at'] ?: $invoice['created_at']),
+            'value' => $btcAmount,
+            'fee' => '0',
+            'status' => 'Settled',
+            'destination' => $bolt11,
+        ];
+    }
+
     jsonResponse([[
-        'paymentMethodId' => 'BTC-LN',
-        'cryptoCode' => 'BTC',
-        'currency' => 'BTC',
-        'destination' => $invoice['bolt11'] ?? null,
-        'paymentLink' => $invoice['bolt11'] ? 'lightning:' . $invoice['bolt11'] : null,
-        'rate' => (string)($invoice['exchange_rate'] ?? '1'),
-        'amount' => (string)($invoice['amount'] ?? '0'),
-        'due' => $paid ? '0' : (string)($invoice['amount'] ?? '0'),
-        'totalPaid' => $paid ? (string)($invoice['amount'] ?? '0') : '0',
         'activated' => true,
-        'payments' => [],
-        'additionalData' => [],
+        'destination' => $bolt11,
+        'paymentLink' => $bolt11 !== '' ? 'lightning:' . $bolt11 : '',
+        'rate' => invoicePaymentMethodRate($invoice),
+        'paymentMethodPaid' => $paidAmount,
+        'totalPaid' => $paidAmount,
+        'due' => $paid ? '0.00000000' : $btcAmount,
+        'amount' => $btcAmount,
+        'paymentMethodFee' => '0',
+        'payments' => $payments,
+        'paymentMethodId' => 'BTC-LN',
+        'additionalData' => new stdClass(),
+        'currency' => 'BTC',
     ]]);
+}
+
+/**
+ * The Lightning invoice's amount in BTC, as an 8-decimal string.
+ *
+ * Taken from the BOLT11 invoice the customer actually pays; a sat or msat mint's stored
+ * amount is the fallback when there is no invoice string.
+ */
+function invoicePaymentMethodBtcAmount(array $invoice): string {
+    $bolt11 = (string)($invoice['bolt11'] ?? '');
+    $sats = $bolt11 !== '' ? \Cashu\Bolt11::amountSats($bolt11) : 0;
+    if ($sats <= 0) {
+        $unit = strtolower((string)($invoice['mint_unit'] ?? ''));
+        $stored = (int)($invoice['amount_sats'] ?? 0);
+        $sats = match ($unit) {
+            'sat', 'sats' => $stored,
+            'msat' => intdiv($stored, 1000),
+            default => 0,
+        };
+    }
+    $sats = max(0, $sats);
+    return intdiv($sats, 100000000) . '.' . str_pad((string)($sats % 100000000), 8, '0', STR_PAD_LEFT);
+}
+
+/** BTCPay's `rate`: the price of one BTC in the invoice's currency. */
+function invoicePaymentMethodRate(array $invoice): string {
+    $currency = strtoupper((string)($invoice['currency'] ?? ''));
+    if ($currency === 'BTC') {
+        return '1';
+    }
+    if ($currency === 'SAT' || $currency === 'SATS') {
+        return '100000000';
+    }
+    if ($currency === 'MSAT') {
+        return '100000000000';
+    }
+    $rate = $invoice['exchange_rate'] ?? null;
+    return ($rate !== null && (float)$rate > 0) ? ExchangeRates::normalizeDecimal((float)$rate) : '0';
 }

@@ -638,7 +638,7 @@ class BackgroundRunner {
             return self::settleForgottenMelt($row, $wallet);
         }
         if ($quote->isPaid()) {
-            Transfer::complete($row['id'], (int)$row['amount'], (int)$row['fee'], $quote->paymentPreimage);
+            Transfer::complete($row['id'], (int)$row['amount'], self::paidMeltFee($row, $quote, $wallet), $quote->paymentPreimage);
             return 'completed';
         }
         if ($quote->isUnpaid() && $quote->expiry !== null && $quote->expiry < time()) {
@@ -646,6 +646,38 @@ class BackgroundRunner {
             return 'marked_failed';
         }
         return 'still_pending';
+    }
+
+    /**
+     * What a paid withdrawal actually cost: the inputs it spent, less the amount paid
+     * and the change the mint returned (CPS-10). The row's own fee is only known when
+     * the withdrawal finished in the request that started it; one completed here (its
+     * change was still being recovered, or its answer was lost) would otherwise keep
+     * the 0 it was opened with. Falls back to the row's fee when the inputs or the
+     * change are not known.
+     */
+    private static function paidMeltFee(array $row, \Cashu\MeltQuote $quote, \Cashu\Wallet $wallet): int {
+        $recorded = max(0, (int)($row['fee'] ?? 0));
+        $secrets = Transfer::meltInputSecrets($row);
+        if ($secrets === [] || !is_array($quote->change)) {
+            return $recorded;
+        }
+        $inputs = $wallet->getStorage()->getProofsBySecretsAsObjects($secrets);
+        if (count($inputs) !== count($secrets)) {
+            return $recorded;
+        }
+        $change = 0;
+        foreach ($quote->change as $signature) {
+            if (!is_array($signature) || !is_int($signature['amount'] ?? null) || $signature['amount'] < 0) {
+                return $recorded;
+            }
+            $change += $signature['amount'];
+        }
+        $paid = \Cashu\Wallet::sumProofs($inputs) - (int)$row['amount'];
+        if ($paid < 0) {
+            return $recorded;
+        }
+        return max(0, min($paid, $paid - $change));
     }
 
     /**
@@ -703,7 +735,10 @@ class BackgroundRunner {
             return 'still_pending';
         }
 
-        $states = Invoice::checkProofStatesBySecrets($row['store_id'], $secrets);
+        // Ask the mint the token came from, which may no longer be one of the store's
+        // mints (CPS-11). Rows from before transfers recorded a mint carry it in the token.
+        [$mintUrl, $unit] = self::tokenTransferAccount($row);
+        $states = Invoice::checkProofStatesBySecrets($row['store_id'], $secrets, $mintUrl, $unit);
         $spent = 0;
         $unspent = 0;
         foreach ($secrets as $secret) {
@@ -718,7 +753,7 @@ class BackgroundRunner {
         // Fully redeemed: the recipient (or the sink) has the money.
         if ($spent === count($secrets)) {
             Transfer::complete($row['id'], (int)$row['amount']);
-            Invoice::markProofsSpent($row['store_id'], $secrets);
+            Invoice::markProofsSpent($row['store_id'], $secrets, $mintUrl, $unit);
             return 'completed';
         }
 
@@ -765,6 +800,31 @@ class BackgroundRunner {
         }
 
         return 'still_pending';
+    }
+
+    /**
+     * The wallet account a token transfer's proofs belong to: the row's mint and unit,
+     * else the token's own, else [null, null] (look it up among the store's mints).
+     *
+     * @return array{0: ?string, 1: ?string}
+     */
+    private static function tokenTransferAccount(array $row): array {
+        $mintUrl = trim((string)($row['mint_url'] ?? ''));
+        if ($mintUrl !== '') {
+            $unit = trim((string)($row['unit'] ?? ''));
+            return [$mintUrl, $unit !== '' ? strtolower($unit) : null];
+        }
+        if (!empty($row['token'])) {
+            try {
+                $token = \Cashu\TokenSerializer::deserialize((string)$row['token']);
+                if ($token->mint !== '') {
+                    return [$token->mint, strtolower($token->unit ?: 'sat')];
+                }
+            } catch (Throwable $e) {
+                // Unreadable token: fall back to the lookup.
+            }
+        }
+        return [null, null];
     }
 
     /**
@@ -989,14 +1049,22 @@ class BackgroundRunner {
         $totalCleaned = 0;
         $errors = 0;
         foreach (self::stores() as $store) {
-            try {
-                $wallet = Invoice::getWalletInstance($store['id']);
-                if ($wallet->hasStorage()) {
-                    $totalCleaned += $wallet->getStorage()->cleanExpiredPendingOperations();
+            // Local only, for every account (backups included): building a full wallet
+            // contacted the primary mint just to delete rows, failed while it was down,
+            // and never reached backup namespaces (REL-03).
+            $config = Config::getStore($store['id']);
+            if (empty($config['wallet_account_id'])) {
+                continue;
+            }
+            foreach (Config::getStoreWalletAccounts($store['id']) as $account) {
+                try {
+                    $storage = new \Cashu\WalletStorage(Database::getDbPath(), $account['mint_url'],
+                        $account['unit'], $config['wallet_account_id']);
+                    $totalCleaned += $storage->cleanExpiredPendingOperations();
+                } catch (Throwable $e) {
+                    $errors++;
+                    error_log("Cleanup failed for store {$store['id']} at {$account['mint_url']}: " . $e->getMessage());
                 }
-            } catch (Throwable $e) {
-                $errors++;
-                error_log("Cleanup failed for store {$store['id']}: " . $e->getMessage());
             }
         }
         return "cleaned {$totalCleaned}, {$errors} errors";

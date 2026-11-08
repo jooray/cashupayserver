@@ -73,6 +73,18 @@ function cashupay_display_unit(?string $unit): string {
  *
  * Whoever observes the redemption is in the best position to record it, so record it here.
  */
+/**
+ * The wallet account a transfer row was paid from, as [mint_url, unit], nulls when the
+ * row predates those columns (the library then finds the account holding the proofs).
+ *
+ * @return array{0: ?string, 1: ?string}
+ */
+function cashupay_transfer_account(array $row): array {
+    $mint = trim((string)($row['mint_url'] ?? ''));
+    $unit = strtolower(trim((string)($row['unit'] ?? '')));
+    return [$mint !== '' ? $mint : null, $mint !== '' && $unit !== '' ? $unit : null];
+}
+
 function cashupay_settle_redeemed_transfer(string $storeId, array $secrets): void {
     try {
         $row = Transfer::findPendingBySecrets($storeId, $secrets);
@@ -106,6 +118,29 @@ function cashupay_diagnostics(?string $storeId): array {
     // all. An install upgraded from a version that had no such check would otherwise
     // just go quiet, with the generic "tasks haven't run" message as the only clue.
     $needsBaseUrl = !Urls::isWordPress() && !Config::get('base_url');
+
+    // WordPress: the next WooCommerce step (install, activate, connect) that wp-admin
+    // shows as a notice (wordpress/btcpay-dependency.php). The operator lands here after
+    // setup, not in wp-admin, and an unconnected shop takes no payments (ARGON UX-05).
+    // Respects the notice's "I don't use WooCommerce" dismissal.
+    $woocommerceStep = null;
+    if (Urls::isWordPress() && function_exists('cashupay_btcpay_notice_step')) {
+        try {
+            $step = cashupay_btcpay_notice_step();
+            if ($step !== null) {
+                $woocommerceStep = [
+                    'text' => (($step['intro'] ?? true)
+                        ? 'To take payments in your WooCommerce shop, CashuPay needs the free "BTCPay for WooCommerce" plugin. '
+                        : '') . $step['why'],
+                    'label' => $step['url'] !== null ? $step['label'] : null,
+                    'url' => $step['url'],
+                    'external' => (bool)$step['external'],
+                ];
+            }
+        } catch (Throwable $e) {
+            error_log('CashuPayServer: WooCommerce step check failed: ' . $e->getMessage());
+        }
+    }
 
     $pendingTransfers = array_values(array_filter(
         Transfer::getPending(20),
@@ -293,6 +328,7 @@ function cashupay_diagnostics(?string $storeId): array {
         'checkoutFailures' => $checkoutFailures,
         'updatePrompt' => $updatePrompt,
         'background' => $background + ['stale' => $stale, 'needsBaseUrl' => $needsBaseUrl],
+        'woocommerceStep' => $woocommerceStep,
         'suggestedBaseUrl' => $needsBaseUrl ? rtrim(Config::getBaseUrl(), '/') : null,
         'pendingTransfers' => array_map([Transfer::class, 'formatForApi'], $pendingTransfers),
         'stuckInvoices' => $stuckInvoices,
@@ -621,7 +657,7 @@ if (isset($_GET['api'])) {
                     }
                 } else {
                     // Already in sats (or close)
-                    $balanceInSats = $mintUnit === 'msat' ? (int)ceil($balance / 1000) : $balance;
+                    $balanceInSats = $mintUnit === 'msat' ? intdiv($balance, 1000) : $balance;
                 }
             }
 
@@ -1190,12 +1226,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     break;
                 }
 
-                $states = Invoice::checkProofStatesBySecrets($row['store_id'], $secrets);
+                // Ask the mint the token came from (the row records it), not whichever
+                // mint is the primary now: a mint answers "unspent" for proofs it never
+                // issued, so the wrong one said "nobody has cashed this in" forever.
+                [$rowMint, $rowUnit] = cashupay_transfer_account($row);
+                $states = Invoice::checkProofStatesBySecrets($row['store_id'], $secrets, $rowMint, $rowUnit);
                 $spent = count(array_filter($states, fn($st) => $st === ProofState::SPENT));
 
                 if ($spent === count($secrets)) {
                     Transfer::complete($row['id'], (int)$row['amount']);
-                    Invoice::markProofsSpent($row['store_id'], $secrets);
+                    Invoice::markProofsSpent($row['store_id'], $secrets, $rowMint, $rowUnit);
                     echo json_encode([
                         'status' => Transfer::STATUS_COMPLETED,
                         'message' => 'This token has been cashed in. Marked as completed.',
@@ -1250,7 +1290,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 @set_time_limit(0);
                 $secrets = array_values(array_filter(explode(',', (string)($row['reference'] ?? ''))));
-                $recovered = Invoice::reclaimExportedProofs($row['store_id'], $secrets);
+                [$rowMint, $rowUnit] = cashupay_transfer_account($row);
+                $recovered = Invoice::reclaimExportedProofs($row['store_id'], $secrets, $rowMint, $rowUnit);
 
                 Transfer::fail($row['id'], 'Taken back by the operator; the token no longer works');
                 // The mint charges to move ecash, and on a small token that charge can be
@@ -1309,6 +1350,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (!is_numeric($amount) || (float)$amount <= 0) {
                     throw new Exception('Invalid amount');
                 }
+                // "5e-5" passes is_numeric() but is not a decimal BCMath can price.
+                $amount = ExchangeRates::normalizeDecimal((string)$amount);
                 // Only allow same-origin http(s) redirect targets (no javascript:/data:).
                 $checkout = null;
                 if ($redirect !== '' && Security::isSafePublicHttpUrl($redirect, true)) {
@@ -1755,60 +1798,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($storeId)) {
                     throw new Exception('Store ID required');
                 }
+                $secrets = is_array($secrets)
+                    ? array_values(array_unique(array_filter($secrets, fn($x) => is_string($x) && $x !== '')))
+                    : [];
                 if (empty($secrets)) {
                     echo json_encode(['spent' => false]);
                     break;
                 }
 
-                // Check database state first using library storage (quick check)
-                $wallet = Invoice::getWalletInstance($storeId);
-                $spentProofs = $wallet->getStorage()->getProofs(ProofState::SPENT);
-                $spentSecrets = array_column($spentProofs, 'secret');
-                $spentCount = count(array_intersect($secrets, $spentSecrets));
-
-                if ($spentCount == count($secrets)) {
-                    // All spent in database
-                    cashupay_settle_redeemed_transfer($storeId, $secrets);
-                    echo json_encode(['spent' => true, 'source' => 'db']);
-                    break;
-                }
-
-                // Check at mint for real-time status
-                $Ys = [];
-                foreach ($secrets as $secret) {
-                    $Y = \Cashu\Crypto::hashToCurve($secret);
-                    $Ys[] = bin2hex(\Cashu\Secp256k1::compressPoint($Y));
-                }
-
-                $store = Config::getStore($storeId);
-                $client = new \Cashu\MintClient($store['mint_url']);
-                $response = $client->post('checkstate', ['Ys' => $Ys]);
-
-
-                // "All spent" is a claim that the recipient redeemed the token, so it must
-                // be proved, not assumed. Starting from true meant an empty or truncated
-                // states array confirmed redemption of proofs the mint never answered for.
-                $states = $response['states'] ?? null;
-                if (!is_array($states) || count($states) !== count($Ys)) {
+                // The token may have come from a backup mint: ask the mint its transfer row
+                // names (or, without one, the mint whose wallet holds these proofs). This
+                // used to ask the primary, which answers "unspent" for proofs it never
+                // issued, so a claimed backup-mint token was never noticed.
+                $row = Transfer::findPendingBySecrets($storeId, $secrets);
+                [$rowMint, $rowUnit] = $row ? cashupay_transfer_account($row) : [null, null];
+                $states = Invoice::checkProofStatesBySecrets($storeId, $secrets, $rowMint, $rowUnit);
+                if (count($states) !== count($secrets)) {
                     throw new Exception('Mint returned an incomplete proof state response');
                 }
 
+                // "All spent" is a claim that the recipient redeemed the token, so it must
+                // be proved, not assumed.
                 $allSpent = true;
-                foreach ($states as $i => $state) {
-                    if (isset($state['Y']) && !hash_equals($Ys[$i], strtolower((string)$state['Y']))) {
-                        throw new Exception('Mint returned proof states in an unexpected order');
-                    }
-                    if (strtoupper($state['state'] ?? '') !== ProofState::SPENT) {
+                foreach ($secrets as $secret) {
+                    if (($states[$secret] ?? '') !== ProofState::SPENT) {
                         $allSpent = false;
                         break;
                     }
                 }
 
-                // If all spent at mint but not in DB, update DB
-                if ($allSpent && $spentCount < count($secrets)) {
-                    Invoice::markProofsSpent($storeId, $secrets);
-                }
                 if ($allSpent) {
+                    Invoice::markProofsSpent($storeId, $secrets, $rowMint, $rowUnit);
                     cashupay_settle_redeemed_transfer($storeId, $secrets);
                 }
 
@@ -1839,11 +1859,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mintUnit = Config::getStoreMintUnit($storeId);
                 $isFiatMint = !in_array(strtolower($mintUnit), ['sat', 'sats', 'msat']);
 
-                // Get wallet for this store
-                $wallet = Invoice::getWalletInstance($storeId);
-                // What one withdrawal can use: the largest single mint's balance.
-                $balance = Invoice::getLargestSpendableBalance($storeId);
-
                 // Check if it's a BOLT-11 invoice or Lightning address
                 $isBolt11 = LightningAddress::isBolt11Invoice($destination);
                 $isLightningAddress = !$isBolt11 && strpos($destination, '@') !== false;
@@ -1854,10 +1869,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 // Get invoice for the amount
                 if ($isBolt11) {
-                    // For BOLT-11, extract the amount and use the invoice directly
-                    $bolt11Info = LightningAddress::getBolt11Amount($destination, $storeId);
-                    if ($bolt11Info !== null && $bolt11Info['amountSats'] > 0) {
-                        $amountSats = $bolt11Info['amountSats'];
+                    // For BOLT-11, the invoice's own amount (parsed locally) wins
+                    $invoiceSats = \Cashu\Bolt11::amountSats($destination);
+                    if ($invoiceSats > 0) {
+                        $amountSats = $invoiceSats;
                     }
                     $bolt11 = $destination;
                 } else {
@@ -1865,8 +1880,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $bolt11 = \Cashu\LightningAddress::getInvoice($destination, $amountSats, null);
                 }
 
-                // Request melt quote to get actual cost in mint units
-                $meltQuote = $wallet->requestMeltQuote($bolt11);
+                // Price it at the mint that will pay it (a backup when the primary is
+                // down or short), and judge it against that mint's balance alone.
+                $priced = LightningAddress::quotePayingAccount($storeId, $bolt11);
+                if ($priced['quote'] === null) {
+                    error_log('CashuPayServer: withdrawal estimate failed: ' . ($priced['error'] ?? 'no wallet'));
+                    throw new Exception('Your mint could not be reached to price this withdrawal. Try again in a few minutes.');
+                }
+                $meltQuote = $priced['quote'];
+                $balance = (int)$priced['account']['balance'];
 
                 $costMintUnit = $meltQuote->amount;
                 $feeReserve = $meltQuote->feeReserve;
@@ -1993,10 +2015,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // For BOLT-11 with encoded amount, get the sat amount from the invoice
                 // This overrides the frontend amount since the invoice has a fixed amount
                 if ($isBolt11) {
-                    $bolt11Info = LightningAddress::getBolt11Amount($destination, $storeId);
-                    if ($bolt11Info !== null && $bolt11Info['amountSats'] > 0) {
+                    // Parsed locally: asking a mint here only to read the amount cost a
+                    // network timeout per withdrawal whenever the primary was down.
+                    $invoiceSats = \Cashu\Bolt11::amountSats($destination);
+                    if ($invoiceSats > 0) {
                         // Use the invoice's encoded amount in SATS
-                        $amount = $bolt11Info['amountSats'];
+                        $amount = $invoiceSats;
                         $amountIsSats = true; // Bolt11 encoded amount is in sats
                     }
                 }
@@ -2027,21 +2051,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ? $destination
                     : LightningAddress::getInvoice($destination, $amountSats, 'CashuPayServer withdrawal');
 
-                // One payment is paid from one mint. Price it at the primary, then pay
-                // from the account that can cover it (a backup that took payments while
-                // the primary was down, if the primary alone cannot).
-                try {
-                    $probeQuote = Invoice::getWalletInstance($storeId)->requestMeltQuote($bolt11);
-                    $needed = $probeQuote->amount + $probeQuote->feeReserve;
-                } catch (Throwable $probeError) {
-                    // Primary unreachable: estimate, so a funded backup can still pay.
-                    $needed = match (strtolower($mintUnit)) {
-                        'sat', 'sats' => $amountSats,
-                        'msat' => $amountSats * 1000,
-                        default => Invoice::getLargestSpendableBalance($storeId),
-                    };
-                }
-                $account = Invoice::getFundsAccount($storeId, $needed);
+                // One payment is paid from one mint: the first of the store's mints, the
+                // primary preferred, that answers and can cover the price (a backup that
+                // took payments while the primary was down, if the primary cannot).
+                $account = LightningAddress::quotePayingAccount($storeId, $bolt11)['account'];
                 $result = LightningAddress::meltToBolt11(
                     $storeId,
                     $bolt11,
@@ -2164,7 +2177,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 if (in_array($mintUnit, ['sat', 'sats', 'msat'])) {
                     // Already in sats (or close)
-                    $balanceInSats = $mintUnit === 'msat' ? (int)ceil($balance / 1000) : $balance;
+                    $balanceInSats = $mintUnit === 'msat' ? intdiv($balance, 1000) : $balance;
                 } else {
                     // Fiat mint - convert to sats
                     $balanceInSats = ExchangeRates::convertMintUnitToSats(
@@ -2289,7 +2302,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             }
 
                             if (!empty($spentSecrets)) {
-                                Invoice::markProofsSpent($storeId, $spentSecrets);
+                                Invoice::markProofsSpent($storeId, $spentSecrets, $account['mint_url'], $account['unit']);
                             }
                             $proofs = $validProofs;
                             $balance = \Cashu\Wallet::sumProofs($proofs);
@@ -2369,7 +2382,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 Invoice::markProofsExported($storeId, $donationSecrets);
                                 if (Donation::postTokenToSink($donationToken)) {
                                     Transfer::complete($donationTransferId, \Cashu\Wallet::sumProofs($donationProofs));
-                                    Invoice::markProofsSpent($storeId, $donationSecrets);
+                                    Invoice::markProofsSpent($storeId, $donationSecrets, $account['mint_url'], $account['unit']);
                                     $donationSuccess = true;
                                 }
                               } catch (Throwable $de) {
@@ -2485,7 +2498,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                                 if (Donation::postTokenToSink($donationToken)) {
                                     Transfer::complete($donationTransferId, $donationAmount);
-                                    Invoice::markProofsSpent($storeId, $donationSecrets);
+                                    Invoice::markProofsSpent($storeId, $donationSecrets, $account['mint_url'], $account['unit']);
                                     $donationSuccess = true;
                                 }
                                 // A failed post leaves the transfer pending with its token;
@@ -2594,7 +2607,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $storeId = $_POST['store_id'] ?? '';
                 $mintUrl = $_POST['mint_url'] ?? '';
-                $unit = $_POST['unit'] ?? 'sat';
                 $priority = (int)($_POST['priority'] ?? 100);
 
                 if (empty($storeId)) {
@@ -2603,12 +2615,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($mintUrl)) {
                     throw new Exception('Mint URL required');
                 }
+                $backupStore = Config::getStore($storeId);
+                if (!$backupStore) {
+                    throw new Exception('Store not found');
+                }
+                // A backup takes payments in the store's own currency: checkout only ever
+                // fails over to backups of that unit, so any other unit is never used.
+                $unit = strtolower((string)($backupStore['mint_unit'] ?? 'sat'));
                 $mintUrl = MintHelpers::assertSafeMintUrl((string)$mintUrl);
+
+                $primaryUrl = (string)($backupStore['mint_url'] ?? '');
+                if ($primaryUrl !== ''
+                    && Config::normalizeMintUrl($mintUrl, $primaryUrl) === rtrim($primaryUrl, '/')) {
+                    throw new Exception('This is already your store\'s main mint. A backup has to be a different mint.');
+                }
 
                 // Test connection first
                 $test = Config::testMintConnection($mintUrl);
                 if (!$test['success']) {
                     throw new Exception('Cannot connect to mint: ' . $test['error']);
+                }
+
+                // A mint that cannot take payments in the store's currency would be
+                // accepted here and then fail every checkout the day the main mint is down.
+                try {
+                    $mintUnits = array_map('strtolower', array_map('strval', array_keys(\Cashu\Wallet::getSupportedUnits($mintUrl))));
+                } catch (Throwable $e) {
+                    error_log('CashuPayServer: backup mint unit check failed: ' . $e->getMessage());
+                    throw new Exception('Could not reach the mint. Check the address, or try again in a few minutes.');
+                }
+                if (!in_array($unit, $mintUnits, true)) {
+                    $label = strtoupper(cashupay_display_unit($unit));
+                    throw new Exception(
+                        "This mint does not accept payments in {$label}, the currency your store uses, "
+                        . "so it could not take over when your main mint is down. Choose a mint that supports {$label}."
+                    );
                 }
 
                 $id = Config::addStoreBackupMint($storeId, $mintUrl, $unit, $priority);
@@ -4612,10 +4653,12 @@ $isWp = Urls::isWordPress();
         }
 
         // Decimals of a unit's smallest amount. Mirrors Config::unitDecimals() on the
-        // server: sat/msat are whole numbers, btc counts satoshis, everything else cents.
+        // server: sat/msat and currencies without cents (yen, won, …) are whole numbers,
+        // btc counts satoshis, everything else cents.
+        const ZERO_DECIMAL_UNITS = <?php echo json_encode(Config::ZERO_DECIMAL_UNITS); ?>;
         function unitDecimals(unit) {
             const u = (unit || 'sat').toLowerCase();
-            if (u === 'sat' || u === 'sats' || u === 'msat') return 0;
+            if (ZERO_DECIMAL_UNITS.includes(u)) return 0;
             if (u === 'btc') return 8;
             return 2;
         }
@@ -4831,7 +4874,24 @@ $isWp = Urls::isWordPress();
             document.getElementById('store-select').addEventListener('change', onStoreSelectChange);
 
             // Header buttons
-            document.getElementById('refresh-btn').addEventListener('click', loadDashboard);
+            // Refresh shows the saved figures at once, then checks with the mint (the same
+            // background run "Run background tasks now" starts: pending payments, tokens
+            // and withdrawals) and shows the result. Reloading local figures alone never
+            // noticed anything the mint knew and this server did not.
+            const refreshBtn = document.getElementById('refresh-btn');
+            refreshBtn.addEventListener('click', async () => {
+                if (refreshBtn.disabled) return;
+                refreshBtn.disabled = true;
+                try {
+                    await loadDashboard();
+                    await postWithCsrf(adminUrl, 'action=run_background').catch(() => null);
+                    await loadDashboard();
+                } catch (e) {
+                    // loadDashboard reports its own failures.
+                } finally {
+                    refreshBtn.disabled = false;
+                }
+            });
             initBackupControls();
 
             const runBackgroundBtn = document.getElementById('run-background-btn');
@@ -5522,6 +5582,7 @@ $isWp = Urls::isWordPress();
 
             const hasItems = diag && (diag.needsAttention
                 || diag.background?.needsBaseUrl
+                || diag.woocommerceStep
                 || (diag.background?.failing || []).length > 0
                 || diag.updatePrompt
                 || (diag.payoutReminders || []).length > 0
@@ -5584,6 +5645,19 @@ $isWp = Urls::isWordPress();
             // upgraded install does not just look broken. Only urgent when nothing else
             // is running background work: with a cron job the site is healthy and this
             // is merely a setting worth filling in.
+            if (diag.woocommerceStep) {
+                const w = diag.woocommerceStep;
+                items.push(w.text);
+                if (w.url && w.label) {
+                    actions.push({
+                        label: w.label,
+                        run: () => w.external
+                            ? window.open(w.url, '_blank', 'noopener')
+                            : (window.location.href = w.url),
+                    });
+                }
+            }
+
             if (bg.needsBaseUrl) {
                 items.push(bg.stale
                     ? 'This server does not know its own web address, so it cannot run '
@@ -6079,6 +6153,9 @@ $isWp = Urls::isWordPress();
                     } else {
                         msg = `Sent ${formatAmount(result.amountPaid, mintUnit)} ${unitLabel}!`;
                     }
+                    if (result.changePending) {
+                        msg += ' The leftover is still coming back from the mint and will show in your balance shortly.';
+                    }
 
                     if (result.donationSuccess && result.donated > 0) {
                         showToast(msg, 'success');
@@ -6168,15 +6245,19 @@ $isWp = Urls::isWordPress();
                             helpText.textContent = `Invoice amount: ${result.amountSats.toLocaleString()} SAT (fixed)`;
                             helpText.style.color = 'var(--success)';
                             updateWithdrawInfo();
+                        } else if (result.error) {
+                            throw new Error(result.error);
                         } else {
-                            // Amountless invoice - enable amount field
+                            // Amountless invoice: the withdrawal refuses these, so say so now
+                            // instead of inviting an amount that fails on submit.
                             bolt11FixedAmount = null;
                             bolt11FeeEstimate = null;
-                            bolt11MeltError = false;
-                            amountInput.disabled = false;
-                            document.getElementById('btn-withdraw-max').disabled = false;
-                            helpText.textContent = 'Amountless invoice - enter amount below';
-                            helpText.style.color = 'var(--text-secondary)';
+                            bolt11MeltError = true;
+                            amountInput.disabled = true;
+                            document.getElementById('btn-withdraw-max').disabled = true;
+                            helpText.textContent = 'This invoice has no amount set. Please create an invoice for a specific amount, or use a Lightning address.';
+                            helpText.style.color = 'var(--error)';
+                            updateWithdrawInfo();
                         }
                     } catch (e) {
                         console.error('Failed to check bolt-11:', e);
@@ -7831,10 +7912,15 @@ $isWp = Urls::isWordPress();
                 }
 
                 // For fiat mints, show fiat balance primary with SAT approximation
-                // The fiat amount is what they actually have; SAT is an estimate based on our exchange rate
+                // The fiat amount is what they actually have; SAT is an estimate based on our exchange rate.
+                // One withdrawal pays from one mint, so show that mint's balance (exportAvailable),
+                // not the total across mints, which a single withdrawal cannot reach.
                 if (isFiat) {
-                    const balanceSats = dashboardData?.balanceInSats || 0;
-                    const balanceFiat = dashboardData?.balance || 0;
+                    const balanceFiat = dashboardData?.exportAvailable ?? 0;
+                    const total = dashboardData?.balance || 0;
+                    const balanceSats = total > 0
+                        ? Math.floor((dashboardData?.balanceInSats || 0) * balanceFiat / total)
+                        : 0;
                     document.getElementById('withdraw-available').textContent =
                         `${formatAmount(balanceFiat, mintUnit)} ${mintUnit.toUpperCase()} (~${balanceSats.toLocaleString()} SAT)`;
                 } else {

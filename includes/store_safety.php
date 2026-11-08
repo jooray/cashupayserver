@@ -20,8 +20,45 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class StoreSafety {
-    /** Units tried when matching an old wallet namespace to a mint (as Invoice does). */
-    private const KNOWN_UNITS = ['sat', 'usd', 'eur', 'usdt', 'msat'];
+    /**
+     * Units always tried when matching an old wallet namespace to a mint, on top of
+     * every unit this database has recorded (candidateUnits()). Covers the units the
+     * wallet library knows and common fiat ones (CPS-08).
+     */
+    private const COMMON_UNITS = ['sat', 'msat', 'btc', 'usd', 'eur', 'gbp', 'usdt', 'usdc',
+        'cad', 'jpy', 'aud', 'chf'];
+
+    /**
+     * Every unit a wallet namespace here could have been made with: the common ones plus
+     * each unit any store, backup mint, invoice, transfer, payment request or restore has
+     * recorded. Shared with Invoice::scanStrandedNamespaces().
+     *
+     * @return string[]
+     */
+    public static function candidateUnits(): array {
+        $units = array_fill_keys(self::COMMON_UNITS, true);
+        $sources = [
+            'SELECT DISTINCT mint_unit AS u FROM stores',
+            'SELECT DISTINCT unit AS u FROM store_mints',
+            'SELECT DISTINCT mint_unit AS u FROM invoices',
+            'SELECT DISTINCT unit AS u FROM transfers',
+            'SELECT DISTINCT unit AS u FROM payment_requests',
+            'SELECT DISTINCT unit AS u FROM cashu_restore_progress',
+        ];
+        foreach ($sources as $sql) {
+            try {
+                foreach (Database::fetchAll($sql) as $row) {
+                    $unit = strtolower(trim((string)($row['u'] ?? '')));
+                    if ($unit !== '' && preg_match('/^[a-z0-9]{1,16}$/', $unit)) {
+                        $units[$unit] = true;
+                    }
+                }
+            } catch (Throwable $e) {
+                // A table an older database does not have yet: nothing recorded there.
+            }
+        }
+        return array_keys($units);
+    }
 
     /**
      * Reasons a store is not safe to delete, in plain language.
@@ -103,9 +140,12 @@ class StoreSafety {
                     if ($stranded['mint_url'] !== null) {
                         $blockers[] = "{$stranded['amount']} {$stranded['unit']} of ecash left on a previous mint ("
                             . self::mintLabel($stranded['mint_url']) . '); recover it from the previous-mint screen first';
-                    } else {
+                    } elseif ($stranded['amount'] > 0) {
                         $blockers[] = "{$stranded['amount']} of ecash from an earlier mint that could not be matched to a store "
                             . '(it may belong to this one); recover it from the previous-mint screen first';
+                    } else {
+                        $blockers[] = 'an unfinished payment on an earlier mint that could not be matched to a store '
+                            . '(it may belong to this one, and may still bring in money)';
                     }
                 }
             } catch (Throwable $e) {
@@ -138,6 +178,7 @@ class StoreSafety {
 
         // Value-bearing namespaces: proofs that are or may become spendable, and journals.
         $holdings = [];
+        $journaled = [];
         foreach (Database::fetchAll(
             "SELECT wallet_id, COALESCE(SUM(amount), 0) AS s FROM cashu_proofs
              WHERE state IN (?, ?, ?) GROUP BY wallet_id",
@@ -147,6 +188,7 @@ class StoreSafety {
         }
         foreach (Database::fetchAll("SELECT DISTINCT wallet_id FROM cashu_pending_operations") as $row) {
             $holdings[$row['wallet_id']] = $holdings[$row['wallet_id']] ?? 0;
+            $journaled[$row['wallet_id']] = true;
         }
         if (empty($holdings)) {
             return [];
@@ -174,11 +216,12 @@ class StoreSafety {
         }
 
         $out = [];
+        $units = self::candidateUnits();
         foreach ($holdings as $walletId => $amount) {
             if (isset($live[$walletId])) {
                 continue;
             }
-            $match = self::identify((string)$walletId, array_keys($mints), array_merge([null], array_keys($accounts)));
+            $match = self::identify((string)$walletId, array_keys($mints), $units, array_merge([null], array_keys($accounts)));
             if ($match !== null) {
                 // Recoverable after deletion only if another account (or none) derives it.
                 if ($match['account'] !== $ownAccount) {
@@ -188,7 +231,9 @@ class StoreSafety {
                           'unit' => $match['unit'], 'amount' => $amount];
                 continue;
             }
-            if ($amount > 0) {
+            // An in-flight operation (e.g. a paid Lightning invoice not yet collected)
+            // has value even with no proofs yet (CPS-08).
+            if ($amount > 0 || isset($journaled[$walletId])) {
                 $out[] = ['wallet_id' => (string)$walletId, 'mint_url' => null, 'unit' => null, 'amount' => $amount];
             }
         }
@@ -196,9 +241,9 @@ class StoreSafety {
     }
 
     /** @return array{mint_url: string, unit: string, account: ?string}|null */
-    private static function identify(string $walletId, array $mints, array $accounts): ?array {
+    private static function identify(string $walletId, array $mints, array $units, array $accounts): ?array {
         foreach ($mints as $mint) {
-            foreach (self::KNOWN_UNITS as $unit) {
+            foreach ($units as $unit) {
                 foreach ($accounts as $acct) {
                     if (WalletStorage::deriveWalletId($mint, $unit, $acct) === $walletId) {
                         return ['mint_url' => $mint, 'unit' => $unit, 'account' => $acct];

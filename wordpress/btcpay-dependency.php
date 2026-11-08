@@ -25,6 +25,10 @@ const CASHUPAY_BTCPAY_NOTICE_META = 'cashupay_dismissed_btcpay_notice';
 add_action('admin_notices', 'cashupay_btcpay_notice');
 add_action('admin_enqueue_scripts', 'cashupay_btcpay_notice_assets');
 add_action('admin_post_cashupay_dismiss_btcpay', 'cashupay_dismiss_btcpay_notice');
+add_action('admin_post_cashupay_connect_woocommerce', 'cashupay_connect_woocommerce_action');
+add_action('admin_notices', 'cashupay_connect_woocommerce_result_notice');
+
+const CASHUPAY_CONNECT_RESULT_TRANSIENT = 'cashupay_connect_result_';
 
 /**
  * Where a plugin stands on this site.
@@ -172,15 +176,19 @@ function cashupay_btcpay_next_step(): ?array {
     // connection (it only runs inside setup), so say so until the gateway points somewhere.
     // A URL that is not ours means a real BTCPay Server; that is the admin's choice.
     if ((string)get_option('btcpay_gf_url', '') === '') {
-        $can = current_user_can('manage_woocommerce');
+        // The same one-click connection as the setup wizard's last step (ARGON UX-05):
+        // someone who installed the plugins after setup, or disconnected another BTCPay
+        // Server as the wizard told her, could otherwise only copy addresses by hand.
+        $can = current_user_can('manage_woocommerce') && cashupay_current_user_can_manage();
         return [
             'intro'    => false,
-            'why'      => sprintf(
-                __('BTCPay for WooCommerce is switched on but not connected to CashuPay yet, so your shop cannot take payments through it. In its settings, paste %s as the "BTCPay Server URL", click "Generate API key" and approve the connection.', 'cashupay'),
-                Urls::server()
-            ),
-            'label'    => $can ? __('Open BTCPay settings', 'cashupay') : '',
-            'url'      => $can ? admin_url('admin.php?page=wc-settings&tab=btcpay_settings') : null,
+            'why'      => $can
+                ? __('BTCPay for WooCommerce is switched on but not connected to CashuPay yet, so your shop cannot take payments through it. Click "Connect my shop to CashuPay" and CashuPay fills in its settings for you.', 'cashupay')
+                : __('BTCPay for WooCommerce is switched on but not connected to CashuPay yet, so your shop cannot take payments through it. Please ask the site administrator to open this page and click "Connect my shop to CashuPay".', 'cashupay'),
+            'label'    => $can ? __('Connect my shop to CashuPay', 'cashupay') : '',
+            'url'      => $can
+                ? wp_nonce_url(admin_url('admin-post.php?action=cashupay_connect_woocommerce'), 'cashupay_connect_woocommerce')
+                : null,
             'external' => false,
             'details'  => null,
         ];
@@ -272,4 +280,88 @@ function cashupay_dismiss_btcpay_notice(): void {
     }
     wp_safe_redirect(wp_get_referer() ?: admin_url());
     exit;
+}
+
+/**
+ * The store the WooCommerce gateway should use: the one it was connected to before, if
+ * it still exists and is set up, else the first store that finished setup.
+ *
+ * @return array{id: string, name: string}|null
+ */
+function cashupay_woocommerce_store(): ?array {
+    require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+    $ready = "mint_url IS NOT NULL AND mint_url != '' AND seed_phrase IS NOT NULL AND seed_phrase != ''";
+    $previous = (string)get_option('btcpay_gf_store_id', '');
+    if ($previous !== '') {
+        $row = Database::fetchOne("SELECT id, name FROM stores WHERE id = ? AND $ready", [$previous]);
+        if ($row) {
+            return ['id' => (string)$row['id'], 'name' => (string)$row['name']];
+        }
+    }
+    $row = Database::fetchOne("SELECT id, name FROM stores WHERE $ready ORDER BY created_at, id LIMIT 1");
+    return $row ? ['id' => (string)$row['id'], 'name' => (string)$row['name']] : null;
+}
+
+/** "Connect my shop to CashuPay" in the notice above. */
+function cashupay_connect_woocommerce_action(): void {
+    check_admin_referer('cashupay_connect_woocommerce');
+    if (!cashupay_current_user_can_manage() || !current_user_can('manage_woocommerce')) {
+        wp_die(esc_html__('Your account is not allowed to change the shop\'s payment settings.', 'cashupay'), '', ['response' => 403]);
+    }
+
+    $result = ['ok' => false, 'text' => ''];
+    try {
+        require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
+        require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
+        require_once __DIR__ . '/btcpay-integration.php';
+        $store = Database::isInitialized() && Config::isSetupComplete() ? cashupay_woocommerce_store() : null;
+        if ($store === null) {
+            $result['text'] = __('CashuPay is not set up yet. Finish the CashuPay setup first (Tools → CashuPay), then click the button again.', 'cashupay');
+        } else {
+            $connect = cashupay_connect_woocommerce_store($store['id']);
+            if (!($connect['success'] ?? false)) {
+                $result['text'] = (string)($connect['message'] ?? $connect['error'] ?? __('The connection did not work.', 'cashupay'));
+            } elseif (!($connect['webhook']['success'] ?? false)) {
+                // Without the webhook, paid orders are never marked paid.
+                $result['text'] = sprintf(
+                    __('The shop is connected to CashuPay, but CashuPay cannot tell your shop when an order is paid, so orders would stay "Pending payment". Send this message to your hosting provider: %s', 'cashupay'),
+                    (string)($connect['webhook']['error'] ?? '')
+                );
+            } else {
+                $result = ['ok' => true, 'text' => sprintf(
+                    __('Your shop is connected to CashuPay (store "%s"). Customers can now pay with Bitcoin at checkout. Check that "BTCPay" is switched on under WooCommerce → Settings → Payments.', 'cashupay'),
+                    $store['name']
+                )];
+            }
+        }
+    } catch (Throwable $e) {
+        error_log('CashuPayServer: connecting WooCommerce failed: ' . $e->getMessage());
+        $result['text'] = sprintf(__('The connection did not work: %s', 'cashupay'), $e->getMessage());
+    }
+    set_transient(CASHUPAY_CONNECT_RESULT_TRANSIENT . get_current_user_id(), $result, 10 * MINUTE_IN_SECONDS);
+    // Back where the button was, except Tools → CashuPay: once connected, that page
+    // forwards to the CashuPay dashboard, which shows no WordPress notices.
+    // The result is a wp-admin notice, so a click from the CashuPay dashboard (outside
+    // wp-admin) lands on the WordPress dashboard where it is shown.
+    $back = (string)wp_get_referer();
+    if ($back === '' || strpos($back, 'page=cashupay') !== false || strpos($back, admin_url()) !== 0) {
+        $back = admin_url();
+    }
+    wp_safe_redirect($back);
+    exit;
+}
+
+/** What the "Connect my shop to CashuPay" button did, shown once on the next page. */
+function cashupay_connect_woocommerce_result_notice(): void {
+    if (!cashupay_current_user_can_manage()) {
+        return;
+    }
+    $key = CASHUPAY_CONNECT_RESULT_TRANSIENT . get_current_user_id();
+    $result = get_transient($key);
+    if (!is_array($result) || ($result['text'] ?? '') === '') {
+        return;
+    }
+    delete_transient($key);
+    echo '<div class="notice ' . (!empty($result['ok']) ? 'notice-success' : 'notice-error') . '"><p><strong>CashuPay:</strong> '
+        . esc_html((string)$result['text']) . '</p></div>';
 }

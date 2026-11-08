@@ -13,6 +13,7 @@ require_once __DIR__ . '/invoice.php';
 require_once __DIR__ . '/rates.php';
 require_once __DIR__ . '/transfer.php';
 require_once __DIR__ . '/locks.php';
+require_once __DIR__ . '/http.php';
 require_once __DIR__ . '/../cashu-wallet-php/CashuWallet.php';
 
 use Cashu\Wallet;
@@ -336,6 +337,32 @@ class LightningAddress {
             );
         }
 
+        if (!empty($result['changeRecoveryPending'])) {
+            // Paid, but the change the mint owes back could not be collected yet; the
+            // library keeps its melt:<quote> journal open and recovers it later. Counting
+            // the missing change as the fee overstated it by up to the whole fee reserve,
+            // and completing the row released the guard against a second withdrawal while
+            // the inputs were still reserved. BackgroundRunner::reconcileWithdrawal()
+            // completes the row once the journal closes.
+            Transfer::note(
+                $transferId,
+                'Payment sent. The leftover from this payment is still on its way back from '
+                . 'the mint and will be added to your balance automatically.'
+            );
+            return [
+                'success' => true,
+                'preimage' => $result['preimage'] ?? null,
+                'amountPaid' => $meltQuote->amount,
+                'fee' => null,
+                'changeAmount' => 0,
+                'changePending' => true,
+                'quote' => $meltQuote->quote,
+                'transferId' => $transferId,
+                'mintUrl' => $account['mint_url'],
+                'unit' => $mintUnit,
+            ];
+        }
+
         $changeAmount = Wallet::sumProofs($result['change'] ?? []);
         // Real cost = what left minus what came back. feeReserve - change went negative
         // whenever proof denominations over-covered the target.
@@ -354,6 +381,7 @@ class LightningAddress {
             'amountPaid' => $meltQuote->amount,
             'fee' => $fee,
             'changeAmount' => $changeAmount,
+            'changePending' => false,
             'quote' => $meltQuote->quote,
             'transferId' => $transferId,
             'mintUrl' => $account['mint_url'],
@@ -538,9 +566,12 @@ class LightningAddress {
         }
 
         try {
-            $meltAmountSats = self::sendFitted($meltAmountSats, fn(int $sats) => self::meltToAddress(
-                $store['id'], $store['auto_melt_address'], $sats,
-                'CashuPayServer auto-withdrawal', Transfer::TYPE_AUTO_WITHDRAW, $account, $meltAmountInMintUnit));
+            $melt = [];
+            $meltAmountSats = self::sendFitted($meltAmountSats, function (int $sats) use ($store, $account, $meltAmountInMintUnit, &$melt) {
+                return $melt = self::meltToAddress(
+                    $store['id'], $store['auto_melt_address'], $sats,
+                    'CashuPayServer auto-withdrawal', Transfer::TYPE_AUTO_WITHDRAW, $account, $meltAmountInMintUnit);
+            });
         } catch (Exception $meltError) {
             // Mint unreachable, insufficient funds, … Log and carry on with other stores.
             error_log("Auto-melt operation failed for store {$store['id']} at {$account['mint_url']}: " . $meltError->getMessage());
@@ -572,6 +603,8 @@ class LightningAddress {
             'rate' => $ratePerSat,
             'convertedSats' => $convertedSats,
             'donation' => ($donation['success'] ?? false) ? $donationAmount : 0,
+            // Paid, change still coming back: the transfer row stays pending until then.
+            'changePending' => !empty($melt['changePending']),
             'success' => true,
         ];
     }
@@ -594,21 +627,27 @@ class LightningAddress {
     public static function getBolt11Amount(string $bolt11, ?string $storeId = null): ?array {
         // Parse the bolt11 amount locally first (no network needed)
         $amountSats = self::parseBolt11Amount($bolt11);
+        if (\Cashu\Bolt11::amountSats($bolt11) === 0) {
+            // Amountless: meltToBolt11() refuses it anyway, so do not ask a mint.
+            return ['amountSats' => 0, 'amountMintUnit' => null, 'feeReserve' => null];
+        }
 
         try {
-            // Get wallet for the specified store, or fall back to first configured store
             if ($storeId) {
-                $wallet = Invoice::getWalletInstance($storeId);
+                // Price it at the mint that will actually pay: with the primary down, a
+                // backup holding the money must still be able to pay a pasted invoice.
+                $priced = self::quotePayingAccount($storeId, $bolt11);
+                if ($priced['quote'] === null) {
+                    throw new Exception($priced['error'] ?? 'The mint could not be reached.');
+                }
+                $meltQuote = $priced['quote'];
             } else {
                 $stores = Database::fetchAll("SELECT id FROM stores WHERE mint_url IS NOT NULL AND seed_phrase IS NOT NULL LIMIT 1");
                 if (empty($stores)) {
                     return ['amountSats' => $amountSats, 'amountMintUnit' => null, 'feeReserve' => null];
                 }
-                $wallet = Invoice::getWalletInstance($stores[0]['id']);
+                $meltQuote = Invoice::getWalletInstance($stores[0]['id'])->requestMeltQuote($bolt11);
             }
-
-            // Get melt quote (returns amount in mint's unit and fee estimate)
-            $meltQuote = $wallet->requestMeltQuote($bolt11);
 
             return [
                 'amountSats' => $amountSats,
@@ -620,6 +659,69 @@ class LightningAddress {
             // Still return the locally-parsed amount even if melt quote fails
             return ['amountSats' => $amountSats, 'amountMintUnit' => null, 'feeReserve' => null, 'meltError' => $e->getMessage()];
         }
+    }
+
+    /**
+     * Pick the wallet account that will pay this invoice, and price it there.
+     *
+     * One payment is paid from one mint. Accounts are tried in the order a withdrawal
+     * prefers them — the primary, then the others by balance — skipping any that
+     * cannot hold the invoice amount, and the first one that answers and can cover the
+     * mint's price (amount plus fee reserve) is it. Pricing only at the primary meant a
+     * store whose primary mint was down could not pay out the money its backup took in.
+     *
+     * The quote is for display and selection; executeMelt() asks the chosen mint for its
+     * own. A second quote for the same invoice is harmless: an unused one just expires.
+     *
+     * @return array{account: ?array, quote: ?\Cashu\MeltQuote, error: ?string}
+     *         account is null only for a store without a wallet; quote is null when no
+     *         mint answered (error says why)
+     */
+    public static function quotePayingAccount(string $storeId, string $bolt11): array {
+        $unit = strtolower(Config::getStoreMintUnit($storeId));
+        $sats = \Cashu\Bolt11::amountSats($bolt11);
+        // The least an account must hold to be worth asking. Fiat needs a rate: any money.
+        $floor = match ($unit) {
+            'sat', 'sats' => max(1, $sats),
+            'msat' => max(1, $sats * 1000),
+            default => 1,
+        };
+
+        $accounts = array_values(array_filter(
+            Invoice::getAccountBalances($storeId),
+            fn($a) => $a['same_unit'] && $a['balance'] >= $floor
+        ));
+        usort($accounts, fn($x, $y) => [$y['primary'], $y['balance']] <=> [$x['primary'], $x['balance']]);
+        if (empty($accounts)) {
+            // Nothing can cover it; price it where getFundsAccount() would pay from, so
+            // the operator still sees the amount and what is missing.
+            $fallback = Invoice::getFundsAccount($storeId, $floor);
+            if ($fallback === null) {
+                return ['account' => null, 'quote' => null, 'error' => 'This store has no wallet set up yet.'];
+            }
+            $accounts = [$fallback];
+        }
+
+        $best = null;
+        $lastError = null;
+        foreach ($accounts as $account) {
+            try {
+                $quote = Invoice::getWalletForStore($storeId, $account['mint_url'], $account['unit'])
+                    ->requestMeltQuote($bolt11);
+            } catch (Throwable $e) {
+                $lastError = $e->getMessage();
+                error_log("CashuPayServer: pricing a withdrawal at {$account['mint_url']} failed: {$lastError}");
+                continue;
+            }
+            if ($account['balance'] >= $quote->amount + $quote->feeReserve) {
+                return ['account' => $account, 'quote' => $quote, 'error' => null];
+            }
+            if ($best === null || $account['balance'] > $best['account']['balance']) {
+                $best = ['account' => $account, 'quote' => $quote, 'error' => null];
+            }
+        }
+        // No mint that answered can cover it: the richest one, so the melt names the gap.
+        return $best ?? ['account' => $accounts[0], 'quote' => null, 'error' => $lastError];
     }
 
     /**
@@ -737,42 +839,62 @@ class Donation {
             $wallet = Invoice::getWalletForStore($storeId, $account['mint_url'], $account['unit']);
             $proofs = $wallet->getStorage()->getProofsAsObjects(ProofState::UNSPENT);
 
-            // Check proof states at mint - filter out PENDING/SPENT proofs
-            if (!empty($proofs)) {
+            // Swap only the proofs the donation needs (plus the input fee they cost), not
+            // the whole wallet: every input is charged for, and a large wallet could pass
+            // the mint's input limit and fail outright. Each candidate set is checked at
+            // the mint first; a proof found spent or pending is dropped and the set is
+            // picked again.
+            $selected = null;
+            $excluded = [];
+            for ($round = 0; $round < 3 && $selected === null; $round++) {
+                $candidates = array_values(array_filter($proofs, fn($p) => !isset($excluded[$p->secret])));
                 try {
-                    $states = $wallet->checkProofState($proofs);
-                    $validProofs = [];
-                    $spentSecrets = [];
-
-                    foreach ($states as $i => $state) {
-                        $mintState = strtoupper((string)($state['state'] ?? '')); // missing is not UNSPENT
-                        if ($mintState === ProofState::UNSPENT) {
-                            $validProofs[] = $proofs[$i];
-                        } elseif ($mintState === ProofState::SPENT) {
-                            $spentSecrets[] = $proofs[$i]->secret;
-                        }
-                        // Skip PENDING proofs - they can't be used for split
-                    }
-
-                    if (!empty($spentSecrets)) {
-                        // Conditional, like Invoice::markProofsSpent: a proof the mint
-                        // reports spent may be an input of a swap the background keyset
-                        // rotation has in flight. Overwriting it left that swap unable to
-                        // finish and dropped its new proofs from the balance (S5, 2026-10-28).
-                        $storage = $wallet->getStorage();
-                        $storage->transitionProofStates(
-                            $spentSecrets,
-                            ProofState::SPENT,
-                            [ProofState::UNSPENT],
-                            array_flip($storage->getReservedInputSecrets())
-                        );
-                    }
-
-                    $proofs = $validProofs;
+                    $picked = $wallet->selectProofsWithFees($candidates, $amount);
+                } catch (\Cashu\InsufficientBalanceException $e) {
+                    return ['success' => false, 'token' => null, 'error' => 'Insufficient balance for donation'];
+                }
+                try {
+                    $states = $wallet->checkProofState($picked);
                 } catch (\Cashu\CashuException $e) {
+                    // Cannot ask: go ahead, as before; the swap itself refuses spent inputs.
                     error_log("Donation checkProofState failed: " . $e->getMessage());
+                    $selected = $picked;
+                    break;
+                }
+                $spentSecrets = [];
+                $bad = false;
+                foreach ($picked as $i => $proof) {
+                    $mintState = strtoupper((string)($states[$i]['state'] ?? '')); // missing is not UNSPENT
+                    if ($mintState === ProofState::UNSPENT) {
+                        continue;
+                    }
+                    $bad = true;
+                    $excluded[$proof->secret] = true;
+                    if ($mintState === ProofState::SPENT) {
+                        $spentSecrets[] = $proof->secret;
+                    }
+                }
+                if (!empty($spentSecrets)) {
+                    // Conditional, like Invoice::markProofsSpent: a proof the mint
+                    // reports spent may be an input of a swap the background keyset
+                    // rotation has in flight. Overwriting it left that swap unable to
+                    // finish and dropped its new proofs from the balance (S5, 2026-10-28).
+                    $storage = $wallet->getStorage();
+                    $storage->transitionProofStates(
+                        $spentSecrets,
+                        ProofState::SPENT,
+                        [ProofState::UNSPENT],
+                        array_flip($storage->getReservedInputSecrets())
+                    );
+                }
+                if (!$bad) {
+                    $selected = $picked;
                 }
             }
+            if ($selected === null) {
+                return ['success' => false, 'token' => null, 'error' => 'Insufficient balance for donation'];
+            }
+            $proofs = $selected;
 
             $balance = Wallet::sumProofs($proofs);
 
@@ -924,7 +1046,10 @@ class Donation {
                 CURLOPT_TIMEOUT => 5,
                 CURLOPT_CONNECTTIMEOUT => 3,
                 CURLOPT_SSL_VERIFYPEER => true,
-            ]);
+                CURLOPT_SSL_VERIFYHOST => 2,
+                // A redirect would carry the token somewhere else.
+                CURLOPT_FOLLOWLOCATION => false,
+            ] + cashupay_curl_protocol_options());
 
             $response = curl_exec($ch);
             $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);

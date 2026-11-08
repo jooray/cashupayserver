@@ -125,6 +125,34 @@ check(Config::unitFor('btc')->parse('0.001') === 100000, 'a btc amount parses to
 check(ExchangeRates::convertMintUnitToSats(12345, 'btc') === 12345, 'a btc mint amount is already in sats');
 check(ExchangeRates::convertSatsToMintUnit(12345, 'btc') === 12345, 'and sats are a btc mint amount');
 
+
+// --- ARGON-NOV2026 CPS-06: scientific notation never reaches BCMath ----------
+check(ExchangeRates::normalizeDecimal('5.0E-5') === '0.00005', '"5.0E-5" becomes 0.00005');
+check(ExchangeRates::normalizeDecimal(0.00005) === '0.00005', 'a float below 0.0001 becomes a plain decimal');
+check(ExchangeRates::normalizeDecimal('1e3') === '1000', '1e3 is 1000');
+check(ExchangeRates::normalizeDecimal('12.3400') === '12.34' && ExchangeRates::normalizeDecimal('007') === '7', 'plain decimals are kept exactly');
+check(ExchangeRates::normalizeDecimal(1.0E+15) === '1000000000000000', 'a large float is written out');
+$threw = false;
+try { ExchangeRates::normalizeDecimal('1e308'); } catch (InvalidArgumentException $e) { $threw = true; }
+check($threw, 'an absurd exponent is refused, not expanded');
+$threw = false;
+try { ExchangeRates::normalizeDecimal('abc'); } catch (InvalidArgumentException $e) { $threw = true; }
+check($threw, 'garbage is refused');
+check($convert('5.0E-5', 'BTC', 'SAT') === 5000, '0.00005 BTC written as 5.0E-5 prices as 5000 sat instead of a ValueError');
+check(ExchangeRates::convertToMintUnit((string)0.00005, 'BTC', 'SAT') === 5000, 'a float amount coerced to a string prices too');
+
+// --- CPS-07: currencies without cents, msat rounding, same-unit rounding ------
+check(Config::unitDecimals('jpy') === 0 && Config::unitDecimals('JPY') === 0 && Config::unitDecimals('krw') === 0,
+    'yen and won have no minor unit');
+check(Config::unitFor('jpy')->parse('1000') === 1000, 'a 1000 JPY amount is 1000, not 100000');
+check($convert('1000', 'JPY', 'JPY') === 1000, '1000 JPY on a JPY mint is 1000 yen, not 100,000 (100x overcharge)');
+Config::set('rate_jpy', ['rate' => 10000000.0, 'timestamp' => time(), 'provider' => 'test']);
+check(ExchangeRates::convertMintUnitToSats(1000, 'JPY') === 10000, '1000 yen at 10M JPY/BTC is 10000 sat');
+check(ExchangeRates::convertSatsToMintUnit(10000, 'JPY') === 1000, 'and 10000 sat is 1000 yen');
+check(ExchangeRates::convertMintUnitToSats(1500, 'msat') === 1, '1500 msat can pay 1 sat, not 2');
+check($convert('10.125', 'USD', 'USD') === 1013, '10.125 USD on a USD mint rounds up to 1013 cents, like every other price');
+check($convert('10.12', 'USD', 'USD') === 1012, 'an exact cent amount is unchanged');
+
 echo "conversion: OK\n";
 
 foreach (glob($dataDir . '/*') ?: [] as $file) { @unlink($file); }

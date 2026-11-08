@@ -113,8 +113,10 @@ if ($redirectUrl !== null) {
     }
 }
 
-// Format amount for display - use store's mint unit
-$mintUnit = Config::getStoreMintUnit($invoice['store_id']);
+// Format amount for display in the unit the invoice was created in: amount_sats is in
+// that unit's smallest amount, and the store may have switched mints (and units) since
+// (ARGON UX-06.7). Invoices from before the column existed fall back to the store's.
+$mintUnit = (string)($invoice['mint_unit'] ?? '') !== '' ? (string)$invoice['mint_unit'] : Config::getStoreMintUnit($invoice['store_id']);
 $displayAmount = $invoice['amount'] . ' ' . strtoupper($invoice['currency']);
 
 // Show secondary amount info based on currency relationships
@@ -458,14 +460,14 @@ $baseUrl = Config::getBaseUrl();
                     <?php echo htmlspecialchars(substr($invoice['bolt11'], 0, 40) . '...' . substr($invoice['bolt11'], -10)); ?>
                 </div>
 
-                <a href="lightning:<?php echo htmlspecialchars($invoice['bolt11']); ?>" class="btn">
+                <a href="lightning:<?php echo htmlspecialchars($invoice['bolt11']); ?>" class="btn" id="open-wallet">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                     </svg>
                     Open in Wallet
                 </a>
 
-                <button class="btn btn-secondary" onclick="copyInvoice()">
+                <button class="btn btn-secondary" id="copy-invoice" onclick="copyInvoice()">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
                         <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
@@ -581,7 +583,9 @@ $baseUrl = Config::getBaseUrl();
         }
 
         // Copy invoice to clipboard
+        let invoiceExpired = false;
         function copyInvoice() {
+            if (invoiceExpired) return;
             const toast = document.getElementById('copy-toast');
             const show = (text) => {
                 toast.textContent = text;
@@ -621,6 +625,13 @@ $baseUrl = Config::getBaseUrl();
                 document.getElementById('timer').textContent = 'Invoice expired. Checking for a last-second payment…';
                 document.getElementById('timer').className = 'timer expired';
                 document.getElementById('qr-code').style.opacity = '0.25';
+                // Nor offer it through the buttons: an expired invoice cannot be paid, and
+                // a wallet would only show an error (ARGON UX-06.7).
+                invoiceExpired = true;
+                for (const id of ['open-wallet', 'copy-invoice', 'invoice-text']) {
+                    const el = document.getElementById(id);
+                    if (el) el.style.display = 'none';
+                }
                 return;
             }
 

@@ -17,6 +17,92 @@ add_action('admin_notices', 'cashupay_foreign_data_dir_notice');
 add_action('admin_notices', 'cashupay_network_data_dir_notice');
 add_action('admin_notices', 'cashupay_needs_attention_notice');
 add_action('admin_init', 'cashupay_handle_exposure_recheck');
+add_action('admin_notices', 'cashupay_plain_permalinks_notice');
+add_action('admin_post_cashupay_enable_pretty_links', 'cashupay_enable_pretty_links');
+
+const CASHUPAY_LINKS_RESULT_TRANSIENT = 'cashupay_links_result_';
+
+/**
+ * WordPress's "Plain" permalink setting (?p=123) stores no rewrite rules, so every
+ * CashuPay address (/cashupay-setup/, /cashupay-admin/, the /cashupay/api/v1 address the
+ * BTCPay for WooCommerce plugin calls, the checkout page) answers 404 (ARGON UX-01).
+ * The Greenfield clients build API addresses by appending /api/v1/... to the server
+ * address, so a query-string fallback cannot serve them; readable addresses are needed.
+ */
+function cashupay_plain_permalinks(): bool {
+    return get_option('permalink_structure') === '';
+}
+
+/**
+ * Explains the Plain-permalinks dead end and offers a button. The setting is the shop
+ * owner's, so it is never changed without her pressing it.
+ */
+function cashupay_plain_permalinks_notice(): void {
+    if (!cashupay_current_user_can_manage() || !empty($GLOBALS['cashupay_startup_error'])) {
+        return;
+    }
+    $key = CASHUPAY_LINKS_RESULT_TRANSIENT . get_current_user_id();
+    $result = get_transient($key);
+    if (is_array($result) && ($result['text'] ?? '') !== '') {
+        delete_transient($key);
+        echo '<div class="notice ' . (!empty($result['ok']) ? 'notice-success' : 'notice-error') . '"><p><strong>CashuPay:</strong> '
+            . esc_html((string)$result['text']) . '</p></div>';
+    }
+    if (!cashupay_plain_permalinks()) {
+        return;
+    }
+    $button = wp_nonce_url(admin_url('admin-post.php?action=cashupay_enable_pretty_links'), 'cashupay_enable_pretty_links');
+    echo '<div class="notice notice-error"><p><strong>'
+        . esc_html__('CashuPay cannot work until your site uses readable web addresses.', 'cashupay') . '</strong></p><p>'
+        . esc_html__('Your site uses WordPress\'s "Plain" web addresses (like yoursite.com/?p=123). CashuPay\'s pages, its checkout page and the connection your shop uses to create payments need readable addresses (like yoursite.com/sample-post/). Until then they show "Page not found".', 'cashupay')
+        . '</p><p>'
+        . esc_html__('Click the button to switch. Your existing links keep working: WordPress forwards old addresses to the new ones. You can change it back later under Settings → Permalinks, but CashuPay then stops working.', 'cashupay')
+        . '</p><p><a class="button button-primary" href="' . esc_url($button) . '">'
+        . esc_html__('Switch to readable web addresses', 'cashupay') . '</a></p></div>';
+}
+
+/**
+ * Whether CashuPay's API address reaches CashuPay (a JSON answer) rather than a
+ * WordPress or web-server "Page not found". Null when the site cannot call itself.
+ */
+function cashupay_api_reachable(): ?bool {
+    $response = wp_remote_get(rtrim(Urls::server(), '/') . '/api/v1/server/info', [
+        'timeout' => 10,
+        'redirection' => 0,
+        'sslverify' => false,
+    ]);
+    if (is_wp_error($response)) {
+        return null;
+    }
+    $type = (string) wp_remote_retrieve_header($response, 'content-type');
+    return stripos($type, 'json') !== false;
+}
+
+/** The notice's button: readable addresses ("Post name"), then a check that they work. */
+function cashupay_enable_pretty_links(): void {
+    check_admin_referer('cashupay_enable_pretty_links');
+    if (!cashupay_current_user_can_manage()) {
+        wp_die(esc_html__('Your account is not allowed to change this site\'s settings.', 'cashupay'), '', ['response' => 403]);
+    }
+    global $wp_rewrite;
+    if (cashupay_plain_permalinks()) {
+        // What Settings → Permalinks → "Post name" saves.
+        $wp_rewrite->set_permalink_structure('/%postname%/');
+    }
+    // Hard flush: also writes the .htaccess rules where WordPress can (Apache).
+    flush_rewrite_rules(true);
+    delete_option('cashupay_rewrite_rules_version');
+
+    $reachable = cashupay_api_reachable();
+    if ($reachable === false) {
+        $result = ['ok' => false, 'text' => __('WordPress now uses readable web addresses, but your web server does not pass them on to WordPress yet, so CashuPay still shows "Page not found". Open Settings → Permalinks and click "Save Changes". If that page then shows text for a file called .htaccess, send that text to your hosting provider and ask them to add it to your site.', 'cashupay')];
+    } else {
+        $result = ['ok' => true, 'text' => __('Your site now uses readable web addresses, and CashuPay can be reached. You can continue with CashuPay under Tools → CashuPay.', 'cashupay')];
+    }
+    set_transient(CASHUPAY_LINKS_RESULT_TRANSIENT . get_current_user_id(), $result, 10 * MINUTE_IN_SECONDS);
+    wp_safe_redirect(admin_url());
+    exit;
+}
 
 function cashupay_admin_menu(): void {
     if (!cashupay_current_user_can_manage()) {
@@ -66,6 +152,9 @@ function cashupay_admin_redirect(): void {
         return;
     }
 
+    if (cashupay_plain_permalinks()) {
+        return; // Every CashuPay page would 404; cashupay_plain_permalinks_notice() explains.
+    }
     if (!Database::isInitialized() || !Config::isSetupComplete()) {
         wp_redirect(Urls::setup()); // Our own URL, and site_url() may be on a different host than home_url().
         exit;
@@ -79,6 +168,10 @@ function cashupay_admin_redirect(): void {
 
 function cashupay_admin_page(): void {
     echo '<div class="wrap"><h1>CashuPay</h1>';
+    if (cashupay_plain_permalinks()) {
+        echo '<p>' . esc_html__('First switch your site to readable web addresses with the button in the message above. CashuPay opens here after that.', 'cashupay') . '</p></div>';
+        return;
+    }
     echo '<p>' . esc_html__('Your CashuPay wallet and payment settings open on their own page.', 'cashupay') . '</p>';
     echo '<p><a class="button button-primary button-hero" href="' . esc_url(Urls::admin()) . '">'
         . esc_html__('Open CashuPay', 'cashupay') . '</a></p>';
@@ -97,6 +190,9 @@ function cashupay_admin_notice(): void {
     require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
     require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
 
+    if (cashupay_plain_permalinks()) {
+        return; // The setup link would 404; cashupay_plain_permalinks_notice() comes first.
+    }
     if (!Database::isInitialized() || !Config::isSetupComplete()) {
         echo '<div class="notice notice-info"><p>';
         echo '<strong>CashuPay:</strong> Plugin not configured yet, please ';
