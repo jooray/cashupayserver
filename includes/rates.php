@@ -720,6 +720,7 @@ class ExchangeRates {
      */
     public static function convertToSats(string $amount, string $currency, string $mintUnit): int {
         $currency = strtoupper($currency);
+        $amount = self::normalizeDecimal($amount);
 
         // Already in sats
         if (in_array($currency, ['SAT', 'SATS'])) {

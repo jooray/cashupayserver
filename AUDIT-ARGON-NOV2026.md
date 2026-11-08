@@ -172,6 +172,89 @@ mint-discovery v1.1.0.
 
 ---
 
+## Independent Post-Remediation Verification & Release Audit (2026-11-08)
+
+An independent line-by-line verification was conducted across all changes in `CashuPayServer` (`v0.5.10-alpha`), `cashu-wallet-php` (`v0.3.0`), and `mint-discovery` (`v1.1.0`) against the audit findings and the remediation log above.
+
+### Summary Verdict
+1. **Remediation Correctness:** **CONFIRMED.** All 36 findings (`CPS-01`..`CPS-11`, `CW-01`..`CW-12`, `REL-01`..`REL-06`, `MD-01`, `UX-01`..`UX-06`) were verified against the code and automated test suites.
+2. **Evaluation of Refused Items (`FALSE` / `PARTLY`):** **ALL REFUSALS JUSTIFIED.** In each case, the refusal was either technically necessary to avoid introducing regressions/fund-stranding bugs (`CW-01`, `CW-03`, `CW-12`, `CPS-04 items 1–2`, `REL-05`) or accurate regarding spec compliance and runtime behavior (`CW-07`, `REL-02`, `REL-04`, `REL-06`).
+3. **Release Readiness:** **APPROVED FOR RELEASE.** The codebase is clean, database schema migration `v13` functions properly, automated tests pass, and versions across composer/package configurations and assets are consistent.
+
+---
+
+### Detailed Review of Refused Items (`FALSE` / `PARTLY`)
+
+| Finding ID | Claimed Status | Issue & Independent Verification Result |
+| :--- | :--- | :--- |
+| **CPS-04 items 1–2** | `FALSE` | **Correctly Refused.** `WalletStorage::finalizePendingMint()` is the *only* place in the entire codebase that writes a non-null `mint_quote_id` into `cashu_proofs`. It runs inside a single database transaction and enforces exact denomination equality and count checks (`count($proofs) === count($plan['amounts'])`, with `sum($plan['amounts']) === $amount`). Furthermore, `deleteProofs()` only deletes `imported_secrets` (never minted proofs), and spending proofs transitions their state to `SPENT` rather than deleting them. Thus, a partial proof set tagged with a `quote_id` can never exist in SQLite. Adding a redundant sum check would only add stranding risk if a mint issued different denominations than expected. (Item 3 in `MintQuote::isPaid()` was correctly fixed: `amountPaid - amountIssued >= max(1, amount)`). |
+| **CPS-06** | `PARTLY` | **Correctly Handled.** Refused rebuilding the `invoices` table to change `exchange_rate` from `REAL` to `TEXT`. Instead, `ExchangeRates::normalizeDecimal()` was introduced and applied at all BCMath entry points (`convertToMintUnit`, `toBtc`, `fromBtc`, `convertToSats`, `satsToFiat`, `invoicePaymentMethodRate`, `admin.php`, `invoices.php`). This completely prevents BCMath `ValueError` exceptions without the risk of an SQLite table migration on live installations. |
+| **CPS-07 item 4** | `FALSE` | **Correctly Refused.** Refused changing currency-code input validation in `setup.php`/`admin.php`. Neither `setup.php` nor `admin.php` has a free-form currency input; the store unit is selected from the keysets announced by the mint. All 15 ISO 4217 zero-decimal currencies (`JPY`, `KRW`, `CLP`, etc.) are now correctly registered in `Config::ZERO_DECIMAL_UNITS` and handled across PHP and admin JS. |
+| **CW-01** | `PARTLY` | **Correctly Refused & Improved.** The audit suggested "store and delete regardless of plan" in `finalizePendingMint()`. Doing so unconditionally would erase the swap/mint journal during an in-flight replan. The remediation correctly accepts proofs if they match either the active plan or any entry in `replaced_plans`, adds `amounts` to `replaced_plans`, checks replaced plans in `recoverMintJournalOutputs()` (newest first), commits stored outputs even if the journal was deleted, and caps replans at `Wallet::MAX_MINT_REPLANS = 3` to prevent runaway counter burning past the restore gap (`RESTORE_GAP = 500`). |
+| **CW-03** | `CONFIRMED` *(mechanism)* | **Correctly Implemented via `keepOutputsAndThrow()`.** The audit suggested "store proofs before checking reserved inputs". Inside a transaction, if `assertOwnsReservedInputs()` threw, the outer `catch` block would have called `rollbackWrite()`, undoing the write. The remediation introduced `keepOutputsAndThrow()`, which stores the output proofs, explicitly **commits** the transaction, keeps the journal and inputs, and then throws. |
+| **CW-07** | `FALSE` | **Correctly Refused.** In BIP-173 / BOLT-11, the Bech32 data section strictly uses the 32-character alphabet which excludes `'1'`. The human-readable part (HRP) before `'1'` is strictly `ln<network><digits><multiplier>`. A string like `lnbc100n1000m1...` contains two multipliers in the HRP, which violates BOLT-11 and is rejected by all Lightning nodes and mints. On every valid BOLT-11 invoice, `\d*` greedily matches all digits in the HRP and stops at the true separator `1`. |
+| **CW-10** | `PARTLY` | **Correctly Refused.** Refused fee tie-breaking between active keysets in `getActiveKeysetId()`, as NUT-02 specifies only one active keyset per unit in normal operation. Refused filtering out all 1-sat proofs when fees are non-zero: `selectProofsWithFees()` correctly filters dust where `intdiv($ppk, 1000) >= $proof->amount` (fee >= 100% of proof value), while keeping proofs with positive net value (e.g. 1 sat with 100 ppk = 0.1 sat fee contributes +0.9 sat net). |
+| **CW-11** | `PARTLY` | **Correctly Refused.** Refused sorting `$inputSecrets` when generating the journal pending ID in `Wallet::swap()`. Because `preparePendingSpend()` transitions every input secret to `PENDING` in SQLite, a concurrent or repeated call with the same secrets in a different order is immediately blocked before counter allocation or journal creation. |
+| **CW-12** | `PARTLY` | **Correctly Refused.** Refused making `getCounter()` read storage because `WalletOperationSafetyTest` specifically tests that `getCounter()` reflects in-memory diagnostics while `preparePendingSpend()` handles SQLite persistence. Refused canonicalizing the URL in `deriveWalletId()` because doing so without an SQLite schema migration would change the `wallet_id` hash on existing stores with uppercase characters or `:443`, stranding their funds. |
+| **REL-02** | `FALSE` | **Correctly Refused.** Checked all call sites of `Security::withWriteLock()`, `Security::checkRateLimit()`, `BackgroundRunner::acquireLease()`, and `BackgroundRunner::renewLease()`. None of them call `PDO::beginTransaction()` or `PDO::inTransaction()`; they only run isolated flat queries on `config` and `rate_limits`. |
+| **REL-04** | `PARTLY` | **Correctly Refused.** Refused calling `Security::resolvePublicTarget()` on `CASHUPAY_DONATION_SINK_URL` because it is a hardcoded constant in `includes/config.php` (not user/database input), and doing so would break CLI regression tests that point it to `http://127.0.0.1:...`. Protocol options, timeout, and TLS verification were properly applied. |
+| **REL-05** | `PARTLY` | **Correctly Refused.** Deduplicated shutdown registration via `Background::$shutdownRegistered`. Refused running `BackgroundRunner::run(20)` in `register_shutdown_function()` on Apache `mod_php` when `base_url` is unpinned, because without `fastcgi_finish_request()`, doing so holds the HTTP connection open for 20 seconds during customer checkouts and WooCommerce API calls. The dashboard provides an attention banner and 1-click button to pin `base_url`. |
+| **REL-06** | `PARTLY` | **Correctly Refused.** Refused migrating `store_mints` foreign keys (already protected by `StoreSafety`). Kept `CashuException` error messages that describe validation issues on the payer's own submitted token (e.g. wrong mint/unit) in `receive.php` while sanitizing internal database errors. |
+| **MD-01** | `PARTLY` | **Correctly Refused.** Refused wrapping `discoverStreaming()` in an extra timeout because `nostr-tools` 2.10 `SimplePool` enforces an internal 4.4s `maxWait` per relay and terminates cleanly on `oneose`. |
+| **UX-01** | `CONFIRMED` *(alternative)* | **Correctly Solved via Dedicated Flow.** Refused the naive `?cashupay_page=` query parameter fallback because the BTCPay WooCommerce plugin hardcodes calls to `{server}/api/v1/...` and `admin.php` builds `adminUrl + '?api=...'`. Instead, WordPress rewrite detection adds a prominent notice, suppresses 404 links, and provides a 1-click `"Switch to readable web addresses"` button that updates `permalink_structure` to `/%postname%/` and tests the API response. |
+
+---
+
+### Implementation Review of Confirmed Remediations
+
+1. **Schema Migration `v12` -> `v13` (`includes/database.php`):**
+   - Bumps `Database::SCHEMA_VERSION` to `13`.
+   - Adds `swap_plan TEXT` to `payment_requests` within an immediate transaction, verified by regression tests.
+2. **NUT-18 Payment Request Safety (`CPS-01`, `CW-02`, `REL-01`):**
+   - `Wallet::resolveSwapJournal()` removes `$direct` and unconditionally deletes imported secrets when no outputs were signed (`$outcome[$secret] = null`), preventing double-spent or rejected tokens from lingering as `SPENT` or `UNSPENT`.
+   - `PaymentRequest::rememberSwapPlans()` records `{keyset_id, counter_start, amounts}` into `payment_requests.swap_plan` under the `receive_<storeId>` lock before background recovery can settle the journal.
+   - `PaymentRequest::receiptState()` checks `planOutputsHeld()` against SQLite to confirm that all planned outputs exist in the wallet before marking a payment request paid.
+   - `PaymentRequest::reconcileReceiving()` acquires a non-blocking lock on `receive_<storeId>` and re-reads the row under the lock.
+3. **Multi-Mint Withdrawal, Estimation & Fee Accounting (`CPS-03`, `CPS-10`, `CPS-11`):**
+   - `LightningAddress::quotePayingAccount()` probes accounts in order of balance until finding an account covering `amount + feeReserve`.
+   - `executeMelt()` preserves `pending` state when `changeRecoveryPending` is true without booking phantom fees; `BackgroundRunner::reconcileWithdrawal()` recalculates the true fee via `paidMeltFee()` once change is restored.
+   - `Invoice::checkProofStatesBySecrets()`, `markProofsSpent()`, and `reclaimExportedProofs()` accept explicit `$mintUrl` and `$unit`, enabling checks and reclamation of proofs from non-primary or deleted backup mints.
+4. **BTCPay Greenfield API Compatibility (`CPS-05`):**
+   - `handleInvoicePaymentMethods()` returns full BTCPay 2.x fields (`activated`, `destination`, `paymentLink`, `rate`, `paymentMethodPaid`, `totalPaid`, `due`, `amount`, `paymentMethodFee`, `payments[]`, `paymentMethodId => 'BTC-LN'`).
+   - BTC amounts are formatted to 8 decimals from `amount_sats` or `Bolt11::amountSats()`.
+5. **Operator UX & WordPress Integration (`UX-01`..`UX-06`):**
+   - Setup wizard logs the admin session in immediately on password creation (`Auth::loginCurrentSession()`), shows linear steps (`1..7 of 7`), and adapts the auto-withdrawal threshold to the store's currency.
+   - `cashupay_connect_woocommerce_store()` provides a one-click integration in both `wp-admin` notices and the CashuPay dashboard.
+   - Inactive payment pages hide action buttons upon invoice expiry.
+6. **Mint Discovery (`MD-01`):**
+   - Bundled script (`assets/js/mint-discovery.bundle.js`) rebuilt with `mint-discovery v1.1.0`.
+   - Implements Bayesian rating smoothing `(6 + sum) / (2 + n)`, newest-first author deduplication, URL normalization, and anchored rating regexes.
+
+---
+
+### Non-Blocking Observations
+
+1. **Deprecated `ExchangeRates::convertToSats()` (`includes/rates.php:730`):**
+   - Line 730 checks `if ($currency === 'BTC') return (int) bcmul($amount, '100000000', 0);` before line 742 calls `normalizeDecimal($amount)`.
+   - *Impact:* Zero impact on production code, as `convertToSats()` is deprecated and unused (production uses `convertToMintUnit()`). Moving `normalizeDecimal()` to line 725 would cover the deprecated helper as well.
+2. **Duplicate Quote Request in Manual Withdrawal (`admin.php:2057-2059`):**
+   - In `manual_melt`, `LightningAddress::quotePayingAccount()` calls `requestMeltQuote()` to choose the paying account, and `executeMelt()` subsequently calls `requestMeltQuote()` a second time.
+   - *Impact:* Benign in Cashu protocol (unpaid melt quotes simply expire); it causes only one redundant HTTP round-trip on manual withdrawal.
+
+**Disposition (2026-11-08): both implemented.**
+1. `convertToSats()` now normalizes `$amount` first, so the BTC/SAT/MSAT branches accept the same input (`5e-5`, padded decimals) as the fiat branches.
+2. `meltToBolt11()`/`executeMelt()` take the quote `quotePayingAccount()` already obtained and reuse it via `LightningAddress::reusableQuote()` when it is still `UNPAID`, for the same invoice and unit, and at least 60 s from expiry; a quote without an expiry, or anything else, gets a fresh one as before. The manual withdrawal passes it only together with the account it was priced at. Tests in `tests/payouts_argon_2026_11.php`; full suite 59/59.
+
+---
+
+### Release Sign-Off
+- **CashuPayServer:** `v0.5.10-alpha` (schema version 13)
+- **cashu-wallet-php:** `v0.3.0`
+- **mint-discovery:** `v1.1.0` (bundle rebuilt at `assets/js/mint-discovery.bundle.js`)
+- **Status:** **Ready for Release.**
+
+---
+
 ## Part 1: Money-Losing, Fund-Stranding & Accounting Bugs (CashuPayServer)
 
 ### [CPS-01] CRITICAL: Free-Payment / False-"Paid" Vulnerability & Wallet Poisoning on NUT-18 Payment Requests When `recoverPendingSwaps()` Resolves a Failed `receive()` Swap

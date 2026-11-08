@@ -2054,12 +2054,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // One payment is paid from one mint: the first of the store's mints, the
                 // primary preferred, that answers and can cover the price (a backup that
                 // took payments while the primary was down, if the primary cannot).
-                $account = LightningAddress::quotePayingAccount($storeId, $bolt11)['account'];
+                $priced = LightningAddress::quotePayingAccount($storeId, $bolt11);
+                $account = $priced['account'];
                 $result = LightningAddress::meltToBolt11(
                     $storeId,
                     $bolt11,
                     null,
-                    $account ? ['mint_url' => $account['mint_url'], 'unit' => $account['unit']] : null
+                    $account ? ['mint_url' => $account['mint_url'], 'unit' => $account['unit']] : null,
+                    $account ? $priced['quote'] : null
                 );
 
                 // The donation comes only after the payment went out, from what the same

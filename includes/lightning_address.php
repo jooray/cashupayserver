@@ -258,14 +258,18 @@ class LightningAddress {
         ?string $destination,
         string $transferType,
         ?array $account = null,
-        ?int $budget = null
+        ?int $budget = null,
+        ?\Cashu\MeltQuote $quote = null
     ): array {
         self::assertNoPendingWithdrawal($storeId);
         $account = self::resolveAccount($storeId, $account);
         $mintUnit = $account['unit'];
 
         $wallet = Invoice::getWalletForStore($storeId, $account['mint_url'], $mintUnit);
-        $meltQuote = $wallet->requestMeltQuote($bolt11);
+        // Reuse the quote the caller priced this invoice with (quotePayingAccount(), at
+        // this same account) while it has a minute left; otherwise ask the mint again.
+        $meltQuote = self::reusableQuote($quote, $bolt11, $mintUnit)
+            ?? $wallet->requestMeltQuote($bolt11);
         $totalNeeded = $meltQuote->amount + $meltQuote->feeReserve;
 
         $proofs = $wallet->getStorage()->getProofsAsObjects(ProofState::UNSPENT);
@@ -670,8 +674,8 @@ class LightningAddress {
      * mint's price (amount plus fee reserve) is it. Pricing only at the primary meant a
      * store whose primary mint was down could not pay out the money its backup took in.
      *
-     * The quote is for display and selection; executeMelt() asks the chosen mint for its
-     * own. A second quote for the same invoice is harmless: an unused one just expires.
+     * The quote can be handed to meltToBolt11() for the account it names, which reuses
+     * it while it is fresh instead of asking the mint a second time.
      *
      * @return array{account: ?array, quote: ?\Cashu\MeltQuote, error: ?string}
      *         account is null only for a store without a wallet; quote is null when no
@@ -798,7 +802,8 @@ class LightningAddress {
         string $storeId,
         string $bolt11,
         ?int $expectedAmount = null,
-        ?array $account = null
+        ?array $account = null,
+        ?\Cashu\MeltQuote $quote = null
     ): array {
         // Amountless invoices need NUT-23 `options.amountless`, which the wallet does not
         // send; the mint answers 11011. Reject them here with a message the operator can
@@ -810,7 +815,28 @@ class LightningAddress {
             );
         }
 
-        return self::executeMelt($storeId, $bolt11, $bolt11, Transfer::TYPE_LIGHTNING, $account);
+        return self::executeMelt($storeId, $bolt11, $bolt11, Transfer::TYPE_LIGHTNING, $account, null, $quote);
+    }
+
+    /**
+     * A quote obtained moments ago for this invoice, if it is still usable: unpaid, for
+     * this invoice and unit, and at least a minute from expiry. A quote without an expiry
+     * is not trusted. null = ask the mint for a fresh one.
+     */
+    private static function reusableQuote(?\Cashu\MeltQuote $quote, string $bolt11, string $unit): ?\Cashu\MeltQuote {
+        if ($quote === null || $quote->expiry === null || $quote->expiry < time() + 60) {
+            return null;
+        }
+        if (strtoupper($quote->state) !== 'UNPAID') {
+            return null;
+        }
+        if ($quote->request !== null && strtolower(trim($quote->request)) !== strtolower(trim($bolt11))) {
+            return null;
+        }
+        if ($quote->unit !== null && strtolower($quote->unit) !== strtolower($unit)) {
+            return null;
+        }
+        return $quote;
     }
 }
 

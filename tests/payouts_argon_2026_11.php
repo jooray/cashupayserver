@@ -184,6 +184,18 @@ check(($r['success'] ?? false) === true && $r['balance'] === storageOf($B)->getB
 check($code === 200 && ($r['success'] ?? false) === true && ($r['mintUrl'] ?? '') === $B,
     'the withdrawal goes out from the backup (HTTP ' . $code . ' ' . json_encode($r) . ')');
 
+echo "A priced quote is reused for the payment while it is fresh\n";
+$reuse = new ReflectionMethod(LightningAddress::class, 'reusableQuote');
+$q = fn(array $o) => new \Cashu\MeltQuote(...($o + ['quote' => 'q1', 'amount' => 200, 'feeReserve' => 2,
+    'state' => 'UNPAID', 'expiry' => time() + 900, 'unit' => 'sat', 'request' => 'lnbc2u1abc']));
+check($reuse->invoke(null, $q([]), 'LNBC2U1ABC', 'sat') !== null, 'a fresh unpaid quote for this invoice is reused');
+check($reuse->invoke(null, $q(['expiry' => time() + 30]), 'lnbc2u1abc', 'sat') === null, 'one about to expire is not');
+check($reuse->invoke(null, $q(['expiry' => null]), 'lnbc2u1abc', 'sat') === null, 'one without an expiry is not');
+check($reuse->invoke(null, $q(['state' => 'PAID']), 'lnbc2u1abc', 'sat') === null, 'a paid one is not');
+check($reuse->invoke(null, $q([]), 'lnbc2u1other', 'sat') === null, 'one for another invoice is not');
+check($reuse->invoke(null, $q([]), 'lnbc2u1abc', 'eur') === null, 'one in another unit is not');
+check($reuse->invoke(null, null, 'lnbc2u1abc', 'sat') === null, 'no quote: ask the mint');
+
 echo "CPS-10: paid, change still at the mint\n";
 class PendingChangeWallet extends \Cashu\Wallet {
     public function melt(string $quoteId, array $proofs): array {
