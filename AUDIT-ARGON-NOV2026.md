@@ -143,6 +143,27 @@ now 492 tests) passes. New regression tests: `tests/argon_2026_11_receiving.php`
 | UX-05 | CONFIRMED | One-click "Connect my shop to CashuPay" (new `cashupay_connect_woocommerce_store()`, shared with setup step 7) in the wp-admin notice and, as a follow-up, in the CashuPay dashboard's attention card (`woocommerceStep`), where the operator lands after setup. Settings link corrected to `tab=btcpay_settings` (verified in the plugin's `GlobalSettings`). |
 | UX-06 | CONFIRMED (all 8) | Relocate-data button is the main action and shell steps are folded away; no raw crontab line (WordPress: reassurance only); WordPress sign-in link on the pairing page; amountless invoices refused when pasted; withdraw modal shows the single-mint maximum; Refresh runs the background tasks; payment page uses the invoice's unit and hides pay buttons after expiry; `receive.php` shows formatted amounts and has a clipboard fallback. |
 
+### Deployment test (2026-11-08)
+
+Tested briefly on the cashupayserver.org demo instance (PHP 8.3.36, AlmaLinux) before
+release:
+
+- The v12 → v13 migration was rehearsed on the server's PHP 8.3 against a copy of the live
+  database: no migration error, `payment_requests.swap_plan` added, `integrity_check` ok,
+  a second run a no-op. Every PHP file of the build also lints clean under 8.3.
+- The build was deployed (keeping `data/` and `config.local.php`, live database
+  snapshotted first as `cashupay.sqlite.predeploy-argon-20261108-123849`), and the first
+  requests migrated the live database as the web server user: `user_version` 13, column
+  present, `quick_check` ok, no unfinished wallet operations, no SQLite sidecars left with
+  the wrong owner. The main page and the admin page load; setup redirects as expected.
+- The maintainer then used the demo instance and reported that it works.
+
+This was a short smoke test, not a payment-by-payment exercise of every fix; the
+regression suites above are what cover the individual findings.
+
+Released as CashuPayServer v0.5.10-alpha, with cashu-wallet-php v0.3.0 and
+mint-discovery v1.1.0.
+
 ### Known leftovers
 
 - `mint-discovery` passes `nostrTimeout` as `{timeout}`, which nostr-tools 2.x ignores (it reads `maxWait`); the real limit is 4.4 s per relay. Left as is: fixing the plumbing would make discovery wait up to the configured 15 s, which is worse for the operator, and 4.4 s finds the mints in practice.
