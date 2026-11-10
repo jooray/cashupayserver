@@ -17,6 +17,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/managed.php';
 require_once __DIR__ . '/includes/payment_path_debug.php';
 require_once __DIR__ . '/includes/offline_cashu.php';
+require_once __DIR__ . '/includes/wallet_tabs.php';
 
 // Check setup
 if (!Database::isInitialized() || !Config::isSetupComplete()) {
@@ -225,10 +226,11 @@ if ($invoice === null) {
 
 // Get store name for display. Also pull the invoice-privacy defaults so the
 // cashu (NUT-18) memo honours the same store-name/note hiding the noffer rail
-// applies via Invoice::buildInvoiceMemo, and the "Payment order" preference
-// that picks the default method tab (Invoice::firstPaymentMethod).
+// applies via Invoice::buildInvoiceMemo, the "Payment order" preference
+// that picks the default method tab (Invoice::firstPaymentMethod), and the
+// "Popular wallet tabs" opt-in (WalletTabs::offered).
 $store = Database::fetchOne(
-    "SELECT name, hide_store_name_on_invoice, hide_note_on_invoice, invoice_first_method
+    "SELECT name, hide_store_name_on_invoice, hide_note_on_invoice, invoice_first_method, wallet_tabs
      FROM stores WHERE id = ?",
     [$invoice['store_id']]
 );
@@ -539,9 +541,10 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
            the amount. */
         .merchant-header {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             justify-content: center;
-            gap: 0.5rem;
+            gap: 0.35rem 0.5rem;
             margin-bottom: 1rem;
         }
 
@@ -554,6 +557,13 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         .merchant-name {
             font-size: 0.875rem;
             color: var(--text-secondary);
+            /* A long store name wraps (and breaks mid-word if it has to)
+               instead of pushing the logo past a phone's right edge; the
+               "powered by" pair then drops to its own line. */
+            min-width: 0;
+            max-width: 100%;
+            overflow-wrap: anywhere;
+            text-align: center;
         }
 
         .powered-by {
@@ -690,6 +700,75 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         }
         .method-block.hidden {
             display: none !important;
+        }
+
+        /* "Popular wallet" tabs (WalletTabs): a brand logo over its name.
+           Up to three tabs share the native strip; from four on the wallet
+           tabs sit on a second strip (.method-tabs-wallets) directly under
+           it, so six tabs stay legible on a phone without scrolling. */
+        .method-tabs-wrap {
+            margin: 0 0 1rem 0;
+        }
+        .method-tabs-wrap .method-tabs {
+            margin: 0;
+        }
+        .method-tabs-wrap .method-tabs-wallets {
+            margin-top: 0.5rem;
+        }
+        .method-tab-wallet {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 0.3rem;
+            padding: 0.5rem 0.5rem 0.45rem;
+            min-width: 0;
+        }
+        .method-tab-logo {
+            display: block;
+            height: 28px;
+            width: auto;
+            max-width: 100%;
+        }
+        .method-tab-logo.pm-card {
+            background: #fff;
+            padding: 4px 6px;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        .method-tab-label {
+            font-size: 0.75rem;
+            line-height: 1;
+            white-space: nowrap;
+        }
+        .method-tab-wallet.active .method-tab-label {
+            color: var(--text-primary);
+        }
+        /* Where-to-find-it note at the top of a wallet tab. */
+        .wallet-note {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 0 0 1rem 0;
+            padding: 0.7rem 0.85rem;
+            text-align: left;
+            font-size: 0.85rem;
+            line-height: 1.45;
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+        }
+        .wallet-note-logo {
+            flex: 0 0 auto;
+            height: 36px;
+            width: auto;
+        }
+        .wallet-note-logo.pm-card {
+            background: #fff;
+            padding: 5px 7px;
+            border-radius: 7px;
+            box-sizing: border-box;
         }
 
         .invoice-input:hover {
@@ -914,9 +993,18 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             border-radius: 8px;
             box-sizing: border-box;
         }
-        /* On the Lightning view, hide brands that don't natively send LN. */
-        .payment-methods[data-method="lightning"] .pm-no-lightning {
+        /* On the Lightning view, hide brands that don't natively send LN —
+           unless the brand has its own wallet tab, which is where a click
+           on it leads. */
+        .payment-methods[data-method="lightning"] .pm-no-lightning:not(.pm-has-tab) {
             display: none;
+        }
+        .pm-item.pm-has-tab {
+            cursor: pointer;
+        }
+        .pm-item.pm-has-tab:hover .pm-name,
+        .pm-item.pm-has-tab:focus-visible .pm-name {
+            color: var(--text-primary);
         }
 
         /* Sanitized direct-receive failure banner (invoices.receive_errors):
@@ -1228,6 +1316,14 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 }
             }
             $methodCount = ($hasLightning ? 1 : 0) + ($hasOnchain ? 1 : 0) + ($hasCashu ? 1 : 0);
+            // "Popular wallet" tabs (WalletTabs): Cash App / Venmo / PayPal
+            // tabs the store opted into, each repeating a native QR (the
+            // source method) under a note on where that app hides its
+            // send-bitcoin screen. Only wallets with an offered source are
+            // rendered; they count as methods so an on-chain-only invoice
+            // with a Venmo tab still gets a tab bar.
+            $walletTabs = WalletTabs::offered(is_array($store) ? $store : [], $hasOnchain, $hasLightning);
+            $methodCount += count($walletTabs);
             // "Share" copies the canonical invoice URL (configured base URL +
             // URL mode), not location.href — the viewer may have the page open
             // via an internal hostname. Hidden when the link couldn't work on
@@ -1335,17 +1431,38 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     'lightning' => ['offered' => $hasLightning, 'label' => 'Lightning'],
                     'cashu'     => ['offered' => $hasCashu,     'label' => 'Cashu'],
                 ];
+                // Wallet tabs follow the native methods. Up to three tabs share
+                // one strip; from four on, the wallet tabs move onto a strip
+                // of their own below the native one so six tabs stay legible
+                // on a phone (see .method-tabs-wallets).
+                $nativeTabCount = $methodCount - count($walletTabs);
+                $walletTabsOwnStrip = $walletTabs !== [] && $methodCount > 3;
+                $renderWalletTab = function (string $walletKey, string $walletSource): void {
+                    $wb = WalletTabs::BRANDS[$walletKey];
+                    $logoClass = 'method-tab-logo' . ($wb['class'] !== '' ? ' ' . $wb['class'] : '');
+                    ?>
+                    <button type="button" class="method-tab method-tab-wallet" data-method="<?= htmlspecialchars($walletKey) ?>" data-source="<?= htmlspecialchars($walletSource) ?>" role="tab"><img class="<?= $logoClass ?>" src="<?= htmlspecialchars(Urls::images('payment-methods/' . $wb['file'])) ?>" alt=""><span class="method-tab-label"><?= htmlspecialchars($wb['label']) ?></span></button>
+                    <?php
+                };
                 if ($methodCount >= 2): ?>
+                <div class="method-tabs-wrap">
                 <div class="method-tabs" role="tablist">
                     <?php foreach (Invoice::paymentMethodTabOrder(is_array($store) ? $store : []) as $tabMethod):
                         if (!$methodTabs[$tabMethod]['offered']) { continue; } ?>
                     <button type="button" class="method-tab <?= $firstMethod === $tabMethod ? 'active' : '' ?>" data-method="<?= $tabMethod ?>" role="tab"><?= $methodTabs[$tabMethod]['label'] ?></button>
                     <?php endforeach; ?>
+                    <?php if (!$walletTabsOwnStrip) { foreach ($walletTabs as $walletKey => $walletSource) { $renderWalletTab($walletKey, $walletSource); } } ?>
+                </div>
+                <?php if ($walletTabsOwnStrip): ?>
+                <div class="method-tabs method-tabs-wallets" role="tablist" aria-label="Popular wallets">
+                    <?php foreach ($walletTabs as $walletKey => $walletSource) { $renderWalletTab($walletKey, $walletSource); } ?>
+                </div>
+                <?php endif; ?>
                 </div>
                 <?php endif; ?>
 
                 <?php if ($hasLightning): ?>
-                <div class="method-block <?= $firstMethod === 'lightning' ? '' : 'hidden' ?>" data-method-block="lightning">
+                <div class="method-block <?= $firstMethod === 'lightning' ? '' : 'hidden' ?>" data-method-block="lightning" data-source="lightning">
                     <div class="qr-container" id="qr-lightning"></div>
                     <?php if (!empty($invoice['long_lived'])): ?>
                     <?php // When this bolt11 was (re)sourced; flashes for a second on each refresh. ?>
@@ -1475,6 +1592,73 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 </div>
                 <?php endif; ?>
 
+                <?php
+                // Wallet tab blocks: the source method's QR and payload, the
+                // same buttons as the native block, plus the app note. Never
+                // the default view (Invoice::firstPaymentMethod only ever
+                // picks a native method), so they all start hidden. The
+                // lightning-sourced ones carry data-source="lightning" so a
+                // long-lived refresh (applyLightning) re-renders them too.
+                foreach ($walletTabs as $walletKey => $walletSource):
+                    $wb = WalletTabs::BRANDS[$walletKey];
+                    $wIsLn = $walletSource === 'lightning';
+                    $wPayload = $wIsLn ? (string)$invoice['bolt11'] : $bip21;
+                    $wUri = $wIsLn ? 'lightning:' . $invoice['bolt11'] : $bip21;
+                    $wLogoClass = 'wallet-note-logo' . ($wb['class'] !== '' ? ' ' . $wb['class'] : '');
+                ?>
+                <div class="method-block hidden" data-method-block="<?= htmlspecialchars($walletKey) ?>" data-source="<?= htmlspecialchars($walletSource) ?>">
+                    <div class="wallet-note">
+                        <img class="<?= $wLogoClass ?>" src="<?= htmlspecialchars(Urls::images('payment-methods/' . $wb['file'])) ?>" alt="<?= htmlspecialchars($wb['label']) ?>">
+                        <span><?= htmlspecialchars($wb['note']) ?></span>
+                    </div>
+                    <div class="qr-container" id="qr-<?= htmlspecialchars($walletKey) ?>"></div>
+                    <div class="invoice-input" data-copy="<?= htmlspecialchars($wPayload) ?>">
+                        <?php if ($wIsLn): ?>
+                        <?= htmlspecialchars(substr($wPayload, 0, 40) . '...' . substr($wPayload, -10)) ?>
+                        <?php else: ?>
+                        <?= $shortOnchainAddr ?>
+                        <div style="margin-top:.35rem;font-size:.85rem;color:var(--text-secondary)">
+                            <?= number_format($onchainSat) ?> sat
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                    <div class="btn-row">
+                        <a href="<?= htmlspecialchars($wUri) ?>" class="btn">
+                            <?php if ($wIsLn): ?>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
+                            </svg>
+                            <?php else: ?>
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"></circle>
+                                <path d="M9.5 8h4a2.5 2.5 0 0 1 0 5h-4v-5zm0 5h4.5a2.5 2.5 0 0 1 0 5h-4.5v-5z"></path>
+                            </svg>
+                            <?php endif; ?>
+                            <?= htmlspecialchars($wb['button']) ?>
+                        </a>
+                        <button type="button" class="btn btn-secondary" data-copy="<?= htmlspecialchars($wPayload) ?>">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                            </svg>
+                            <?= $wIsLn ? 'Copy Invoice' : 'Copy Address' ?>
+                        </button>
+                        <?php if ($showShare): ?>
+                        <button type="button" class="btn btn-secondary btn-share" data-share-url="<?= htmlspecialchars($shareUrl) ?>" aria-label="Copy share link">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="18" cy="5" r="3"></circle>
+                                <circle cx="6" cy="12" r="3"></circle>
+                                <circle cx="18" cy="19" r="3"></circle>
+                                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+                            </svg>
+                            <span class="btn-share-label">Share</span>
+                        </button>
+                        <?php endif; ?>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+
                 <div class="invoice-details">
                     <div><span class="label">Invoice:</span><span class="invoice-id-value"><?= htmlspecialchars($invoice['id']) ?></span></div>
                     <?php if ($invoiceNote !== ''): ?>
@@ -1494,14 +1678,17 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 // again on the Cashu view (no link at all when the invoice has no
                 // Lightning leg). `noLightning` brands (card apps that can't natively
                 // send Lightning) are hidden on the Lightning view via the
-                // pm-no-lightning class.
+                // pm-no-lightning class. A brand whose wallet tab is shown
+                // (`tab`, see WalletTabs) instead switches to that tab when
+                // clicked (data-tab, pm-has-tab) and stays visible on every
+                // view — its tab is the right place for it.
                 $paymentBrands = [
-                    ['name' => 'Cash App', 'file' => 'cashapp.svg'],
+                    ['name' => 'Cash App', 'file' => 'cashapp.svg', 'tab' => WalletTabs::CASHAPP],
                     ['name' => 'Strike',   'file' => 'strike.png',   'class' => 'pm-strike'],
                     ['name' => 'Coinbase', 'file' => 'coinbase.svg'],
                     ['name' => 'Kraken',   'file' => 'kraken.svg'],
-                    ['name' => 'Venmo',    'file' => 'venmo.svg',    'class' => 'pm-card', 'noLightning' => true],
-                    ['name' => 'PayPal',   'file' => 'paypal.svg',   'class' => 'pm-card', 'noLightning' => true],
+                    ['name' => 'Venmo',    'file' => 'venmo.svg',    'class' => 'pm-card', 'noLightning' => true, 'tab' => WalletTabs::VENMO],
+                    ['name' => 'PayPal',   'file' => 'paypal.svg',   'class' => 'pm-card', 'noLightning' => true, 'tab' => WalletTabs::PAYPAL],
                 ];
                 $lightningUri = $hasLightning ? 'lightning:' . $invoice['bolt11'] : '';
                 $pmLinks = [
@@ -1519,10 +1706,15 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     <span class="pm-logos">
                         <?php foreach ($paymentBrands as $brand): ?>
                             <?php
-                            $itemClass = 'pm-item' . (!empty($brand['noLightning']) ? ' pm-no-lightning' : '');
+                            $brandTab = isset($brand['tab'], $walletTabs[$brand['tab']]) ? $brand['tab'] : '';
+                            $itemClass = 'pm-item' . (!empty($brand['noLightning']) ? ' pm-no-lightning' : '') . ($brandTab !== '' ? ' pm-has-tab' : '');
                             $logoClass = 'pm-logo' . (!empty($brand['class']) ? ' ' . $brand['class'] : '');
                             ?>
+                            <?php if ($brandTab !== ''): ?>
+                            <a class="<?= $itemClass ?>" data-tab="<?= htmlspecialchars($brandTab) ?>" role="button" tabindex="0" aria-label="Show the <?= htmlspecialchars($brand['name']) ?> tab">
+                            <?php else: ?>
                             <a class="<?= $itemClass ?>"<?= $pmInitialHref !== '' ? ' href="' . htmlspecialchars($pmInitialHref) . '"' : '' ?> aria-label="Pay with BTC wallet (<?= htmlspecialchars($brand['name']) ?>)">
+                            <?php endif; ?>
                                 <img class="<?= $logoClass ?>" src="<?= htmlspecialchars($imgBase) ?><?= htmlspecialchars($brand['file']) ?>" alt="<?= htmlspecialchars($brand['name']) ?>" title="<?= htmlspecialchars($brand['name']) ?>">
                                 <span class="pm-name"><?= htmlspecialchars($brand['name']) ?></span>
                             </a>
@@ -1708,10 +1900,27 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         const storeIdForCashu = <?= json_encode($invoice['store_id']) ?>;
         const invoiceIdForCashu = <?= json_encode($invoice['id']) ?>;
 
+        // Wallet tabs (WalletTabs) repeat a native QR: render each from its
+        // source method's payload. Also re-run by applyLightning when a
+        // long-lived invoice's bolt11 is replaced.
+        function renderWalletQRs(source) {
+            document.querySelectorAll('.method-block[data-source][data-method-block]').forEach(block => {
+                const method = block.dataset.methodBlock;
+                if (method === 'lightning' || method === 'onchain' || method === 'cashu') return;
+                if (source && block.dataset.source !== source) return;
+                if (block.dataset.source === 'lightning' && invoice) {
+                    renderQR('qr-' + method, 'lightning:' + invoice.toUpperCase());
+                } else if (block.dataset.source === 'onchain' && onchainBip21) {
+                    renderQR('qr-' + method, onchainBip21);
+                }
+            });
+        }
+
         if (currentStatus === 'New') {
             if (invoice) renderQR('qr-lightning', 'lightning:' + invoice.toUpperCase());
             if (onchainBip21) renderQR('qr-onchain', onchainBip21);
             if (cashuRequest) renderQR('qr-cashu', cashuRequest);
+            renderWalletQRs(null);
         }
 
         // Pay-with-Cashu-token: POST the pasted token to receive.php, keyed to
@@ -1759,28 +1968,43 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         // the given method (data-href-* on #payment-methods, kept current by
         // the Lightning refresh). An empty URI drops the href so the logo is
         // inert rather than a dead link.
+        // Brands with their own wallet tab (a.pm-item[data-tab]) switch tabs
+        // instead and are left alone here.
         function applyPaymentMethodLinks(method) {
             const pm = document.getElementById('payment-methods');
             if (!pm) return;
             const key = 'href' + String(method || '').charAt(0).toUpperCase() + String(method || '').slice(1);
             const href = pm.dataset[key] || '';
-            pm.querySelectorAll('a.pm-item').forEach(a => {
+            pm.querySelectorAll('a.pm-item:not([data-tab])').forEach(a => {
                 if (href) a.setAttribute('href', href);
                 else a.removeAttribute('href');
             });
         }
 
-        // Tab switching between Lightning and on-chain payment methods.
+        // Tab switching between the payment methods. A wallet tab (Cash App,
+        // Venmo, PayPal) shows its own block but keys the brand row off the
+        // native method it repeats (data-source), so the remaining brand
+        // logos open the right wallet URI.
+        function activateMethodTab(method) {
+            const tab = document.querySelector('.method-tab[data-method="' + method + '"]');
+            if (!tab) return;
+            document.querySelectorAll('.method-tab').forEach(t => t.classList.toggle('active', t === tab));
+            document.querySelectorAll('[data-method-block]').forEach(block => {
+                block.classList.toggle('hidden', block.dataset.methodBlock !== method);
+            });
+            const source = tab.dataset.source || method;
+            const pm = document.getElementById('payment-methods');
+            if (pm) pm.dataset.method = source;
+            applyPaymentMethodLinks(source);
+        }
         document.querySelectorAll('.method-tab').forEach(tab => {
-            tab.addEventListener('click', () => {
-                const method = tab.dataset.method;
-                document.querySelectorAll('.method-tab').forEach(t => t.classList.toggle('active', t === tab));
-                document.querySelectorAll('[data-method-block]').forEach(block => {
-                    block.classList.toggle('hidden', block.dataset.methodBlock !== method);
-                });
-                const pm = document.getElementById('payment-methods');
-                if (pm) pm.dataset.method = method;
-                applyPaymentMethodLinks(method);
+            tab.addEventListener('click', () => activateMethodTab(tab.dataset.method));
+        });
+        document.querySelectorAll('a.pm-item[data-tab]').forEach(item => {
+            const go = (e) => { e.preventDefault(); activateMethodTab(item.dataset.tab); };
+            item.addEventListener('click', go);
+            item.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') go(e);
             });
         });
 
@@ -1934,8 +2158,10 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             if (data.lnRefreshedAt) lnRefreshedAt = data.lnRefreshedAt;
             if (changed) {
                 renderQR('qr-lightning', 'lightning:' + invoice.toUpperCase());
-                const block = document.querySelector('[data-method-block="lightning"]');
-                if (block) {
+                renderWalletQRs('lightning');
+                // The native Lightning block and every wallet tab that
+                // repeats it (data-source="lightning") swap payloads together.
+                document.querySelectorAll('.method-block[data-source="lightning"]').forEach(block => {
                     const input = block.querySelector('.invoice-input');
                     if (input) {
                         input.dataset.copy = invoice;
@@ -1944,7 +2170,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     const open = block.querySelector('a.btn[href^="lightning:"]');
                     if (open) open.href = 'lightning:' + invoice;
                     block.querySelectorAll('button[data-copy]').forEach(b => { b.dataset.copy = invoice; });
-                }
+                });
                 const pm = document.getElementById('payment-methods');
                 if (pm) {
                     pm.dataset.hrefLightning = 'lightning:' + invoice;

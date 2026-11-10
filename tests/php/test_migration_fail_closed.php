@@ -53,7 +53,7 @@ function has_col(string $table, string $col): bool {
 // next connection must run migrations. Fold the WAL back into the main file
 // so the read-only simulation has a single file to lock down.
 $pdo = Database::getInstance();
-$pdo->exec("ALTER TABLE invoices DROP COLUMN ln_expires_at");
+$pdo->exec("ALTER TABLE stores DROP COLUMN wallet_tabs");
 $pdo->exec("PRAGMA wal_checkpoint(TRUNCATE)");
 $pdo->exec("PRAGMA journal_mode = DELETE");
 unset($pdo);
@@ -104,7 +104,7 @@ try {
 reset_db_singleton();
 $pdo = Database::getInstance();
 assert_null(Database::getMigrationError(), 'error cleared after a successful gate');
-assert_true(has_col('invoices', 'ln_expires_at'), 'marker column re-added by the migration');
+assert_true(has_col('stores', 'wallet_tabs'), 'marker column re-added by the migration');
 assert_true(Config::isSetupComplete(), 'install reads as configured again');
 
 // hasExistingInstallation(): false only when there is no database file at all.

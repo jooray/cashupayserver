@@ -79,6 +79,8 @@ def test_declining_mints_pins_strict_mode(
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
 
+    page.wait_for_selector("h2:has-text('Popular wallet tabs')")
+    page.click("button[name='wallet_tabs_action'][value='skip']")
     page.wait_for_selector("h2:has-text('Enable automatic updates?')")
     page.click("button:has-text('Not now')")
     page.wait_for_selector("h2:has-text('Enable cron')")
@@ -110,7 +112,7 @@ def test_swaps_stay_off_without_an_xpub(
     page.wait_for_selector("h2:has-text('Cashu mints')")
     assert page.locator("button:has-text('Enable submarine swaps')").count() == 0
     page.click("button:has-text('No thanks, run without mints')")
-    page.wait_for_selector("h2:has-text('Enable automatic updates?')")
+    page.wait_for_selector("h2:has-text('Popular wallet tabs')")
     row = _rows(payserver, "SELECT * FROM stores")[0]
     assert row["swaps_enabled"] == 0, "no xpub, so swaps stay off"
 
@@ -283,6 +285,8 @@ def test_add_store_mode_runs_the_same_screens(
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
+    page.wait_for_selector("h2:has-text('Popular wallet tabs')")
+    page.click("button[name='wallet_tabs_action'][value='skip']")
     page.wait_for_selector("h2:has-text('Enable automatic updates?')")
     page.click("button:has-text('Not now')")
     page.wait_for_selector("h2:has-text('Enable cron')")
@@ -295,8 +299,9 @@ def test_add_store_mode_runs_the_same_screens(
     page.goto(f"{payserver.url}/setup?mode=add_store")
     page.wait_for_selector("h1:has-text('Add New Store')")
     # add_store mode has no pre-store screens ahead of it, and the counter
-    # starts at four because zero-conf only joins once an on-chain rail exists.
-    assert "Step 1 of 4" in page.locator(".subtitle").inner_text()
+    # starts at five (store, onchain, lightning, mints, wallet tabs) because
+    # zero-conf only joins once an on-chain rail exists.
+    assert "Step 1 of 5" in page.locator(".subtitle").inner_text()
     page.fill("#store_name", "Second Store")
     page.click("button[type=submit]")
 
@@ -307,6 +312,9 @@ def test_add_store_mode_runs_the_same_screens(
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
 
+    # The per-store wallet-tabs question is the last add_store screen.
+    page.wait_for_selector("h2:has-text('Popular wallet tabs')")
+    page.click("button[name='wallet_tabs_action'][value='skip']")
     # No mints means no seed was generated, so add_store hands straight back to
     # the admin panel rather than showing cron/done or a hand-off panel.
     page.wait_for_selector("#app", state="visible")
@@ -329,6 +337,8 @@ def test_add_store_with_mints_shows_the_generated_seed_once(
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
+    page.wait_for_selector("h2:has-text('Popular wallet tabs')")
+    page.click("button[name='wallet_tabs_action'][value='skip']")
     page.wait_for_selector("h2:has-text('Enable automatic updates?')")
     page.click("button:has-text('Not now')")
     page.wait_for_selector("h2:has-text('Enable cron')")
@@ -353,6 +363,8 @@ def test_add_store_with_mints_shows_the_generated_seed_once(
     page.fill("#backup_mint_url_manual", backup_mint.url)
     page.click("#mints-continue-btn")
 
+    page.wait_for_selector("h2:has-text('Popular wallet tabs')")
+    page.click("button[name='wallet_tabs_action'][value='skip']")
     page.wait_for_selector("h2:has-text('Your store is ready!')")
     shown = page.locator(".seed-display").inner_text().split()
     assert len(shown) == 12, f"expected a 12-word phrase, got {len(shown)}"

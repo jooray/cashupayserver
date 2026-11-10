@@ -116,8 +116,9 @@ def test_strike_type_replaces_onchain_and_lightning_and_skips_mints(
     assert wizard_heading(body) == "Connect your Strike account", wizard_heading(body)
     # Mints and the seed screen are gone; counter reflects the Strike shape.
     # terms, analytics, type, security, password, email, store, strike,
-    # updates, cron, done — no onchain/lightning/mints/seed, no zeroconf yet.
-    assert "of 11" in body, "the Strike shape is 11 screens before zeroconf joins"
+    # wallet_tabs, updates, cron, done — no onchain/lightning/mints/seed, no
+    # zeroconf yet.
+    assert "of 12" in body, "the Strike shape is 12 screens before zeroconf joins"
     assert 'name="strike_onchain" value="1" checked' in body, "on-chain via Strike is ticked by default"
     assert 'id="wizard-back-link"' in body and "step=store" in body
 
@@ -134,8 +135,10 @@ def test_strike_type_replaces_onchain_and_lightning_and_skips_mints(
     body = w.post(step="strike", strike_action="save", strike_api_key=TEST_STRIKE_KEY, strike_onchain="1")
     assert wizard_error(body) is None, wizard_error(body)
     assert wizard_heading(body) == "Zero-conf payments", wizard_heading(body)
-    assert "of 12" in body, "zeroconf joined the Strike shape"
+    assert "of 13" in body, "zeroconf joined the Strike shape"
     body = w.post(step="zeroconf", zero_conf="0")
+    assert wizard_heading(body) == "Popular wallet tabs", wizard_heading(body)
+    body = w.post(step="wallet_tabs", wallet_tabs_action="skip")
     assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
 
     row = _store(payserver)
@@ -155,8 +158,11 @@ def test_strike_type_replaces_onchain_and_lightning_and_skips_mints(
         conn.close()
     assert rows == [("strike", TEST_STRIKE_KEY)]
 
-    # Back from the auto-update screen lands on zeroconf, then the Strike
-    # screen (which shows the saved key as a masked label, never the key).
+    # Back from the auto-update screen lands on wallet tabs, then zeroconf,
+    # then the Strike screen (which shows the saved key as a masked label,
+    # never the key).
+    body = w.get("wallet_tabs")
+    assert wizard_heading(body) == "Popular wallet tabs"
     body = w.get("zeroconf")
     assert wizard_heading(body) == "Zero-conf payments"
     body = w.get("strike")
@@ -172,7 +178,7 @@ def test_strike_type_without_onchain_has_no_zeroconf(payserver_with_strike: Pays
     w.through_store("Strike LN Only", install_type="strike")
     body = w.post(step="strike", strike_action="save", strike_api_key=TEST_STRIKE_KEY)
     assert wizard_error(body) is None, wizard_error(body)
-    assert wizard_heading(body) == "Enable automatic updates?", "no on-chain source, so no zeroconf and no mints"
+    assert wizard_heading(body) == "Popular wallet tabs", "no on-chain source, so no zeroconf and no mints"
     row = _store(payserver_with_strike)
     assert row["onchain_strike_enabled"] == 0
     assert row["strict_no_mint_fallback"] == 1
@@ -183,6 +189,8 @@ def test_strike_type_skip_leaves_the_store_without_rails(payserver: PayserverHan
     body = w.through_store("Strike Skipped", install_type="strike")
     assert wizard_heading(body) == "Connect your Strike account"
     body = w.post(step="strike", strike_action="skip")
+    assert wizard_heading(body) == "Popular wallet tabs", wizard_heading(body)
+    body = w.post(step="wallet_tabs", wallet_tabs_action="skip")
     assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
     body = w.post(step="updates", auto_update="0")
     assert wizard_heading(body) == "Enable cron"
@@ -216,7 +224,7 @@ def test_other_and_own_wallet_types_keep_every_screen(payserver: PayserverHandle
     w = SetupWizard(payserver.url)
     body = w.through_store("Own Wallet Store", install_type="own_wallet")
     assert wizard_heading(body) == "On-chain Bitcoin payments"
-    assert "of 13" in body
+    assert "of 14" in body
     body = w.post(step="onchain", onchain_action="skip")
     assert 'id="lightning-cashu-note"' not in body, "the Cashu note is Cashu-only"
     # The Strike API option stays a section of the Lightning screen here.
@@ -246,10 +254,12 @@ def test_back_links_on_every_screen_but_terms_and_done(payserver: PayserverHandl
     body = w.post(step="zeroconf", zero_conf="1")
     assert "step=zeroconf" in body.split('id="wizard-back-link"')[0][-200:], "mints goes back to zeroconf"
     body = w.post(step="mints", mints_enabled="0")
-    assert "step=mints" in body.split('id="wizard-back-link"')[0][-200:], "updates goes back to mints"
+    assert "step=mints" in body.split('id="wizard-back-link"')[0][-200:], "wallet tabs goes back to mints"
     # The completing session may actually follow that link.
     body = w.get("mints")
     assert wizard_heading(body) == "Cashu mints"
+    body = w.post(step="wallet_tabs", wallet_tabs_action="skip")
+    assert "step=wallet_tabs" in body.split('id="wizard-back-link"')[0][-200:], "updates goes back to wallet tabs"
     body = w.post(step="updates", auto_update="0")
     assert "step=updates" in body.split('id="wizard-back-link"')[0][-200:], "cron goes back to updates"
     body = w.post(step="cron")

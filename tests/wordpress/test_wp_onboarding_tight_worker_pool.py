@@ -85,6 +85,8 @@ def _walk_wizard_declining_everything(wp: WordPressHandle) -> None:
     wiz.post(step="onchain", onchain_action="skip")
     wiz.post(step="lightning", lightning_action="skip")
     body = wiz.post(step="mints", mints_enabled="0")
+    assert wizard_heading(body) == "Popular wallet tabs", wizard_heading(body)
+    body = wiz.post(step="wallet_tabs", wallet_tabs_action="skip")
     assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
     body = wiz.post(step="updates", auto_update="0")
     heading = wizard_heading(body)

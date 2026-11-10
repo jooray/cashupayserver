@@ -360,6 +360,12 @@ def run_setup_wizard(
         mint_unit=mint_unit,
     )
 
+    # wallet_tabs: the first post-completion screen. Skip, so fixture stores
+    # render the payment page exactly as before the screen existed (tests
+    # that want the Cash App / Venmo / PayPal tabs opt in via the admin card
+    # or the stores.wallet_tabs column).
+    post("wallet_tabs (skip)", 15, step="wallet_tabs", wallet_tabs_action="skip")
+
     return SetupResult(
         admin_password=admin_password,
         store_name=store_name,
@@ -381,7 +387,7 @@ def run_add_store_wizard(
     default_currency: str = "sat",
 ) -> None:
     """Walk the admin-gated add_store wizard (store → onchain skip →
-    lightning skip → mints), creating one more store on an
+    lightning skip → mints → wallet_tabs skip), creating one more store on an
     already-set-up instance. Each store minted this way gets its own fresh
     wallet seed, so stores on a shared instance never collide at the mint."""
     s = requests.Session()
@@ -420,6 +426,9 @@ def run_add_store_wizard(
         backup_mint_url=backup_mint_url,
         mint_unit=mint_unit,
     )
+    # wallet_tabs is the last add_store screen; answering it is what hands
+    # off to admin (a 302, or the seed panel). Skip: no wallet tabs.
+    post("wallet_tabs (skip)", step="wallet_tabs", wallet_tabs_action="skip")
 
 
 def _assert_step_ok(r: requests.Response, label: str) -> None:

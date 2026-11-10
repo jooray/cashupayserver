@@ -55,6 +55,7 @@ def test_anonymous_tail_post_on_configured_install_is_refused(configured: Config
 
     stranger = requests.Session()
     for step, data in (
+        ("wallet_tabs", {"step": "wallet_tabs", "wallet_tabs_action": "skip"}),
         ("updates", {"step": "updates", "auto_update": "0"}),
         ("cron", {"step": "cron"}),
         ("done", {"step": "done"}),
@@ -197,7 +198,7 @@ def test_migration_failure_shows_upgrade_failed_page_not_the_wizard(configured: 
     # file and its directory read-only so the ALTER TABLE cannot run.
     conn = sqlite3.connect(db_path, isolation_level=None)
     try:
-        conn.execute("ALTER TABLE invoices DROP COLUMN ln_expires_at")
+        conn.execute("ALTER TABLE stores DROP COLUMN wallet_tabs")
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.execute("PRAGMA journal_mode = DELETE")
     finally:
@@ -236,7 +237,7 @@ def test_migration_failure_shows_upgrade_failed_page_not_the_wizard(configured: 
     r = requests.get(f"{handle.url}/setup.php", timeout=15, allow_redirects=False)
     assert r.status_code == 302 and "admin" in r.headers.get("Location", ""), (r.status_code, r.headers)
     with handle.db() as db:
-        cols = [row[1] for row in db.execute("PRAGMA table_info(invoices)")]
-        assert "ln_expires_at" in cols, "marker column restored by the migration"
+        cols = [row[1] for row in db.execute("PRAGMA table_info(stores)")]
+        assert "wallet_tabs" in cols, "marker column restored by the migration"
         names = [row[0] for row in db.execute("SELECT name FROM stores")]
     assert "Wedged Store" not in names, "no store was created while wedged"

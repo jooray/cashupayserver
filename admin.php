@@ -27,6 +27,7 @@ require_once __DIR__ . '/includes/locks.php';
 require_once __DIR__ . '/includes/transfer.php';
 require_once __DIR__ . '/includes/store_safety.php';
 require_once __DIR__ . '/includes/usage_stats.php';
+require_once __DIR__ . '/includes/wallet_tabs.php';
 
 use Cashu\ProofState;
 
@@ -2256,6 +2257,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 Database::update('stores', ['invoice_first_method' => $method], 'id = ?', [$storeId]);
                 echo json_encode(['success' => true, 'firstMethod' => $method]);
+            } catch (Exception $e) {
+                cashupay_status(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            }
+            break;
+
+        case 'save_wallet_tabs':
+            Auth::requireAdmin();
+            // "Popular wallet tabs" card: which of the Cash App / Venmo /
+            // PayPal tabs the customer invoice page shows (WalletTabs).
+            // Instant-save from the toggles; the whole set is sent each time
+            // as a comma-separated list so an empty value is an explicit
+            // "none". Written via Database::update directly, keeping the
+            // Config::updateStore allowlist tight.
+            try {
+                $storeId = $_POST['store_id'] ?? '';
+                if (empty($storeId)) {
+                    throw new Exception('Store ID required');
+                }
+                if (!Config::getStore($storeId)) {
+                    throw new Exception('Store not found');
+                }
+                $raw = (string)($_POST['wallet_tabs'] ?? '');
+                $keys = $raw === '' ? [] : explode(',', $raw);
+                foreach ($keys as $k) {
+                    if (!WalletTabs::isKnown(strtolower(trim($k)))) {
+                        throw new Exception('Unknown wallet tab');
+                    }
+                }
+                $value = WalletTabs::serialize($keys);
+                Database::update('stores', ['wallet_tabs' => $value], 'id = ?', [$storeId]);
+                echo json_encode(['success' => true, 'walletTabs' => WalletTabs::parse($value)]);
             } catch (Exception $e) {
                 cashupay_status(400);
                 echo json_encode(['error' => $e->getMessage()]);
@@ -5524,6 +5557,49 @@ header('Cache-Control: no-cache, must-revalidate');
             color: var(--text-secondary);
         }
 
+        /* "Popular wallet tabs" card: one toggle row per wallet, with the
+           payment page's own brand logo so the operator sees what the tab
+           will look like. */
+        .wallet-tab-options {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+        .wallet-tab-option {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            padding: 0.6rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+        }
+        .wallet-tab-option:has(input:checked) {
+            border-color: var(--accent);
+        }
+        .wallet-tab-option-logo {
+            flex: 0 0 auto;
+            height: 28px;
+            width: auto;
+        }
+        .wallet-tab-option-logo.pm-card {
+            background: #fff;
+            padding: 4px 6px;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        .wallet-tab-option-text {
+            flex: 1 1 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 0.15rem;
+            font-size: 0.9rem;
+            min-width: 0;
+        }
+        .wallet-tab-option-text > span {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
         /* Inline info-tip: a small "i" badge with a popup on hover/focus. */
         .info-tip {
             position: relative;
@@ -6533,6 +6609,38 @@ header('Cache-Control: no-cache, must-revalidate');
                                 </label>
                             </div>
                             <div id="payment-order-error" class="hidden" style="margin-top:0.5rem; color: var(--error); font-size: 0.85rem;"></div>
+                        </div>
+                    </div>
+
+                    <div class="card collapsible collapsed" id="card-wallet-tabs">
+                        <div class="card-header">
+                            <div class="card-title">Popular wallet tabs</div>
+                        </div>
+                        <div class="card-body">
+                            <p style="font-size: 0.85rem; color: var(--text-secondary); margin: 0 0 0.75rem 0;">
+                                Extra tabs on the invoice page for popular wallets. Each one shows
+                                the same QR code as the on-chain or Lightning tab, with a note on
+                                where that app hides its send-bitcoin screen. Cash App uses the
+                                Lightning invoice when there is one; Venmo and PayPal need an
+                                on-chain address. Saves as soon as you flip a toggle.
+                            </p>
+                            <div class="wallet-tab-options">
+                                <?php foreach (WalletTabs::BRANDS as $wtKey => $wtBrand):
+                                    $wtLogoClass = 'wallet-tab-option-logo' . ($wtBrand['class'] !== '' ? ' ' . $wtBrand['class'] : ''); ?>
+                                <div class="wallet-tab-option">
+                                    <img class="<?= $wtLogoClass ?>" src="<?= htmlspecialchars(Urls::images('payment-methods/' . $wtBrand['file'])) ?>" alt="">
+                                    <div class="wallet-tab-option-text">
+                                        <strong><?= htmlspecialchars($wtBrand['label']) ?></strong>
+                                        <span><?= htmlspecialchars($wtBrand['note']) ?></span>
+                                    </div>
+                                    <label class="toggle">
+                                        <input type="checkbox" class="wallet-tab-toggle" id="wallet-tab-<?= htmlspecialchars($wtKey) ?>" data-wallet="<?= htmlspecialchars($wtKey) ?>">
+                                        <span class="toggle-slider"></span>
+                                    </label>
+                                </div>
+                                <?php endforeach; ?>
+                            </div>
+                            <div id="wallet-tabs-error" class="hidden" style="margin-top:0.5rem; color: var(--error); font-size: 0.85rem;"></div>
                         </div>
                     </div>
 
@@ -9338,6 +9446,16 @@ header('Cache-Control: no-cache, must-revalidate');
                     savePaymentOrder(radio.value, previous);
                 });
             });
+            // Popular wallet tabs toggles: instant-save on change; the
+            // handler gets the previous set so a refused save can revert.
+            document.querySelectorAll('.wallet-tab-toggle').forEach(cb => {
+                cb.addEventListener('change', () => {
+                    const previous = Array.from(document.querySelectorAll('.wallet-tab-toggle'))
+                        .filter(other => other !== cb ? other.checked : !cb.checked)
+                        .map(other => other.dataset.wallet).join(',');
+                    saveWalletTabs(previous);
+                });
+            });
             const saveStorePrivacyBtn = document.getElementById('btn-save-store-privacy');
             if (saveStorePrivacyBtn) saveStorePrivacyBtn.addEventListener('click', saveStorePrivacy);
             const storeNotifsToggle = document.getElementById('store-notifications-enabled');
@@ -10957,6 +11075,8 @@ header('Cache-Control: no-cache, must-revalidate');
                 // first (the historical default), mirroring
                 // Invoice::preferredFirstMethod on the server.
                 applyPaymentOrder(store.invoice_first_method);
+                // Popular wallet tabs card: NULL / '' = none (WalletTabs::parse).
+                applyWalletTabs(store.wallet_tabs);
 
                 // Load exchange rate settings from store data
                 document.getElementById('price-provider-primary').value = store.price_provider_primary || 'coingecko';
@@ -13596,6 +13716,45 @@ header('Cache-Control: no-cache, must-revalidate');
             } catch (e) {
                 applyPaymentOrder(previous);
                 awError('payment-order-error', 'Failed to save payment order');
+            }
+        }
+
+        // ---- Popular wallet tabs card (instant-save toggles) ---------------
+        function applyWalletTabs(value) {
+            const enabled = String(value || '').split(',').map(s => s.trim()).filter(Boolean);
+            document.querySelectorAll('.wallet-tab-toggle').forEach(cb => {
+                cb.checked = enabled.includes(cb.dataset.wallet);
+            });
+            clearAwError('wallet-tabs-error');
+        }
+
+        async function saveWalletTabs(previous) {
+            if (!currentStoreId) {
+                showToast('No store selected', 'error');
+                applyWalletTabs(previous);
+                return;
+            }
+            clearAwError('wallet-tabs-error');
+            const enabled = Array.from(document.querySelectorAll('.wallet-tab-toggle'))
+                .filter(cb => cb.checked).map(cb => cb.dataset.wallet);
+            const params = new URLSearchParams({
+                action: 'save_wallet_tabs',
+                store_id: currentStoreId,
+                wallet_tabs: enabled.join(','),
+            });
+            try {
+                const response = await postWithCsrf(adminUrl, params.toString());
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showToast('Wallet tabs saved', 'success');
+                } else {
+                    // Revert so the UI never claims a set the server refused.
+                    applyWalletTabs(previous);
+                    awError('wallet-tabs-error', result.error || 'Failed to save wallet tabs');
+                }
+            } catch (e) {
+                applyWalletTabs(previous);
+                awError('wallet-tabs-error', 'Failed to save wallet tabs');
             }
         }
 

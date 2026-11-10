@@ -63,6 +63,7 @@ require_once __DIR__ . '/includes/setup_flow.php';
 require_once __DIR__ . '/includes/desktop.php';
 require_once __DIR__ . '/includes/managed.php';
 require_once __DIR__ . '/includes/usage_stats.php';
+require_once __DIR__ . '/includes/wallet_tabs.php';
 
 // Initialize session early - needed for storing temp data during setup
 Auth::initSession();
@@ -314,9 +315,26 @@ function setupAdvanceRail(string $current, string $storeId): string {
     if ($next === null) {
         // Only reachable when $current is the last screen of a truncated
         // sequence; the first post-rail screen is the safe landing.
-        return $mode === 'add_store' ? SetupFlow::ADD_STORE_COMPLETE : 'updates';
+        return $mode === 'add_store' ? SetupFlow::ADD_STORE_COMPLETE : 'wallet_tabs';
     }
     return $next;
+}
+
+/**
+ * add_store is done: return the operator to admin — or, when this wizard
+ * run minted a wallet seed, show the hand-off panel first so the phrase is
+ * displayed once (it would otherwise never be). Called from the last
+ * add_store screen (wallet_tabs), which is why the seed is read from the
+ * session rather than from the mints request that generated it. Returns
+ * the screen to render, or redirects and exits.
+ */
+function setupAddStoreHandoff(string $storeId): string {
+    if (!empty($_SESSION['setup_generated_seed'])) {
+        return SetupFlow::ADD_STORE_COMPLETE;
+    }
+    unset($_SESSION['setup_store_id'], $_SESSION['setup_store_mode']);
+    header('Location: ' . Urls::admin() . '?store_created=' . urlencode($storeId));
+    exit;
 }
 
 /**
@@ -338,7 +356,7 @@ function setupAdvanceRail(string $current, string $storeId): string {
  * hand-off panel), or null to continue the sequence. May redirect and exit.
  */
 function setupFinalizeRails(string $storeId): ?string {
-    global $mode, $installType, $generatedSeedThisRequest;
+    global $mode, $installType;
 
     $store = Config::getStore($storeId);
     if ($installType === 'strike' && $mode !== 'add_store' && empty($store['mint_url'])) {
@@ -357,16 +375,10 @@ function setupFinalizeRails(string $storeId): ?string {
     SetupFlow::resolveAutoCashout($storeId);
 
     if ($mode === 'add_store') {
-        // Don't redirect straight to admin when a seed was just generated —
-        // it would never be shown. The add_store completion screen displays
-        // it once and links on. With no seed there's nothing to show, so go
-        // straight back to admin.
-        if ($generatedSeedThisRequest) {
-            return SetupFlow::ADD_STORE_COMPLETE;
-        }
-        unset($_SESSION['setup_store_id'], $_SESSION['setup_store_mode']);
-        header('Location: ' . Urls::admin() . '?store_created=' . urlencode($storeId));
-        exit;
+        // The store is complete; the wallet_tabs screen still follows, and
+        // it is the one that hands off to admin (setupAddStoreHandoff) —
+        // showing the seed panel first when this run minted a seed.
+        return null;
     }
 
     // The install is usable from here; everything after the rail screens is
@@ -456,8 +468,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // again after each handler runs so the advance lands on the right screen.
     $storeIdForFlow = $_SESSION['setup_store_id'] ?? null;
     $flowSteps = setupFlowSteps($storeIdForFlow);
-    // Set by the mints handler when it mints a fresh wallet seed. add_store
-    // has to stop and show it rather than redirecting past it.
+    // Set by the mints handler when it mints a fresh wallet seed (it then
+    // binds the seed to the mints as brand-new rather than restored).
     $generatedSeedThisRequest = false;
 
     try {
@@ -1136,6 +1148,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $step = setupAdvanceRail('mints', $storeId);
                 break;
 
+            case 'wallet_tabs':
+                $storeId = $_SESSION['setup_store_id'] ?? null;
+                if (!$storeId) {
+                    throw new Exception('Store not found. Please restart setup.');
+                }
+                if (!isset($_POST['wallet_tabs_action'])) {
+                    // GET landing — fall through to render the form.
+                    break;
+                }
+                // "Popular wallet tabs" (WalletTabs): the ticked wallets, or
+                // none on Skip. Both answers write the column — '' is an
+                // explicit "none", distinct from the NULL the screen reads
+                // as "not answered yet" (all three pre-ticked).
+                $chosenTabs = $_POST['wallet_tabs_action'] === 'skip'
+                    ? []
+                    : (array)($_POST['wallet_tabs'] ?? []);
+                foreach ($chosenTabs as $chosenTab) {
+                    if (!is_string($chosenTab) || !WalletTabs::isKnown($chosenTab)) {
+                        throw new Exception('Please choose from the listed wallets.');
+                    }
+                }
+                Database::update('stores', ['wallet_tabs' => WalletTabs::serialize($chosenTabs)], 'id = ?', [$storeId]);
+                if ($mode === 'add_store') {
+                    $step = setupAddStoreHandoff($storeId);
+                    break;
+                }
+                $step = SetupFlow::nextStep('wallet_tabs', $flowSteps) ?? 'updates';
+                break;
+
             case 'seed':
                 if (!isset($_POST['seed_saved'])) {
                     // GET landing — fall through to render the form.
@@ -1807,6 +1848,53 @@ function renderUrlModeDetectionScript(): void { ?>
             width: 1.25rem;
             height: 1.25rem;
             margin-top: 0.2rem;
+        }
+
+        /* wallet_tabs screen: one tickable row per wallet, with the payment
+           page's own brand logo so the operator sees what the tab shows. */
+        .wallet-tab-choice {
+            display: flex;
+            align-items: center;
+            gap: 0.85rem;
+            padding: 0.75rem 0.9rem;
+            margin-bottom: 0.75rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 10px;
+            cursor: pointer;
+            text-align: left;
+        }
+        .wallet-tab-choice:has(input:checked) {
+            border-color: #f7931a;
+        }
+        .wallet-tab-choice input[type="checkbox"] {
+            width: 1.25rem;
+            height: 1.25rem;
+            flex: 0 0 auto;
+            accent-color: #f7931a;
+        }
+        .wallet-tab-choice-logo {
+            flex: 0 0 auto;
+            height: 32px;
+            width: auto;
+        }
+        .wallet-tab-choice-logo.pm-card {
+            background: #fff;
+            padding: 4px 6px;
+            border-radius: 6px;
+            box-sizing: border-box;
+        }
+        .wallet-tab-choice-text {
+            display: flex;
+            flex-direction: column;
+            gap: 0.2rem;
+            font-size: 0.95rem;
+            min-width: 0;
+        }
+        .wallet-tab-choice-text > span {
+            font-size: 0.82rem;
+            color: #a0aec0;
+            line-height: 1.4;
         }
 
         .security-check {
@@ -3761,6 +3849,54 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 <a href="<?= htmlspecialchars($adminReturn) ?>" class="btn" style="width: 100%; text-align: center; display: block;">
                     Go to BareBits Admin
                 </a>
+
+            <?php elseif ($step === 'wallet_tabs'): ?>
+                <!-- Screen: "Popular wallet tabs" (WalletTabs). Per store,
+                     so add_store asks it too. All three are pre-ticked on a
+                     store that has never answered; a store stepping Back onto
+                     the screen shows what it saved. Abandoning the wizard here
+                     is safe: unanswered means no wallet tabs, which is how
+                     every store behaved before the screen existed. -->
+                <?php
+                $wtStore = $renderStoreId ? Config::getStore($renderStoreId) : null;
+                $wtChecked = ($wtStore !== null && WalletTabs::answered($wtStore))
+                    ? WalletTabs::enabled($wtStore)
+                    : WalletTabs::ALL;
+                ?>
+                <h2 style="margin-bottom: 1rem;">💳 Popular wallet tabs</h2>
+                <p style="margin-bottom: 1.25rem;">
+                    Enable additional tabs on the payment page for these popular
+                    wallets? The QR code shown to the customer is the same as on
+                    the on-chain and Lightning tabs, but adding a tab specifically
+                    for the most popular wallets can help guide customers in the
+                    right direction.
+                </p>
+                <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>" id="wallet-tabs-form">
+                    <input type="hidden" name="step" value="wallet_tabs">
+                    <?php if ($mode === 'add_store'): ?>
+                        <input type="hidden" name="mode" value="add_store">
+                    <?php endif; ?>
+                    <?= setupCsrfField() ?>
+                    <?php foreach (WalletTabs::BRANDS as $wtKey => $wtBrand):
+                        $wtLogoClass = 'wallet-tab-choice-logo' . ($wtBrand['class'] !== '' ? ' ' . $wtBrand['class'] : ''); ?>
+                    <label class="wallet-tab-choice" for="wallet_tab_<?= htmlspecialchars($wtKey) ?>">
+                        <input type="checkbox" id="wallet_tab_<?= htmlspecialchars($wtKey) ?>" name="wallet_tabs[]" value="<?= htmlspecialchars($wtKey) ?>"<?= in_array($wtKey, $wtChecked, true) ? ' checked' : '' ?>>
+                        <img class="<?= $wtLogoClass ?>" src="<?= htmlspecialchars(Urls::images('payment-methods/' . $wtBrand['file'])) ?>" alt="">
+                        <span class="wallet-tab-choice-text">
+                            <strong><?= htmlspecialchars($wtBrand['label']) ?></strong>
+                            <span><?= htmlspecialchars($wtBrand['note']) ?></span>
+                        </span>
+                    </label>
+                    <?php endforeach; ?>
+                    <p style="margin: 0.25rem 0 1.25rem; font-size: 0.9rem; color: #a0aec0;">
+                        Cash App shows the Lightning invoice when there is one;
+                        Venmo and PayPal need an on-chain address. A tab is only
+                        shown on invoices that offer what it needs. Change this
+                        any time under Settings &rarr; Popular wallet tabs.
+                    </p>
+                    <button type="submit" name="wallet_tabs_action" value="save" class="btn" style="width: 100%; margin-bottom: 0.75rem;">Continue</button>
+                    <button type="submit" name="wallet_tabs_action" value="skip" class="btn btn-secondary" style="width: 100%;">Skip &mdash; no wallet tabs</button>
+                </form>
 
             <?php elseif ($step === 'seed'): ?>
                 <!-- Screen: recovery phrase (first run, only when the mints

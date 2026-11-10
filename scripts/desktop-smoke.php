@@ -21,9 +21,9 @@
  *
  * The optional shape argument selects which wizard the target shows:
  *   desktop (default)  terms -> analytics -> install type -> password,
- *                      "of 11", no security or cron screens
+ *                      "of 12", no security or cron screens
  *   server             terms -> analytics -> install type -> security ->
- *                      password, "of 13" (data dir inside the webroot), cron
+ *                      password, "of 14" (data dir inside the webroot), cron
  *                      screen with a crontab line
  *
  * Usage: php desktop-smoke.php <base-url> [desktop|server]   (exit 0 = pass)
@@ -191,17 +191,17 @@ if ($shape === 'desktop') {
     if (heading($body) !== 'Create your admin password') {
         fail("desktop mode must go straight from the installation type to password, landed on '" . heading($body) . "'", $body);
     }
-    if (strpos($body, 'of 11') === false) {
-        fail('step counter must show the desktop count ("of 11")', $body);
+    if (strpos($body, 'of 12') === false) {
+        fail('step counter must show the desktop count ("of 12")', $body);
     }
 } else {
     if (heading($body) !== 'Quick safety check') {
         fail("server mode must show the security screen after the installation type, landed on '" . heading($body) . "'", $body);
     }
-    // "of 13": full sequence minus zeroconf (no on-chain rail in this walk),
+    // "of 14": full sequence minus zeroconf (no on-chain rail in this walk),
     // with the security screen present (data dir inside the webroot).
-    if (strpos($body, 'of 13') === false) {
-        fail('step counter must show the server count ("of 13")', $body);
+    if (strpos($body, 'of 14') === false) {
+        fail('step counter must show the server count ("of 14")', $body);
     }
     $body = $wpost(['step' => 'security', 'security_acknowledged' => '1']);
     if (heading($body) !== 'Create your admin password') {
@@ -220,10 +220,16 @@ $wpost(['step' => 'store', 'store_name' => 'Smoke Store', 'default_currency' => 
 $wpost(['step' => 'onchain', 'onchain_action' => 'skip']);
 $wpost(['step' => 'lightning', 'lightning_action' => 'skip']);
 $body = $wpost(['step' => 'mints', 'mints_enabled' => '0']);
-// Both shapes ask the auto-update question after mints; decline it (the
-// safe default) the way a cautious merchant would.
+// Both shapes ask about the popular-wallet tabs right after the rail
+// screens; skip them (no wallet tabs).
+if (heading($body) !== 'Popular wallet tabs') {
+    fail("declining mints must land on the wallet-tabs screen, landed on '" . heading($body) . "'", $body);
+}
+$body = $wpost(['step' => 'wallet_tabs', 'wallet_tabs_action' => 'skip']);
+// Both shapes ask the auto-update question next; decline it (the safe
+// default) the way a cautious merchant would.
 if (heading($body) !== 'Enable automatic updates?') {
-    fail("declining mints must land on the auto-update screen, landed on '" . heading($body) . "'", $body);
+    fail("skipping wallet tabs must land on the auto-update screen, landed on '" . heading($body) . "'", $body);
 }
 if (strpos($body, 'wizard-back-link') === false) {
     fail('the auto-update screen must carry a Back link', $body);
