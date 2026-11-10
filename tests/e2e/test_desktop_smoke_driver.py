@@ -59,6 +59,6 @@ def test_driver_server_shape_passes_against_a_plain_instance(
     payserver: PayserverHandle,
 ) -> None:
     """The `server` shape drives the ordinary (non-desktop) wizard — security
-    screen, "of 12" counter, cron screen with a crontab line. The webserver
+    screen, "of 13" counter, cron screen with a crontab line. The webserver
     smoke workflow runs this same invocation against real Apache and nginx."""
     _run_driver(payserver.url, "server")

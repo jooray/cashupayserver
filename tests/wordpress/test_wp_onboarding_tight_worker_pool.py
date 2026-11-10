@@ -73,17 +73,20 @@ def _walk_wizard_declining_everything(wp: WordPressHandle) -> None:
     fixtures needed). Real *.php files execute on this host, so setup.php is
     served directly — the wizard itself never nests loopback requests."""
     wiz = SetupWizard(wp.url, setup_path="/barebits/setup.php")
-    body = wiz.accept_terms()
+    wiz.accept_terms()
+    wiz.decline_analytics()
+    body = wiz.choose_install_type("other")
+    # Managed install: no security screen (data dir outside the web root)
+    # and no password screen (pre-seeded admin) — the e-mail screen is next.
+    assert wizard_heading(body) == "E-mail notifications", wizard_heading(body)
+    body = wiz.skip_email()
     assert "store" in wizard_heading(body).lower()
     wiz.post(step="store", store_name="Tight Pool Store", default_currency="sat")
     wiz.post(step="onchain", onchain_action="skip")
     wiz.post(step="lightning", lightning_action="skip")
-    wiz.post(step="swaps", swaps_enabled="0")
     body = wiz.post(step="mints", mints_enabled="0")
     assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
     body = wiz.post(step="updates", auto_update="0")
-    assert wizard_heading(body) == "Anonymous usage statistics", wizard_heading(body)
-    body = wiz.post(step="analytics", usage_stats="0")
     heading = wizard_heading(body)
     assert "cron" not in heading.lower(), heading
 

@@ -178,37 +178,8 @@ function checkDataDirectoryProtection(): ?string {
  * (per-store); both POST the same smtp_* field names from separate forms.
  */
 function smtpFieldsFromPost(array $post): array {
-    $host = trim((string)($post['smtp_host'] ?? ''));
-    $port = trim((string)($post['smtp_port'] ?? ''));
-    $username = trim((string)($post['smtp_username'] ?? ''));
-    $encryption = strtolower(trim((string)($post['smtp_encryption'] ?? '')));
-    $fromAddress = trim((string)($post['smtp_from_address'] ?? ''));
-    $fromName = trim((string)($post['smtp_from_name'] ?? ''));
-    // Password is intentionally not trimmed — leading/trailing spaces can be
-    // significant in a credential.
-    $password = (string)($post['smtp_password'] ?? '');
-    $passwordClear = ($post['smtp_password_clear'] ?? '0') === '1';
-
-    if ($port !== '' && (!ctype_digit($port) || (int)$port < 1 || (int)$port > 65535)) {
-        throw new Exception('SMTP port must be a number between 1 and 65535');
-    }
-    if ($encryption !== '' && !in_array($encryption, ['tls', 'ssl', 'none'], true)) {
-        throw new Exception('SMTP encryption must be tls, ssl, or none');
-    }
-    if ($fromAddress !== '' && !filter_var($fromAddress, FILTER_VALIDATE_EMAIL)) {
-        throw new Exception('Invalid From address');
-    }
-
-    return [
-        'host' => $host,
-        'port' => $port,
-        'username' => $username,
-        'encryption' => $encryption,
-        'from_address' => $fromAddress,
-        'from_name' => $fromName,
-        'password' => $password,
-        'password_clear' => $passwordClear,
-    ];
+    require_once __DIR__ . '/includes/email_sender.php';
+    return EmailSender::smtpFieldsFromPost($post);
 }
 
 // Password-reset landing page (Mechanism 1). The emailed link opens here as

@@ -286,7 +286,7 @@ If you're locked out of the admin dashboard there are two ways to recover, both 
 
 **Option 1 — Email a reset link.** Requires two things to be set up in advance:
 
-- A **recovery email** on the admin account. Set it during the setup wizard (the optional "Recovery email" field on the password step) or later under **Settings → My Account → Recovery email**.
+- A **recovery email** on the admin account. Set it during the setup wizard (the "E-mail notifications" step collects it alongside your SMTP settings; by default it is the same address notifications go to) or later under **Settings → My Account → Recovery email**.
 - **Outbound email (SMTP)** configured under **Settings → Email Notifications** in the admin UI (global, with an optional per-store override). As a fallback, SMTP can also be set via the `CASHUPAY_SMTP_*` settings in `user_config.php` (see `user_config.example.php`). Without working email this option cannot deliver the link.
 
 Click **Forgot password? → Email me a reset link**, enter the admin recovery email, and open the link that arrives. The link is valid for **one hour** and can be used **once**. (For privacy, the page always reports success regardless of whether the address matched an account.)

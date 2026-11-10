@@ -8,28 +8,47 @@
  * integers whose order had drifted from the flow).
  *
  * Sequence (standalone first run):
- *   security   Requirements + database-exposure check + URL-mode detection
- *   password   Admin password
- *   store      Store name
- *   onchain    On-chain destination — xpub (preferred) or single address
- *   lightning  LNURL/Lightning address + CLINK noffer + Strike API key
- *   zeroconf   Zero-conf vs 1-confirmation (skipped when the store has no
- *              on-chain receive source — neither an xpub/static destination
- *              nor Strike on-chain minting)
- *   swaps      Submarine swaps on/off
- *   mints      Cashu mints on/off; auto-picks a main + backup when on
- *   cron       Reminder to install the cron entry (skipped on the desktop
- *              package, and on provisioned installs that declare
- *              CASHUPAY_EXTERNAL_CRON — see SetupFlow::externalCronConfigured)
- *   done       Completion, seed phrase, e-commerce pairing
+ *   terms        Terms-of-service acknowledgement
+ *   analytics    Anonymous usage-statistics opt-in (the first report is
+ *                deferred until setup completes)
+ *   install_type Strike / own wallet / Cashu mint / something else — reshapes
+ *                the rail screens below (SetupFlow::INSTALL_TYPES)
+ *   security     Requirements + database-exposure check + URL-mode detection
+ *                (auto-advances when every check passes)
+ *   password     Admin password
+ *   email        SMTP credentials, verified by a real test e-mail; also the
+ *                password-reset address (skippable)
+ *   store        Store name
+ *   onchain      On-chain destination — xpub (preferred) or single address
+ *   lightning    LNURL/Lightning address + CLINK noffer + NWC + Strike API key
+ *   strike       Strike API key only — replaces onchain + lightning for the
+ *                Strike installation type
+ *   zeroconf     Zero-conf vs 1-confirmation (skipped when the store has no
+ *                on-chain receive source — neither an xpub/static destination
+ *                nor Strike on-chain minting)
+ *   mints        Cashu mints on/off; auto-picks a main + backup when on
+ *                (skipped, mints off, for the Strike installation type)
+ *   seed         Recovery phrase + mint URLs, printable (only when the mints
+ *                answer minted a wallet seed)
+ *   updates      Automatic-updates opt-in
+ *   cron         Reminder to install the cron entry (skipped on the desktop
+ *                package, and on provisioned installs that declare
+ *                CASHUPAY_EXTERNAL_CRON — see SetupFlow::externalCronConfigured)
+ *   done         Completion, e-commerce pairing
+ *
+ * Submarine swaps have no screen of their own: they are switched on
+ * automatically when the store ends up with an xpub on a host that can sign
+ * swaps (GMP), see setupFinalizeRails().
  *
  * `?mode=add_store` (from the admin panel) runs store → mints only and then
- * returns to admin; it never shows security/password/cron/done.
+ * returns to admin; it never shows the pre-store or post-mints screens.
  *
- * setup_complete is set at the end of the `mints` screen — the install is
- * fully usable from that point, so abandoning the browser on the cron or done
- * screen does not strand a half-configured server. The redirect-if-set-up
- * guard below therefore has to let those two screens through.
+ * setup_complete is set the moment the last rail screen is answered — the
+ * install is fully usable from that point, so abandoning the browser on the
+ * seed, updates, cron or done screen does not strand a half-configured
+ * server. The redirect-if-set-up guard below therefore has to let those
+ * screens through (and, for the browser that is completing the wizard, its
+ * Back links onto the rail screens too).
  */
 
 require_once __DIR__ . '/includes/http_status.php';
@@ -139,7 +158,7 @@ if (Database::getMigrationError() !== null) {
     exit;
 }
 
-// setup_complete flips at the end of the `mints` screen so an abandoned
+// setup_complete flips when the last rail screen is answered so an abandoned
 // browser doesn't leave a half-configured install. The screens that come
 // after it therefore have to survive the redirect-if-set-up guard — but ONLY
 // for the browser that just completed the wizard (its session still carries
@@ -147,6 +166,13 @@ if (Database::getMigrationError() !== null) {
 // logged-in user. Anyone else posting `step=updates` to a live install used
 // to flip the auto-update opt-in and be handed the cron screen, which lazily
 // mints and renders the cron key (full cron runs + forced "Update now").
+//
+// The completing browser is additionally allowed onto ANY screen it asks
+// for by slug: its Back links from the post-completion screens land on the
+// rail screens (mints, zeroconf, …), which are plain GETs that would
+// otherwise bounce to admin. The store they would edit is the one that
+// session built; nobody else has that marker.
+$stepRequested = isset($_POST['step']) || isset($_GET['step']);
 $postStep = $_SERVER['REQUEST_METHOD'] === 'POST' ? (string)($_POST['step'] ?? '') : '';
 $isTailPost = in_array($postStep, SetupFlow::POST_COMPLETION, true);
 $setupComplete = $dbInitialized && Config::isSetupComplete();
@@ -154,16 +180,18 @@ if ($setupComplete) {
     $completingSession = (($_SESSION['setup_store_mode'] ?? null) === 'first_run')
         && !empty($_SESSION['setup_store_id'])
         && Config::getStore((string)$_SESSION['setup_store_id']) !== null;
-    if ($isTailPost && $mode !== 'add_store') {
-        if (!$completingSession && !Auth::isLoggedIn()) {
+    if ($mode === 'add_store') {
+        if (!Auth::isAdmin()) {
+            // add_store creates stores and configures their rails: admin only.
             header('Location: ' . Urls::admin());
             exit;
         }
-    } elseif ($mode !== 'add_store') {
-        header('Location: ' . Urls::admin());
-        exit;
-    } elseif (!Auth::isAdmin()) {
-        // add_store creates stores and configures their rails: admin only.
+    } elseif ($completingSession && $stepRequested) {
+        // The wizard that just completed, still on its tail screens (or
+        // stepping Back from them). Falls through to render.
+    } elseif ($isTailPost && Auth::isLoggedIn()) {
+        // A logged-in operator re-answering a tail screen.
+    } else {
         header('Location: ' . Urls::admin());
         exit;
     }
@@ -203,10 +231,48 @@ $passwordPreseeded = ManagedInstall::adminSeededFromProvisionedHash();
 $securityScreenNeeded = SetupFlow::missingRequirements() !== []
     || (!Database::isDataDirOutsideWebroot() && !$isDesktop);
 
+// Installation type chosen on the install_type screen. The session is the
+// source of truth during the run; the config copy survives a lost session
+// (and lets the admin UI / usage statistics see the choice later). First run
+// only — add_store never asks.
+$installType = null;
+if ($mode !== 'add_store') {
+    $installTypeRaw = (string)($_SESSION['setup_install_type'] ?? Config::get('setup_install_type', ''));
+    $installType = SetupFlow::isInstallType($installTypeRaw) ? $installTypeRaw : null;
+}
+
+/**
+ * The wizard's screen sequence for the store under construction, resolved
+ * fresh from the database every time: the on-chain / Lightning / Strike
+ * handlers change whether zeroconf applies, and the mints handler decides
+ * whether there is a seed screen. Centralised so no handler can pass a stale
+ * flag.
+ */
+function setupFlowSteps(?string $storeId): array {
+    global $mode, $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded, $installType;
+    return SetupFlow::stepSequence(
+        $mode, SetupFlow::zeroConfApplicable($storeId),
+        $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded,
+        $installType, setupSeedScreenApplies($storeId)
+    );
+}
+
+/**
+ * Is there a recovery phrase to show? Only when this wizard run minted one
+ * (the session marker) AND the store still has a mint — going Back and
+ * answering "no mints" removes the screen again.
+ */
+function setupSeedScreenApplies(?string $storeId): bool {
+    if (empty($_SESSION['setup_generated_seed']) || $storeId === null || $storeId === '') {
+        return false;
+    }
+    $store = Config::getStore($storeId);
+    return $store !== null && !empty($store['mint_url']) && !empty($store['seed_phrase']);
+}
+
 // Current screen. Anything unrecognised (a stale bookmark, or a form saved
 // from the pre-slug wizard) restarts at the first screen for this mode rather
 // than rendering a blank card.
-$stepRequested = isset($_POST['step']) || isset($_GET['step']);
 $step = (string)($_POST['step'] ?? $_GET['step'] ?? '');
 if (!SetupFlow::isKnownStep($step)) {
     $step = SetupFlow::firstStep($mode);
@@ -227,6 +293,92 @@ $success = null;
 /** Hidden CSRF field for every wizard form (the AJAX calls append the same token). */
 function setupCsrfField(): string {
     return '<input type="hidden" name="csrf_token" value="' . htmlspecialchars(Auth::generateCsrfToken()) . '">';
+}
+
+/**
+ * Advance from rail screen $current. Resolves the sequence fresh (the
+ * handler that just ran may have changed whether zeroconf or the seed screen
+ * applies) and, when the advance leaves the rail group, finalises the
+ * install first (setupFinalizeRails). Returns the screen to render next.
+ */
+function setupAdvanceRail(string $current, string $storeId): string {
+    global $mode;
+    $flowSteps = setupFlowSteps($storeId);
+    $next = SetupFlow::nextStep($current, $flowSteps);
+    if (SetupFlow::leavesRailGroup($current, $next)) {
+        $handoff = setupFinalizeRails($storeId);
+        if ($handoff !== null) {
+            return $handoff;
+        }
+    }
+    if ($next === null) {
+        // Only reachable when $current is the last screen of a truncated
+        // sequence; the first post-rail screen is the safe landing.
+        return $mode === 'add_store' ? SetupFlow::ADD_STORE_COMPLETE : 'updates';
+    }
+    return $next;
+}
+
+/**
+ * Every rail answer is in — settle what depends on all of them together.
+ *
+ *   1. Strike installation type: the mints screen never showed, so apply
+ *      its "no mints" answer (strict pin, so a mint can't be acquired later
+ *      without an explicit decision).
+ *   2. Submarine swaps default ON whenever they can work: the store has an
+ *      xpub (swaps derive a fresh address per swap) and the host can sign
+ *      them (GMP). Otherwise OFF. There is no swaps screen any more.
+ *   3. Auto-cashout rail (SetupFlow::resolveAutoCashout) — depends on 2.
+ *   4. First run: mark setup complete and send the deferred first
+ *      usage-statistics report, if the operator opted in on screen two.
+ *      add_store: hand off to admin (or to the seed panel when this answer
+ *      minted a wallet seed).
+ *
+ * Returns the screen to render instead of the natural next one (add_store's
+ * hand-off panel), or null to continue the sequence. May redirect and exit.
+ */
+function setupFinalizeRails(string $storeId): ?string {
+    global $mode, $installType, $generatedSeedThisRequest;
+
+    $store = Config::getStore($storeId);
+    if ($installType === 'strike' && $mode !== 'add_store' && empty($store['mint_url'])) {
+        SwapsConfig::setStoreStrictOverride($storeId, SwapsConfig::FORCE_ON);
+        Config::updateStore($storeId, ['primary_mint_source' => 'manual']);
+    }
+
+    require_once __DIR__ . '/includes/onchain/wallet.php';
+    $swapsPossible = SetupFlow::onchainState($storeId)['hasXpub']
+        && OnchainWallet::environmentError() === null;
+    SwapsConfig::setStoreOverride(
+        $storeId,
+        $swapsPossible ? SwapsConfig::FORCE_ON : SwapsConfig::FORCE_OFF
+    );
+
+    SetupFlow::resolveAutoCashout($storeId);
+
+    if ($mode === 'add_store') {
+        // Don't redirect straight to admin when a seed was just generated —
+        // it would never be shown. The add_store completion screen displays
+        // it once and links on. With no seed there's nothing to show, so go
+        // straight back to admin.
+        if ($generatedSeedThisRequest) {
+            return SetupFlow::ADD_STORE_COMPLETE;
+        }
+        unset($_SESSION['setup_store_id'], $_SESSION['setup_store_mode']);
+        header('Location: ' . Urls::admin() . '?store_created=' . urlencode($storeId));
+        exit;
+    }
+
+    // The install is usable from here; everything after the rail screens is
+    // advisory, so complete the setup before showing them.
+    Config::set('setup_complete', true);
+    if (UsageStats::isEnabled()) {
+        // Deferred from the analytics screen (screen two, when the install
+        // had nothing to report yet). Short timeouts so a slow endpoint
+        // can't hold the wizard; cron retries within the hour if this fails.
+        UsageStats::sendNow(null, ['timeout' => 5, 'connectTimeout' => 3]);
+    }
+    return null;
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -303,10 +455,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // `onchain` and `lightning` handlers may be about to change. Resolved
     // again after each handler runs so the advance lands on the right screen.
     $storeIdForFlow = $_SESSION['setup_store_id'] ?? null;
-    $flowSteps = SetupFlow::stepSequence(
-        $mode, SetupFlow::zeroConfApplicable($storeIdForFlow),
-        $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded
-    );
+    $flowSteps = setupFlowSteps($storeIdForFlow);
     // Set by the mints handler when it mints a fresh wallet seed. add_store
     // has to stop and show it rather than redirecting past it.
     $generatedSeedThisRequest = false;
@@ -319,7 +468,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($_POST['terms_legal']) || empty($_POST['terms_warranty']) || empty($_POST['terms_fee'])) {
                     throw new Exception('Please accept all three terms to continue.');
                 }
-                $step = SetupFlow::nextStep('terms', $flowSteps) ?? 'security';
+                $step = SetupFlow::nextStep('terms', $flowSteps) ?? 'analytics';
                 break;
 
             case 'security':
@@ -346,9 +495,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $password = $_POST['password'] ?? '';
                 $confirm = $_POST['confirm_password'] ?? '';
-                // Optional recovery email — powers the email-link password
-                // reset. Blank is fine (the file-based reset works without it).
-                $email = trim($_POST['admin_email'] ?? '');
 
                 if (strlen($password) < 8) {
                     throw new Exception('Password must be at least 8 characters');
@@ -356,12 +502,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($password !== $confirm) {
                     throw new Exception('Passwords do not match');
                 }
-                if ($email !== '' && ($emailErr = Auth::validateEmail($email)) !== null) {
-                    throw new Exception($emailErr);
-                }
 
-                Auth::setAdminPassword($password, $email !== '' ? $email : null);
-                $step = SetupFlow::nextStep('password', $flowSteps) ?? 'store';
+                // The password-reset e-mail address is collected on the
+                // e-mail screen that follows.
+                Auth::setAdminPassword($password);
+                $step = SetupFlow::nextStep('password', $flowSteps) ?? 'email';
                 break;
 
             case 'store':
@@ -441,10 +586,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // source, but one reached by going Back may already have one,
                 // which decides whether the zero-conf screen is in the
                 // sequence.
-                $flowSteps = SetupFlow::stepSequence(
-                    $mode, SetupFlow::zeroConfApplicable($storeId),
-                    $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded
-                );
+                $flowSteps = setupFlowSteps($storeId);
                 $step = SetupFlow::nextStep('store', $flowSteps) ?? 'onchain';
                 break;
 
@@ -461,8 +603,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // source (a previously saved xpub, or Strike on-chain
                     // enabled on the lightning screen), which keeps zeroconf
                     // in the sequence.
-                    $flowSteps = SetupFlow::stepSequence($mode, SetupFlow::zeroConfApplicable($storeId), $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded);
-                    $step = SetupFlow::nextStep('onchain', $flowSteps) ?? 'lightning';
+                    $step = setupAdvanceRail('onchain', $storeId);
                     break;
                 }
                 if ($onchainAction !== 'save') {
@@ -571,8 +712,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ], 'id = ?', [$storeId]);
                 }
 
-                $flowSteps = SetupFlow::stepSequence($mode, true, $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded);
-                $step = SetupFlow::nextStep('onchain', $flowSteps) ?? 'lightning';
+                $step = setupAdvanceRail('onchain', $storeId);
                 break;
 
             case 'zeroconf':
@@ -588,7 +728,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 Config::updateStore($storeId, [
                     'onchain_min_confs' => $zeroConf ? 0 : 1,
                 ]);
-                $step = SetupFlow::nextStep('zeroconf', $flowSteps) ?? 'swaps';
+                $step = setupAdvanceRail('zeroconf', $storeId);
                 break;
 
             case 'lightning':
@@ -777,38 +917,76 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // mint balance depends on the swaps and mints answers still to
                 // come. setupResolveAutoCashout() settles it at the end.
 
-                // Re-resolve: the Strike on-chain answer just saved decides
-                // whether the zeroconf screen (next in the sequence) applies —
-                // a Strike-only store gains it here, and unticking the option
-                // on a store with no xpub/static address drops it again.
-                $flowSteps = SetupFlow::stepSequence(
-                    $mode, SetupFlow::zeroConfApplicable($storeId),
-                    $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded
-                );
-                $step = SetupFlow::nextStep('lightning', $flowSteps) ?? 'swaps';
+                // Re-resolve (inside setupAdvanceRail): the Strike on-chain
+                // answer just saved decides whether the zeroconf screen (next
+                // in the sequence) applies — a Strike-only store gains it
+                // here, and unticking the option on a store with no
+                // xpub/static address drops it again.
+                $step = setupAdvanceRail('lightning', $storeId);
                 break;
 
-            case 'swaps':
+            case 'strike':
+                // The Strike installation type's one rail screen: the Strike
+                // section of the Lightning screen on its own. Same
+                // validation, probe and on-chain gate as there.
                 $storeId = $_SESSION['setup_store_id'] ?? null;
                 if (!$storeId) {
                     throw new Exception('Store not found. Please restart setup.');
                 }
-                if (!isset($_POST['swaps_enabled'])) {
+                $strikeAction = $_POST['strike_action'] ?? '';
+                if ($strikeAction !== 'save' && $strikeAction !== 'skip') {
                     // GET landing — fall through to render the form.
                     break;
                 }
-                $swapsWanted = $_POST['swaps_enabled'] === '1';
-                if ($swapsWanted && !SetupFlow::onchainState($storeId)['hasXpub']) {
-                    throw new Exception(
-                        'Submarine swaps send Bitcoin to your on-chain wallet, so they need an xpub. '
-                        . 'Go back and add one to turn this on.'
+                $strikeKey = trim($_POST['strike_api_key'] ?? '');
+                if ($strikeKey === '' && ($_POST['strike_clear'] ?? '') !== '1') {
+                    $strikeKey = trim($_POST['strike_keep_ref'] ?? '');
+                }
+                $strikeOnchainWanted = ($_POST['strike_onchain'] ?? '') === '1';
+                if ($strikeAction === 'skip') {
+                    $strikeKey = '';
+                    $strikeOnchainWanted = false;
+                } elseif ($strikeKey === '') {
+                    throw new Exception('Paste your Strike API key to continue, or skip this screen for now.');
+                }
+                require_once __DIR__ . '/includes/strike/client.php';
+                if ($strikeKey !== '' && !str_starts_with($strikeKey, StoreLnAddresses::KEEP_REF_PREFIX)
+                        && !StrikeClient::isValidKey($strikeKey)) {
+                    throw new Exception('That Strike API key doesn\'t look right. Copy the whole key from the Strike dashboard (it\'s one long block of letters and numbers).');
+                }
+                [$strikeList, ] = StoreLnAddresses::resolveKeepRefs(
+                    $storeId, $strikeKey !== '' ? [$strikeKey] : [], StoreLnAddresses::TYPE_STRIKE
+                );
+                // Strike is the only Lightning method on this path; any other
+                // entries (a Lightning address saved before switching
+                // installation type via Back) are dropped, as a Skip on the
+                // Lightning screen would drop them.
+                $chain = StoreLnAddresses::chainFromLists([], [], [], $strikeList);
+                $gated = StoreLnAddresses::probeAndGateChain($storeId, $chain);
+                require_once __DIR__ . '/includes/onchain/config.php';
+                if ($strikeOnchainWanted) {
+                    $finalStrikeKeys = [];
+                    foreach ($gated['entries'] as $gatedEntry) {
+                        if (($gatedEntry['type'] ?? '') === StoreLnAddresses::TYPE_STRIKE) {
+                            $finalStrikeKeys[] = (string)$gatedEntry['address'];
+                        }
+                    }
+                    $storedStrikeKeys = [];
+                    foreach (StoreLnAddresses::listForStore($storeId) as $lnRow) {
+                        if ($lnRow['type'] === StoreLnAddresses::TYPE_STRIKE) {
+                            $storedStrikeKeys[$lnRow['address']] = true;
+                        }
+                    }
+                    OnchainConfig::gateStrikeOnchainEnable(
+                        $storeId,
+                        $finalStrikeKeys,
+                        $storedStrikeKeys,
+                        OnchainConfig::strikeEnabledForStore($storeId)
                     );
                 }
-                SwapsConfig::setStoreOverride(
-                    $storeId,
-                    $swapsWanted ? SwapsConfig::FORCE_ON : SwapsConfig::FORCE_OFF
-                );
-                $step = SetupFlow::nextStep('swaps', $flowSteps) ?? 'mints';
+                StoreLnAddresses::replaceForStore($storeId, $gated['entries']);
+                OnchainConfig::setStrikeEnabled($storeId, $strikeOnchainWanted ? 1 : 0);
+                $step = setupAdvanceRail('strike', $storeId);
                 break;
 
             case 'mints':
@@ -823,12 +1001,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $mintsWanted = $_POST['mints_enabled'] === '1';
 
                 if (!$mintsWanted) {
-                    // Leave mint_url/seed_phrase NULL (Config::isStoreConfigured
-                    // stays false, so Invoice::create never offers a mint rail)
-                    // and pin the per-store strict flag so a mint can't be
-                    // acquired later without an explicit decision.
+                    // Leave mint_url NULL (Config::isStoreConfigured stays
+                    // false, so Invoice::create never offers a mint rail) and
+                    // pin the per-store strict flag so a mint can't be
+                    // acquired later without an explicit decision. A mint
+                    // picked on an earlier pass through this screen (then
+                    // reconsidered via Back) is un-picked; the seed it may
+                    // have minted stays on the store, and the seed screen
+                    // drops out of the sequence with the mint.
                     SwapsConfig::setStoreStrictOverride($storeId, SwapsConfig::FORCE_ON);
                     Config::updateStore($storeId, ['primary_mint_source' => 'manual']);
+                    try {
+                        Config::updateStore($storeId, ['mint_url' => null]);
+                    } catch (Exception $e) {
+                        // The wallet namespace already holds something (the
+                        // seed binding a moment ago counts): updateStore's
+                        // stranding guard keeps the mint, and the strict pin
+                        // above still keeps it out of the Lightning chain.
+                        error_log('setup: could not un-pick the mint on "no mints": ' . $e->getMessage());
+                    }
                 } else {
                     $primaryUrl = rtrim(trim($_POST['mint_url'] ?? ''), '/');
                     $backupUrl = rtrim(trim($_POST['backup_mint_url'] ?? ''), '/');
@@ -878,6 +1069,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'mint_unit' => $unit,
                         'primary_mint_source' => 'manual',
                     ]);
+                    // A "no mints" answer on an earlier pass (or the Strike
+                    // type's implicit one, reconsidered via Back) pinned the
+                    // strict flag; a mint chosen now must be allowed to act
+                    // as the Lightning fallback it is being set up for. The
+                    // schema default (-1) is left alone.
+                    if (SwapsConfig::strictNoMintFallbackForStore($storeId)) {
+                        SwapsConfig::setStoreStrictOverride($storeId, SwapsConfig::FORCE_OFF);
+                    }
 
                     // The trusted-list applier can have pre-seeded backups on a
                     // previous pass through this screen; adding a duplicate
@@ -931,32 +1130,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
 
-                // Every rail answer is in, so the auto-cashout rail can now be
-                // settled: Lightning when there's a destination, else a
-                // submarine swap to the xpub when mints + swaps make that
-                // possible, else off. See SetupFlow::resolveAutoCashout.
-                SetupFlow::resolveAutoCashout($storeId);
+                // Last rail screen for every installation type that shows it:
+                // setupAdvanceRail finalises the install (swaps default,
+                // auto-cashout rail, setup_complete / add_store hand-off).
+                $step = setupAdvanceRail('mints', $storeId);
+                break;
 
-                if ($mode === 'add_store') {
-                    // Don't redirect straight to admin when a seed was just
-                    // generated — it would never be shown. Fall through to the
-                    // add_store completion screen, which displays it once and
-                    // links on. With no seed there's nothing to show, so go
-                    // straight back to admin as before.
-                    if ($generatedSeedThisRequest) {
-                        $step = 'store_created';
-                        break;
-                    }
-                    $createdStoreId = $storeId;
-                    unset($_SESSION['setup_store_id'], $_SESSION['setup_store_mode']);
-                    header('Location: ' . Urls::admin() . '?store_created=' . urlencode($createdStoreId));
-                    exit;
+            case 'seed':
+                if (!isset($_POST['seed_saved'])) {
+                    // GET landing — fall through to render the form.
+                    break;
                 }
-
-                // The install is usable from here; everything after this screen
-                // is advisory, so complete the setup before showing it.
-                Config::set('setup_complete', true);
-                $step = SetupFlow::nextStep('mints', $flowSteps) ?? 'updates';
+                $step = SetupFlow::nextStep('seed', $flowSteps) ?? 'updates';
                 break;
 
             case 'updates':
@@ -968,7 +1153,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Both answers write the key: an explicit "Not now" is a decision,
                 // not an unanswered question.
                 Config::set('auto_update_enabled', $_POST['auto_update'] === '1');
-                $step = SetupFlow::nextStep('updates', $flowSteps) ?? 'analytics';
+                $step = SetupFlow::nextStep('updates', $flowSteps) ?? 'cron';
                 break;
 
             case 'analytics':
@@ -987,12 +1172,108 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($usChoice === '0') {
                     UsageStats::setChoice(false);
                 } else {
+                    // The first report is deferred until the install is
+                    // complete (setupFinalizeRails): on screen two there is
+                    // nothing to report yet.
                     UsageStats::setChoice(true, (int)$usChoice);
-                    // Interactive path: short timeouts so a slow endpoint can't
-                    // hold the wizard; cron retries within the hour if this fails.
-                    UsageStats::sendNow(null, ['timeout' => 5, 'connectTimeout' => 3]);
                 }
-                $step = SetupFlow::nextStep('analytics', $flowSteps) ?? 'cron';
+                $step = SetupFlow::nextStep('analytics', $flowSteps) ?? 'install_type';
+                break;
+
+            case 'install_type':
+                if (!isset($_POST['install_type'])) {
+                    // GET landing — fall through to render the form.
+                    break;
+                }
+                $chosenType = (string)$_POST['install_type'];
+                if (!SetupFlow::isInstallType($chosenType)) {
+                    throw new Exception('Please choose one of the installation types.');
+                }
+                $_SESSION['setup_install_type'] = $chosenType;
+                Config::set('setup_install_type', $chosenType);
+                $installType = $chosenType;
+                // The choice reshapes the screens that follow — re-resolve
+                // before computing the next one.
+                $flowSteps = setupFlowSteps($storeIdForFlow);
+                $step = SetupFlow::nextStep('install_type', $flowSteps) ?? 'security';
+                break;
+
+            case 'email':
+                $emailAction = $_POST['email_action'] ?? '';
+                if ($emailAction === 'skip') {
+                    $step = SetupFlow::nextStep('email', $flowSteps) ?? 'store';
+                    break;
+                }
+                if ($emailAction !== 'save') {
+                    // GET landing — fall through to render the form.
+                    break;
+                }
+                require_once __DIR__ . '/includes/email_sender.php';
+                $smtp = EmailSender::smtpFieldsFromPost($_POST);
+                if ($smtp['host'] === '') {
+                    throw new Exception('Enter your SMTP server\'s hostname, or skip this screen for now.');
+                }
+                if ($smtp['from_address'] === '') {
+                    throw new Exception('Enter the From address your e-mails should be sent from.');
+                }
+                $toEmail = trim((string)($_POST['to_email'] ?? ''));
+                if ($toEmail === '' || ($toErr = Auth::validateEmail($toEmail)) !== null) {
+                    throw new Exception($toEmail === '' ? 'Enter the address notifications should be sent to.' : $toErr);
+                }
+                // Password-reset address: the notifications address by
+                // default, or a separate one when the box is unticked.
+                $resetSame = ($_POST['reset_same'] ?? '0') === '1';
+                $resetEmail = $resetSame ? $toEmail : trim((string)($_POST['reset_email'] ?? ''));
+                if (!$resetSame && ($resetEmail === '' || ($resetErr = Auth::validateEmail($resetEmail)) !== null)) {
+                    throw new Exception($resetEmail === '' ? 'Enter the address password-reset e-mails should go to, or tick the box to reuse the notifications address.' : $resetErr);
+                }
+                // A blank password keeps the one already stored (revisiting
+                // the screen via Back must not force a re-paste); the clear
+                // box wipes it.
+                $smtpPassword = $smtp['password'];
+                if ($smtpPassword === '' && !$smtp['password_clear']) {
+                    $smtpPassword = (string)Config::get('smtp_password', '');
+                }
+                $testConfig = [
+                    'host' => $smtp['host'],
+                    'port' => $smtp['port'],
+                    'username' => $smtp['username'],
+                    'password' => $smtpPassword,
+                    'encryption' => $smtp['encryption'],
+                    'from_address' => $smtp['from_address'],
+                    'from_name' => $smtp['from_name'],
+                ];
+                // The real test: nothing is saved until this e-mail has gone
+                // out, so a typo'd host or a refused login keeps the operator
+                // here with the server's reply instead of enabling
+                // notifications that would silently pile up in the queue.
+                try {
+                    EmailSender::sendWithConfig(
+                        $testConfig,
+                        $toEmail,
+                        'BareBits test e-mail',
+                        "This is a test e-mail from your BareBits server.\n\n"
+                        . "If you received this, e-mail notifications are working.\n"
+                    );
+                } catch (Throwable $e) {
+                    throw new Exception('We couldn\'t send a test e-mail with those settings: ' . $e->getMessage());
+                }
+                Config::set('smtp_host', $smtp['host']);
+                Config::set('smtp_port', $smtp['port']);
+                Config::set('smtp_username', $smtp['username']);
+                Config::set('smtp_encryption', $smtp['encryption']);
+                Config::set('smtp_from_address', $smtp['from_address']);
+                Config::set('smtp_from_name', $smtp['from_name']);
+                Config::set('smtp_password', $smtpPassword);
+                Config::set('notifications_to_email', $toEmail);
+                // A verified transport is the point of the screen: switch
+                // notifications on, every kind the admin card offers.
+                Config::set('notifications_enabled', true);
+                Config::set('notifications_invoice_paid_enabled', true);
+                Config::set('notifications_auto_cashout_enabled', true);
+                Config::set('notifications_update_available_enabled', true);
+                Auth::setAdminEmail($resetEmail);
+                $step = SetupFlow::nextStep('email', $flowSteps) ?? 'store';
                 break;
 
             case 'cron':
@@ -1006,6 +1287,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $generatedSeed = $_SESSION['setup_generated_seed'] ?? null;
 
+
+/**
+ * The recovery-phrase card: the seed words plus every mint URL the seed is
+ * (or will be) used at. Shared by the first-run `seed` screen and the
+ * add_store hand-off panel so the two never drift. The phrase and the mint
+ * URLs together are what restores the funds — like a username and password
+ * for a Cashu mint — so they are shown and printed as one unit.
+ *
+ * @param string[] $mintUrls
+ */
+function renderSeedPanel(string $seed, array $mintUrls, string $storeName): void { ?>
+    <div class="warning" style="margin-bottom: 1rem;">
+        <strong>🔐 Save your recovery phrase AND your mint URLs</strong>
+        <p style="margin: 0.5rem 0 0; font-size: 0.9rem;">
+            These 12 words, together with the mint URLs below, recover any
+            ecash held at your mints if this server is ever lost. Think of
+            them as the username and password for your Cashu mint account:
+            the mint URL says <em>where</em> the money is, the phrase proves
+            it's <em>yours</em>. Without <strong>both</strong> the funds
+            cannot be recovered.
+        </p>
+        <p style="margin: 0.5rem 0 0; font-size: 0.9rem;">
+            Write them down (or print this page) and keep them somewhere safe
+            and offline. You can see them again in store settings, but anyone
+            who has them can spend your funds.
+        </p>
+    </div>
+    <div id="seed-print-area">
+        <p style="margin-bottom: 0.5rem; font-weight: 500;">Recovery phrase<?= $storeName !== '' ? ' for ' . htmlspecialchars($storeName) : '' ?></p>
+        <div class="seed-display" id="seed-phrase"><?= htmlspecialchars($seed) ?></div>
+        <div class="seed-mints" id="seed-mints">
+            <strong>Mint URL<?= count($mintUrls) === 1 ? '' : 's' ?></strong>
+            <ul>
+                <?php foreach ($mintUrls as $mintUrl): ?>
+                <li><?= htmlspecialchars($mintUrl) ?></li>
+                <?php endforeach; ?>
+            </ul>
+        </div>
+    </div>
+    <button type="button" class="btn btn-secondary no-print" id="seed-print-btn" style="width: 100%; margin-bottom: 0.75rem;" onclick="window.print()">
+        🖨️ Print this page
+    </button>
+<?php }
+
+/**
+ * Every mint URL the store's seed is bound to: the primary first, then the
+ * backups in priority order.
+ *
+ * @return string[]
+ */
+function setupStoreMintUrls(?array $store): array {
+    if ($store === null) {
+        return [];
+    }
+    $urls = [];
+    if (!empty($store['mint_url'])) {
+        $urls[] = rtrim((string)$store['mint_url'], '/');
+    }
+    foreach (Config::getStoreBackupMints((string)$store['id']) as $backup) {
+        $u = rtrim((string)$backup['mint_url'], '/');
+        if ($u !== '' && !in_array($u, $urls, true)) {
+            $urls[] = $u;
+        }
+    }
+    return $urls;
+}
 
 /**
  * Get the scheme://host[:port] part of the current URL (no path)
@@ -1106,6 +1453,10 @@ function renderUrlModeDetectionScript(): void { ?>
                 }
             }
 
+            if (window.setupSecurityCheckDone) {
+                window.setupSecurityCheckDone('url', selectedMode !== null);
+            }
+
             // Update UI (present on the security screen only)
             if (!loadingEl || !resultEl || !statusEl || !messageEl || !detailsEl) {
                 return;
@@ -1179,8 +1530,92 @@ function renderUrlModeDetectionScript(): void { ?>
 
         .logo {
             text-align: center;
-            font-size: 3rem;
             margin-bottom: 1rem;
+        }
+
+        .logo img {
+            height: 40px;
+            width: auto;
+            max-width: 80%;
+        }
+
+        /* Installation-type cards (install_type screen): collapsible, one
+           submit button each. */
+        .install-option {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+            margin-bottom: 0.9rem;
+        }
+        .install-option summary {
+            cursor: pointer;
+            font-weight: 600;
+            padding: 0.9rem 1rem;
+            list-style: none;
+            display: flex;
+            align-items: center;
+            gap: 0.6rem;
+        }
+        .install-option summary::-webkit-details-marker { display: none; }
+        .install-option summary::before {
+            content: '\25B8';
+            color: #f7931a;
+            font-size: 0.9rem;
+            transition: transform 0.15s;
+        }
+        .install-option[open] summary::before { transform: rotate(90deg); }
+        .install-option .install-body {
+            padding: 0 1rem 1rem;
+        }
+        .install-option .install-tagline {
+            margin: 0 0 0.75rem;
+            font-size: 0.9rem;
+            color: #a0aec0;
+        }
+        .pros-cons {
+            list-style: none;
+            margin: 0 0 0.75rem;
+            padding: 0;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        .pros-cons li {
+            display: flex;
+            gap: 0.5rem;
+            align-items: flex-start;
+            margin-bottom: 0.3rem;
+        }
+        .pros-cons li .pc-icon {
+            flex-shrink: 0;
+            font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+        }
+        .pros-cons li a { color: #63b3ed; }
+        .install-note {
+            font-size: 0.85rem;
+            color: #fbd38d;
+            margin: 0 0 0.75rem;
+        }
+
+        /* Recovery-phrase screen: the print button prints only the phrase
+           card (seed + mint URLs), on white. */
+        .seed-mints {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 1rem 1.5rem;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.95rem;
+            word-break: break-all;
+            margin-bottom: 1.5rem;
+        }
+        .seed-mints ul { margin: 0.25rem 0 0 1.25rem; padding: 0; }
+        @media print {
+            body { background: #fff !important; color: #000 !important; }
+            .container { min-height: auto; padding: 0; justify-content: flex-start; }
+            .card { border: none; background: none; padding: 0; backdrop-filter: none; }
+            .no-print, .steps, .subtitle, .logo { display: none !important; }
+            .seed-display, .seed-mints { background: none; border: 1px solid #000; color: #000; }
+            .warning { background: none; border: 1px solid #000; color: #000; }
+            h1 { color: #000; }
         }
 
         h1 {
@@ -1229,6 +1664,7 @@ function renderUrlModeDetectionScript(): void { ?>
 
         input[type="text"],
         input[type="password"],
+        input[type="email"],
         input[type="url"],
         input[type="number"],
         select,
@@ -1544,7 +1980,7 @@ function renderUrlModeDetectionScript(): void { ?>
 <body>
     <div class="container">
         <div class="card">
-            <div class="logo">&#9889;</div>
+            <div class="logo"><img src="<?= htmlspecialchars(Urls::assets('img/barebits-logo.svg')) ?>" alt="BareBits"></div>
             <?php
             // Render-time view of the sequence. The zero-conf screen is only
             // part of it once the store actually has an on-chain receive
@@ -1555,10 +1991,7 @@ function renderUrlModeDetectionScript(): void { ?>
             // sequence itself gates zeroconf on zeroConfApplicable, which
             // additionally counts Strike on-chain minting.
             $renderOnchain = SetupFlow::onchainState($renderStoreId);
-            $renderSteps = SetupFlow::stepSequence(
-                $mode, SetupFlow::zeroConfApplicable($renderStoreId),
-                $securityScreenNeeded, $isDesktop, $externalCron, $passwordPreseeded
-            );
+            $renderSteps = setupFlowSteps($renderStoreId);
             $displayIndex = array_search($step, $renderSteps, true);
             $totalSteps = count($renderSteps);
             // The add_store hand-off panel sits outside the sequence; show it
@@ -1662,6 +2095,104 @@ function renderUrlModeDetectionScript(): void { ?>
                     renderUrlModeDetectionScript();
                 } ?>
 
+            <?php elseif ($step === 'install_type'): ?>
+                <!-- Screen: installation type. Four collapsible cards, one
+                     submit each; the choice reshapes the rail screens
+                     (SetupFlow::INSTALL_TYPES). The current choice (a revisit
+                     via Back) renders open. -->
+                <?php
+                $itCurrent = $installType;
+                $itHelp = '<a href="https://getbarebits.com/help/Understanding%20Bitcoin/On-Chain%20vs%20Lightning/" target="_blank" rel="noopener noreferrer">on-chain + Lightning</a>';
+                $itOptions = [
+                    'strike' => [
+                        'title' => '💳 Strike',
+                        'tagline' => 'Let Strike receive your payments and convert them to USD/EUR.',
+                        'pros' => [
+                            'Instant USD/EUR conversion in 100+ countries',
+                            $itHelp,
+                        ],
+                        'cons' => [
+                            'Requires approval from Strike; not all merchants are accepted',
+                            'You don\'t have full control over your funds (Strike does)',
+                            'May not be available in your region',
+                        ],
+                        'note' => '',
+                    ],
+                    'own_wallet' => [
+                        'title' => '👛 My Own Wallet',
+                        'tagline' => 'Payments land straight in wallets you control.',
+                        'pros' => [
+                            'You are fully in control of your funds',
+                            'No approval or application required',
+                            'Works in all countries',
+                            $itHelp,
+                        ],
+                        'cons' => [
+                            'No USD/EUR conversion',
+                            'You must manage liquidity to receive Lightning payments',
+                        ],
+                        'note' => '',
+                    ],
+                    'cashu' => [
+                        'title' => '🪙 Cashu Mint',
+                        'tagline' => 'Like your own wallet, with a Cashu mint handling Lightning for you.',
+                        'pros' => [
+                            'Like your own wallet, but no need to manage liquidity for Lightning payments',
+                            'No approval or application required',
+                            'Works in all countries',
+                            $itHelp,
+                        ],
+                        'cons' => [
+                            'Your funds are controlled by the mint (periodically swept to your wallet)',
+                            'No USD/EUR conversion',
+                        ],
+                        'note' => 'Your mint funds will be periodically swept into your own wallet if you provide an address later in the setup.',
+                    ],
+                    'other' => [
+                        'title' => '🛠️ Something else',
+                        'tagline' => 'Mix and match every payment option BareBits supports.',
+                        'pros' => [],
+                        'cons' => [],
+                        'note' => 'BareBits supports a number of configurable payment options &mdash; choose this for maximum customization.',
+                    ],
+                ];
+                ?>
+                <h2 style="margin-bottom: 1rem;">🧭 Choose your installation type</h2>
+                <p style="margin-bottom: 1.5rem;">
+                    How would you like to receive your money? Open each option
+                    to compare, then pick one. You can change any of the
+                    resulting settings later in the admin dashboard.
+                </p>
+
+                <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>">
+                    <input type="hidden" name="step" value="install_type">
+                    <?= setupCsrfField() ?>
+                    <?php foreach ($itOptions as $itKey => $itOpt): ?>
+                    <details class="install-option" id="install-option-<?= htmlspecialchars($itKey) ?>"<?= $itCurrent === $itKey ? ' open' : '' ?>>
+                        <summary><?= $itOpt['title'] ?></summary>
+                        <div class="install-body">
+                            <p class="install-tagline"><?= htmlspecialchars($itOpt['tagline']) ?></p>
+                            <?php if ($itOpt['pros'] !== [] || $itOpt['cons'] !== []): ?>
+                            <ul class="pros-cons">
+                                <?php foreach ($itOpt['pros'] as $itPro): ?>
+                                <li><span class="pc-icon">✅</span><span><?= $itPro ?></span></li>
+                                <?php endforeach; ?>
+                                <?php foreach ($itOpt['cons'] as $itCon): ?>
+                                <li><span class="pc-icon">❌&#xFE0F;</span><span><?= $itCon ?></span></li>
+                                <?php endforeach; ?>
+                            </ul>
+                            <?php endif; ?>
+                            <?php if ($itOpt['note'] !== ''): ?>
+                            <p class="install-note">ℹ️ <?= $itOpt['note'] ?></p>
+                            <?php endif; ?>
+                            <button type="submit" name="install_type" value="<?= htmlspecialchars($itKey) ?>" class="btn" style="width: 100%;">
+                                Choose <?= htmlspecialchars(preg_replace('/^\S+\s/u', '', $itOpt['title'])) ?>
+                            </button>
+                        </div>
+                    </details>
+                    <?php endforeach; ?>
+                </form>
+
             <?php elseif ($step === 'security'): ?>
                 <!-- Screen: security check (requirements + DB exposure + URL mode) -->
                 <h2 style="margin-bottom: 1rem;">🔒 Quick safety check</h2>
@@ -1670,8 +2201,12 @@ function renderUrlModeDetectionScript(): void { ?>
                 </p>
                 <p style="margin-bottom: 1.5rem;">
                     Before we go further, let's make sure the web can't peek at
-                    it. We ran the checks below &mdash; everything should say OK. ✅
+                    it. We're running the checks below &mdash; if everything
+                    passes we'll move you along automatically. ✅
                 </p>
+                <div id="security-autoadvance" class="success" style="display: none;">
+                    All checks passed &mdash; continuing&hellip;
+                </div>
 
                 <?php
                 // Check PHP requirements silently - only show if something
@@ -1693,6 +2228,14 @@ function renderUrlModeDetectionScript(): void { ?>
                         </ul>
                     </div>
                 <?php else: ?>
+                    <?php
+                    // GMP is only a blocker for the types that lean on xpub
+                    // wallets and swaps (own wallet, Cashu mint). A Strike
+                    // install never touches either, and "something else"
+                    // gets the warning but is not held on this screen by it.
+                    $gmpHoldsScreen = !function_exists('gmp_init')
+                        && in_array($installType, ['own_wallet', 'cashu'], true);
+                    ?>
                     <?php if (!function_exists('gmp_init')): ?>
                         <!-- BCMath satisfies the hard requirement (Cashu,
                              noffers, and NWC all fall back to it), but xpub
@@ -1859,7 +2402,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         </div>
                     </div>
 
-                    <form method="post">
+                    <form method="post" id="security-form">
                         <input type="hidden" name="step" value="security">
                         <?= setupCsrfField() ?>
 
@@ -1874,6 +2417,31 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     </form>
 
                     <script>
+                    // Auto-advance: the screen exists to surface a problem.
+                    // When the database probe AND the URL-mode detection both
+                    // pass (and GMP isn't missing on a type that needs it)
+                    // there is nothing for the operator to do, so the form
+                    // submits itself. Either check failing — or the
+                    // detection not finishing — leaves the screen up with
+                    // the results, exactly as before.
+                    (function () {
+                        var results = { db: null, url: null };
+                        var gmpHoldsScreen = <?= json_encode($gmpHoldsScreen) ?>;
+                        var advanced = false;
+                        window.setupSecurityCheckDone = function (which, passed) {
+                            results[which] = !!passed;
+                            if (advanced || gmpHoldsScreen || results.db !== true || results.url !== true) {
+                                return;
+                            }
+                            advanced = true;
+                            var box = document.getElementById('security_acknowledged');
+                            var note = document.getElementById('security-autoadvance');
+                            var form = document.getElementById('security-form');
+                            if (box) { box.checked = true; }
+                            if (note) { note.style.display = 'block'; }
+                            if (form) { form.submit(); }
+                        };
+                    })();
                     (function() {
                         const baseOrigin = <?= json_encode($baseOrigin) ?>;
                         const testPaths = <?= json_encode(array_values($testPaths)) ?>;
@@ -1950,6 +2518,9 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                                 messageEl.textContent = 'Data directory is protected';
                                 detailsEl.textContent = 'All tested URL paths correctly return 403/404 or are blocked.';
                             }
+                            if (window.setupSecurityCheckDone) {
+                                window.setupSecurityCheckDone('db', worstStatus !== 'FAIL');
+                            }
                         }
 
                         function escapeHtml(text) {
@@ -1995,19 +2566,148 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         <input type="password" id="confirm_password" name="confirm_password" required>
                     </div>
 
+                    <button type="submit" class="btn" style="width: 100%;">Continue</button>
+                </form>
+
+            <?php elseif ($step === 'email'): ?>
+                <!-- Screen: e-mail notifications (SMTP) + password-reset
+                     address. "Next" sends a real test e-mail and only
+                     advances when it went out; Skip saves nothing. -->
+                <?php
+                // Prefill: the POST on a failed send (minus the password,
+                // which is never echoed), else whatever is already stored (a
+                // revisit via Back, or a user_config.php constant).
+                require_once __DIR__ . '/includes/email_sender.php';
+                $emStored = EmailSender::resolveConfig(null);
+                $emPosted = ($_POST['email_action'] ?? '') === 'save';
+                $emVal = function (string $postKey, string $cfgKey) use ($emPosted, $emStored): string {
+                    return $emPosted ? (string)($_POST[$postKey] ?? '') : (string)($emStored[$cfgKey] ?? '');
+                };
+                $emHost = $emVal('smtp_host', 'host');
+                $emPort = $emVal('smtp_port', 'port');
+                $emUser = $emVal('smtp_username', 'username');
+                $emEnc = strtolower($emVal('smtp_encryption', 'encryption'));
+                $emFrom = $emVal('smtp_from_address', 'from_address');
+                $emFromName = $emVal('smtp_from_name', 'from_name');
+                $emPasswordStored = ((string)Config::get('smtp_password', '')) !== '';
+                $emTo = $emPosted ? (string)($_POST['to_email'] ?? '') : (string)Config::get('notifications_to_email', '');
+                $emAdmin = Auth::getUserByUsername('admin');
+                $emAdminEmail = (string)($emAdmin['email'] ?? '');
+                $emResetSame = $emPosted
+                    ? (($_POST['reset_same'] ?? '0') === '1')
+                    : ($emAdminEmail === '' || $emAdminEmail === $emTo);
+                $emReset = $emPosted ? (string)($_POST['reset_email'] ?? '') : ($emResetSame ? '' : $emAdminEmail);
+                ?>
+                <h2 style="margin-bottom: 1rem;">📧 E-mail notifications</h2>
+                <p style="margin-bottom: 0.75rem;">
+                    Want to hear about paid invoices, completed cashouts and
+                    available updates by e-mail? Enter your mail server's
+                    details below. 📬
+                </p>
+                <p style="margin-bottom: 1.5rem; font-size: 0.9rem; color: #a0aec0;">
+                    When you click Next we send a real test e-mail to the
+                    notifications address and only move on once it has gone
+                    out. Not ready? Skip for now and set it up later under
+                    Settings &rarr; E-mail notifications.
+                </p>
+
+                <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>" id="email-form">
+                    <input type="hidden" name="step" value="email">
+                    <?= setupCsrfField() ?>
+                    <input type="hidden" name="email_action" value="save">
+
                     <div class="form-group">
-                        <label for="admin_email">Recovery Email <span style="color: #a0aec0; font-weight: normal;">(optional)</span></label>
-                        <input type="email" id="admin_email" name="admin_email"
-                               placeholder="you@example.com">
+                        <label for="smtp_host">SMTP server</label>
+                        <input type="text" id="smtp_host" name="smtp_host" value="<?= htmlspecialchars($emHost) ?>" placeholder="smtp.example.com" autocomplete="off">
+                    </div>
+                    <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+                        <div class="form-group" style="flex: 1; min-width: 8rem;">
+                            <label for="smtp_port">Port</label>
+                            <input type="text" id="smtp_port" name="smtp_port" value="<?= htmlspecialchars($emPort) ?>" placeholder="587" inputmode="numeric">
+                        </div>
+                        <div class="form-group" style="flex: 1; min-width: 8rem;">
+                            <label for="smtp_encryption">Encryption</label>
+                            <select id="smtp_encryption" name="smtp_encryption">
+                                <option value="tls"<?= ($emEnc === '' || $emEnc === 'tls') ? ' selected' : '' ?>>STARTTLS (port 587)</option>
+                                <option value="ssl"<?= $emEnc === 'ssl' ? ' selected' : '' ?>>SSL/TLS (port 465)</option>
+                                <option value="none"<?= $emEnc === 'none' ? ' selected' : '' ?>>None</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="smtp_username">Username</label>
+                        <input type="text" id="smtp_username" name="smtp_username" value="<?= htmlspecialchars($emUser) ?>" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="smtp_password">Password</label>
+                        <input type="password" id="smtp_password" name="smtp_password" value="" autocomplete="new-password"
+                               placeholder="<?= $emPasswordStored ? 'saved — leave blank to keep' : '' ?>">
+                        <?php if ($emPasswordStored): ?>
+                        <p class="help-text" id="smtp-password-help">A password is saved. Leave this blank to keep it, or paste a new one.</p>
+                        <?php endif; ?>
+                    </div>
+                    <div class="form-group">
+                        <label for="smtp_from_address">From address</label>
+                        <input type="email" id="smtp_from_address" name="smtp_from_address" value="<?= htmlspecialchars($emFrom) ?>" placeholder="shop@example.com">
+                        <p class="help-text">Most mail servers only accept a From address on their own domain.</p>
+                    </div>
+                    <div class="form-group">
+                        <label for="smtp_from_name">From name <span style="color: #a0aec0; font-weight: normal;">(optional)</span></label>
+                        <input type="text" id="smtp_from_name" name="smtp_from_name" value="<?= htmlspecialchars($emFromName) ?>" placeholder="My Store">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="to_email">Send notifications to</label>
+                        <input type="email" id="to_email" name="to_email" value="<?= htmlspecialchars($emTo) ?>" placeholder="you@example.com">
+                        <p class="help-text">The test e-mail goes here too.</p>
+                    </div>
+
+                    <div class="checkbox-group" style="margin-bottom: 1rem;">
+                        <input type="checkbox" id="reset_same" name="reset_same" value="1"<?= $emResetSame ? ' checked' : '' ?>>
+                        <label for="reset_same" style="margin: 0;">
+                            Also send password-reset e-mails to this address
+                        </label>
+                    </div>
+                    <div class="form-group" id="reset-email-row"<?= $emResetSame ? ' style="display:none;"' : '' ?>>
+                        <label for="reset_email">Password-reset e-mail</label>
+                        <input type="email" id="reset_email" name="reset_email" value="<?= htmlspecialchars($emReset) ?>" placeholder="admin@example.com">
                         <p class="help-text">
-                            Optional, but handy! Add an email and we can send you
-                            a password-reset link. No email? No problem &mdash;
-                            you can also reset it right from the server.
+                            Forgot your admin password? We'll e-mail a reset link
+                            here. Without one you can still reset it from the
+                            server's file system.
                         </p>
                     </div>
 
-                    <button type="submit" class="btn" style="width: 100%;">Continue</button>
+                    <button type="submit" class="btn" style="width: 100%;" id="email-next-btn">Send test e-mail &amp; continue</button>
                 </form>
+
+                <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>" style="margin-top: 0.75rem;">
+                    <input type="hidden" name="step" value="email">
+                    <?= setupCsrfField() ?>
+                    <input type="hidden" name="email_action" value="skip">
+                    <button type="submit" class="btn btn-secondary" style="width: 100%;">Skip for now</button>
+                </form>
+
+                <script>
+                (function () {
+                    var same = document.getElementById('reset_same');
+                    var row = document.getElementById('reset-email-row');
+                    if (same && row) {
+                        same.addEventListener('change', function () {
+                            row.style.display = same.checked ? 'none' : '';
+                        });
+                    }
+                    // The test send can take a few seconds: show it.
+                    var form = document.getElementById('email-form');
+                    var btn = document.getElementById('email-next-btn');
+                    if (form && btn) {
+                        form.addEventListener('submit', function () {
+                            btn.disabled = true;
+                            btn.textContent = 'Sending test e-mail\u2026';
+                        });
+                    }
+                })();
+                </script>
 
             <?php elseif ($step === 'store'): ?>
                 <!-- Screen: store name -->
@@ -2197,12 +2897,6 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <?php endif; ?>
                     <button type="submit" class="btn btn-secondary" style="width: 100%;">Skip for now</button>
                 </form>
-
-                <div class="warning" style="margin-top: 0.75rem;">
-                    Without an on-chain wallet we can't send you Bitcoin
-                    directly, use submarine swaps, or sweep funds out of a Cashu
-                    mint. You can add one later in store settings.
-                </div>
 
                 <script>
                 (function () {
@@ -2459,6 +3153,17 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     : ($renderStoreId !== null && OnchainConfig::strikeEnabledForStore($renderStoreId));
                 ?>
                 <h2 style="margin-bottom: 1rem;">⚡ Lightning payments</h2>
+                <?php if ($installType === 'cashu'): ?>
+                <div class="info" id="lightning-cashu-note">
+                    You have selected to use a Cashu mint. You can add a
+                    Lightning payment method here, which will be used to
+                    automatically sweep funds out of your mint. By default,
+                    this payment method will also be used to generate Lightning
+                    invoices for your customers and the mint will only be used
+                    as a fallback. You can modify this behaviour later in the
+                    settings.
+                </div>
+                <?php endif; ?>
                 <p style="margin-bottom: 0.75rem;">
                     Lightning is the fast, low-fee way to get paid &mdash; quick
                     for your customers, cheap for you. 🚀
@@ -2792,53 +3497,120 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <button type="submit" class="btn btn-secondary" style="width: 100%;">Skip for now</button>
                 </form>
 
-            <?php elseif ($step === 'swaps'): ?>
-                <!-- Screen: submarine swaps -->
-                <h2 style="margin-bottom: 1rem;">🌊 Submarine swaps</h2>
-                <p style="margin-bottom: 0.75rem;">
-                    Want submarine swaps on? We'd recommend it! 👍
-                </p>
-                <p style="margin-bottom: 0.75rem;">
-                    Think of them as a safety net for when Lightning can't get
-                    through &mdash; maybe your Lightning provider is down, or your
-                    Electrum wallet is offline or short on liquidity.
-                </p>
-                <p style="margin-bottom: 1.5rem;">
-                    When that happens, your customer pays via Lightning plus a
-                    small swap fee (about 1%), and the money lands in your
-                    on-chain wallet.
-                </p>
-
+            <?php elseif ($step === 'strike'): ?>
+                <!-- Screen: Strike API key (Strike installation type). The
+                     Strike section of the Lightning screen on its own, with
+                     on-chain-via-Strike ticked by default. -->
                 <?php
-                require_once __DIR__ . '/includes/onchain/wallet.php';
-                $swapEnvError = OnchainWallet::environmentError();
+                $skExistingRef = '';
+                $skExistingLabel = '';
+                foreach ($renderStoreId ? StoreLnAddresses::listForStore($renderStoreId) : [] as $skRow) {
+                    if ($skRow['type'] === StoreLnAddresses::TYPE_STRIKE && $skExistingRef === '') {
+                        $skExistingRef = StoreLnAddresses::KEEP_REF_PREFIX . $skRow['id'];
+                        $skExistingLabel = StoreLnAddresses::displayValue($skRow['type'], $skRow['address']);
+                    }
+                }
+                // Same invariant as the Lightning screen: a POSTed key is
+                // never echoed back; only the opaque keep ref round-trips.
+                $skValue = trim((string)($_POST['strike_keep_ref'] ?? $skExistingRef));
+                $skShowsSaved = $skValue !== '' && str_starts_with($skValue, StoreLnAddresses::KEEP_REF_PREFIX);
+                require_once __DIR__ . '/includes/onchain/config.php';
+                $skOnchainChecked = isset($_POST['strike_action'])
+                    ? (($_POST['strike_onchain'] ?? '') === '1')
+                    : ($skShowsSaved ? OnchainConfig::strikeEnabledForStore((string)$renderStoreId) : true);
                 ?>
-                <?php if ($swapEnvError !== null): ?>
-                    <div class="warning" style="margin-bottom: 1rem;">
-                        <strong>Swaps aren't available on this server yet:</strong>
-                        <?= htmlspecialchars($swapEnvError) ?>
-                    </div>
-                <?php elseif (!$renderOnchain['hasXpub']): ?>
-                    <div class="warning" style="margin-bottom: 1rem;">
-                        Submarine swaps send Bitcoin to your on-chain wallet, so
-                        they need an xpub. Go back and add one to turn this on.
-                    </div>
-                <?php endif; ?>
+                <h2 style="margin-bottom: 1rem;">💳 Connect your Strike account</h2>
+                <p style="margin-bottom: 0.75rem;">
+                    Payments go straight into your
+                    <a href="https://strike.me" target="_blank" rel="noopener noreferrer" style="color: #63b3ed;">Strike</a>
+                    account, where they can be converted to USD or EUR
+                    instantly. 💱
+                </p>
+                <p style="margin-bottom: 1.25rem; font-size: 0.9rem; color: #a0aec0;">
+                    BareBits talks to Strike with an API key. Don't have a
+                    Strike account yet? Sign up at strike.me first.
+                </p>
 
                 <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>">
-                    <input type="hidden" name="step" value="swaps">
+                    <input type="hidden" name="step" value="strike">
                     <?= setupCsrfField() ?>
-                    <?php if ($mode === 'add_store'): ?>
-                        <input type="hidden" name="mode" value="add_store">
-                    <?php endif; ?>
-                    <button type="submit" name="swaps_enabled" value="1" class="btn" style="width: 100%;"
-                            <?= ($renderOnchain['hasXpub'] && $swapEnvError === null) ? '' : 'disabled' ?>>
-                        Enable submarine swaps
-                    </button>
-                    <button type="submit" name="swaps_enabled" value="0" class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem;">
-                        No thanks
-                    </button>
+                    <input type="hidden" name="strike_action" value="save">
+
+                    <div style="background: rgba(0,0,0,0.2); padding: 1rem; border-radius: 8px; font-size: 0.9rem; color: #a0aec0; margin-bottom: 1rem;">
+                        <p style="margin-bottom: 0.5rem;">To create a key:</p>
+                        <ol style="margin: 0 0 0.5rem 1.25rem; padding: 0;">
+                            <li>Open the
+                                <a href="https://dashboard.strike.me/" target="_blank" rel="noopener noreferrer" style="color: #63b3ed;">Strike dashboard</a>
+                                (opens in a new tab), log in, and go to the
+                                <strong>API Keys</strong> section.</li>
+                            <li>Create a new key with these scopes:
+                                <strong>Create invoices</strong>
+                                (<code>partner.invoice.create</code>),
+                                <strong>Generate invoice quotes</strong>
+                                (<code>partner.invoice.quote.generate</code>),
+                                <strong>Read invoices</strong>
+                                (<code>partner.invoice.read</code>) and, for
+                                on-chain payments, <strong>Create receive
+                                requests</strong>
+                                (<code>partner.receive-request.create</code>).</li>
+                            <li>Copy the key and paste it below.</li>
+                        </ol>
+                        <p style="margin: 0;">
+                            With just those scopes the key can create and verify
+                            invoices but <strong>cannot spend or withdraw funds</strong>
+                            from your account. When you continue, the key is tested
+                            with a 1-sat test invoice (it's never paid).
+                        </p>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="strike_api_key">Strike API key</label>
+                        <?php if ($skShowsSaved): ?>
+                            <input type="hidden" name="strike_keep_ref" value="<?= htmlspecialchars($skValue) ?>">
+                            <input type="text" readonly
+                                   style="font-family: monospace; font-size: 0.9rem; opacity: 0.7; margin-bottom: 0.5rem;"
+                                   value="<?= htmlspecialchars($skExistingLabel !== '' ? $skExistingLabel : 'Saved Strike API key') ?>">
+                            <label style="display:block; font-size: 0.85rem; margin-bottom: 0.5rem;">
+                                <input type="checkbox" name="strike_clear" value="1">
+                                Remove this saved key
+                            </label>
+                            <input type="text" id="strike_api_key" name="strike_api_key"
+                                   autocomplete="off" spellcheck="false"
+                                   style="font-family: monospace; font-size: 0.9rem;"
+                                   value="" placeholder="paste a new API key to replace">
+                        <?php else: ?>
+                            <input type="text" id="strike_api_key" name="strike_api_key"
+                                   autocomplete="off" spellcheck="false"
+                                   style="font-family: monospace; font-size: 0.9rem;"
+                                   value="" placeholder="paste your Strike API key">
+                        <?php endif; ?>
+                    </div>
+
+                    <label style="display:block; font-size: 0.9rem; margin-top: 0.75rem;">
+                        <input type="checkbox" name="strike_onchain" value="1"<?= $skOnchainChecked ? ' checked' : '' ?>>
+                        Also accept on-chain payments via Strike
+                    </label>
+                    <p style="margin: 0.35rem 0 1.25rem 1.5rem; font-size: 0.8rem; color: #a0aec0;">
+                        Each invoice's Bitcoin address is then created in your
+                        Strike account. The key needs the
+                        <strong>Create receive requests</strong> scope
+                        (<code>partner.receive-request.create</code>) &mdash; it
+                        is tested when you continue.
+                    </p>
+
+                    <button type="submit" class="btn" style="width: 100%;">Continue</button>
                 </form>
+
+                <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>" style="margin-top: 0.75rem;">
+                    <input type="hidden" name="step" value="strike">
+                    <?= setupCsrfField() ?>
+                    <input type="hidden" name="strike_action" value="skip">
+                    <button type="submit" class="btn btn-secondary" style="width: 100%;">Skip for now</button>
+                </form>
+                <p class="help-text" style="margin-top: 0.75rem;">
+                    Skipping leaves your store without a payment method until
+                    you add one in store settings.
+                </p>
 
             <?php elseif ($step === 'mints'): ?>
                 <!-- Screen: Cashu mints (auto-picked main + backup, or manual) -->
@@ -2848,9 +3620,9 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 </p>
                 <p style="margin-bottom: 0.75rem;">
                     Think of it as the last fallback for Lightning &mdash; it
-                    only steps in when you've got no working LNURL/noffer AND a
-                    submarine swap won't work (like tiny payments, since swap
-                    providers rarely go under ~$10).
+                    only steps in when you've got no online lightning wallet
+                    AND a submarine swap won't work (like tiny payments, since
+                    swap providers rarely go under ~$10).
                 </p>
                 <p style="margin-bottom: 0.75rem;">
                     Any funds that land in your mint get swept to your on-chain
@@ -2943,6 +3715,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <button type="submit" class="btn" style="width: 100%;" id="mints-continue-btn" disabled>Continue</button>
                 </form>
 
+                <?php if ($installType !== 'cashu'): ?>
                 <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>" style="margin-top: 0.5rem;">
                     <input type="hidden" name="step" value="mints">
                     <?= setupCsrfField() ?>
@@ -2952,6 +3725,16 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     <?php endif; ?>
                     <button type="submit" class="btn btn-secondary" style="width: 100%;">No thanks, run without mints</button>
                 </form>
+                <?php else: ?>
+                <!-- Cashu-mint installation type: a mint is the point, so
+                     there is no "run without mints" exit here. The handler
+                     still accepts mints_enabled=0 from a direct POST. -->
+                <p class="help-text" style="text-align: center; margin-top: 0.75rem;" id="mints-required-note">
+                    You chose the Cashu mint installation type, so a mint is
+                    required here. Go back to the installation type screen to
+                    run without one.
+                </p>
+                <?php endif; ?>
 
             <?php elseif ($step === SetupFlow::ADD_STORE_COMPLETE): ?>
                 <!-- Screen: add_store hand-off. Only reached when the mints
@@ -2971,26 +3754,42 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 </div>
 
                 <?php if ($generatedSeed): ?>
-                <div class="warning" style="margin-bottom: 1rem;">
-                    <strong>🔐 Jot down your recovery phrase</strong>
-                    <p style="margin: 0.5rem 0 0; font-size: 0.9rem;">
-                        These 12 little words are your lifeline &mdash; they
-                        recover any ecash at this store's mints if the server ever
-                        disappears.
-                    </p>
-                    <p style="margin: 0.5rem 0 0; font-size: 0.9rem;">
-                        Write them somewhere safe and offline. You can peek at
-                        them again in store settings, but remember: whoever has
-                        them can spend your funds.
-                    </p>
-                </div>
-                <div class="seed-display"><?= htmlspecialchars($generatedSeed) ?></div>
+                <?php renderSeedPanel($generatedSeed, setupStoreMintUrls($createdStore), (string)($createdStore['name'] ?? '')); ?>
                 <?php unset($_SESSION['setup_generated_seed']); ?>
                 <?php endif; ?>
 
                 <a href="<?= htmlspecialchars($adminReturn) ?>" class="btn" style="width: 100%; text-align: center; display: block;">
                     Go to BareBits Admin
                 </a>
+
+            <?php elseif ($step === 'seed'): ?>
+                <!-- Screen: recovery phrase (first run, only when the mints
+                     answer minted a wallet seed). The phrase stays in the
+                     session until the done screen so Back can show it again. -->
+                <?php
+                $seedStore = $renderStoreId ? Config::getStore($renderStoreId) : null;
+                ?>
+                <h2 style="margin-bottom: 1rem;">🔐 Save your recovery phrase</h2>
+                <p style="margin-bottom: 1.25rem;" class="no-print">
+                    Your store's Cashu wallet is ready. Before we go on, one
+                    thing that <strong>can't</strong> be skipped: back up the
+                    phrase that unlocks it. 📝
+                </p>
+                <?php if ($generatedSeed): ?>
+                <?php renderSeedPanel((string)$generatedSeed, setupStoreMintUrls($seedStore), (string)($seedStore['name'] ?? '')); ?>
+                <?php else: ?>
+                <div class="info">
+                    This browser session no longer holds the phrase. You can
+                    read it any time in your store's settings.
+                </div>
+                <?php endif; ?>
+
+                <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>" class="no-print">
+                    <input type="hidden" name="step" value="seed">
+                    <?= setupCsrfField() ?>
+                    <input type="hidden" name="seed_saved" value="1">
+                    <button type="submit" class="btn" style="width: 100%;">I've saved my phrase and mint URLs &mdash; continue</button>
+                </form>
 
             <?php elseif ($step === 'updates'): ?>
                 <!-- Screen: automatic-updates opt-in. Nothing is pre-selected:
@@ -3158,23 +3957,6 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 </div>
                 <?php endif; ?>
 
-                <?php if ($generatedSeed): ?>
-                <div class="warning" style="margin-bottom: 1rem;">
-                    <strong>🔐 Save your recovery phrase</strong>
-                    <p style="margin: 0.5rem 0 0; font-size: 0.9rem;">
-                        These 12 words can recover any ecash held at your mints
-                        if this server is ever lost.
-                    </p>
-                    <p style="margin: 0.5rem 0 0; font-size: 0.9rem;">
-                        Write them down somewhere safe and offline &mdash; we can
-                        show them again in store settings, but anyone who has them
-                        can spend your funds.
-                    </p>
-                </div>
-                <div class="seed-display"><?= htmlspecialchars($generatedSeed) ?></div>
-                <?php unset($_SESSION['setup_generated_seed']); ?>
-                <?php endif; ?>
-
                 <?php
                 // Managed installs with a provisioned return URL hand the
                 // operator straight back to the orchestrator (the WordPress
@@ -3339,8 +4121,8 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
             <?php endif; ?>
 
             <?php if ($backUrl !== null): ?>
-                <p style="margin-top: 1.25rem; text-align: center;">
-                    <a href="<?= htmlspecialchars($backUrl) ?>" style="color: #a0aec0; font-size: 0.9rem;">Back</a>
+                <p style="margin-top: 1.25rem; text-align: center;" class="no-print">
+                    <a href="<?= htmlspecialchars($backUrl) ?>" id="wizard-back-link" style="color: #a0aec0; font-size: 0.9rem;">&larr; Back</a>
                 </p>
             <?php endif; ?>
         </div>

@@ -1,18 +1,18 @@
 """Onboarding wizard: the choice matrix.
 
 Every screen is a question, and the answers interact — most sharply in
-SetupFlow::resolveAutoCashout, whose result is a function of four of them
-(Lightning destinations, mints, swaps, and whether the on-chain rail is an
-xpub or a reused address). Testing the screens one at a time cannot catch a
-wrong combination, so this walks whole flows and asserts the complete
-persisted state each one produces.
+SetupFlow::resolveAutoCashout, whose result is a function of three of them
+(Lightning destinations, mints, and whether the on-chain rail is an xpub or a
+reused address — submarine swaps have no screen and derive from the xpub).
+Testing the screens one at a time cannot catch a wrong combination, so this
+walks whole flows and asserts the complete persisted state each one produces.
 
 The full cross product is ~600 flows and mostly redundant — the screens are
 independent except through the derived columns. This table instead covers:
 
   * every value of every choice at least once, and
-  * every reachable combination of the four inputs the auto-cashout rail and
-    the swaps gate actually depend on.
+  * every reachable combination of the three inputs the auto-cashout rail and
+    the swaps default actually depend on.
 
 Uses the session-scoped nutshell mints, so the mints=ON rows cost one stack
 startup for the whole run rather than one each.
@@ -49,7 +49,6 @@ class Choices:
 
     onchain: str  # 'skip' | 'xpub' | 'tpub' | 'static'
     lightning: str  # 'skip' | 'address' | 'noffer' | 'both'
-    swaps: bool
     mints: bool
     zero_conf: bool = True
 
@@ -107,7 +106,11 @@ def walk(
 ) -> SetupWizard:
     """Answer every screen per `choices`. Returns the wizard session, still
     logged in on the screen after the auto-update question (answered "not
-    now", the default-off choice), so callers can continue to cron/done."""
+    now", the default-off choice), so callers can continue to cron/done.
+
+    Submarine swaps are not a choice: the wizard switches them on at the end
+    of the rail screens whenever the store has an xpub (and this test PHP has
+    GMP), and leaves them off otherwise."""
     w = SetupWizard(payserver.url)
     w.through_store(store_name)
 
@@ -153,9 +156,6 @@ def walk(
         body = w.post(step="zeroconf", zero_conf="1" if choices.zero_conf else "0")
         assert wizard_error(body) is None, wizard_error(body)
 
-    body = w.post(step="swaps", swaps_enabled="1" if choices.swaps else "0")
-    assert wizard_error(body) is None, wizard_error(body)
-
     if choices.mints:
         assert mint and backup_mint, "mints=True needs the nutshell fixtures"
         body = w.post(
@@ -166,11 +166,15 @@ def walk(
         body = w.post(step="mints", mints_enabled="0")
     assert wizard_error(body) is None, wizard_error(body)
 
-    # updates: decline automatic updates (the safe default).
+    # A seed was minted: the recovery-phrase screen comes first.
+    if choices.mints:
+        assert wizard_heading(body) == "Save your recovery phrase", wizard_heading(body)
+        body = w.post(step="seed", seed_saved="1")
+        assert wizard_error(body) is None, wizard_error(body)
+    assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
+    # updates: decline automatic updates (the safe default), landing on cron.
+    # (Usage statistics were declined on screen two by through_store.)
     body = w.post(step="updates", auto_update="0")
-    assert wizard_error(body) is None, wizard_error(body)
-    # analytics: decline usage statistics (the default), landing on cron.
-    body = w.post(step="analytics", usage_stats="0")
     assert wizard_error(body) is None, wizard_error(body)
     return w
 
@@ -199,7 +203,7 @@ def assert_state(payserver: PayserverHandle, expect: Expect) -> None:
 MINTLESS_MATRIX = [
     pytest.param(
         # Nothing configured at all: the store exists but can take no payment.
-        Choices(onchain="skip", lightning="skip", swaps=False, mints=False),
+        Choices(onchain="skip", lightning="skip", mints=False),
         Expect(onchain_mode=None, network=None, min_confs=1,
                swaps_enabled=OFF, strict=ON, has_mint=False,
                auto_melt_enabled=0, auto_melt_use_swap=OFF),
@@ -208,7 +212,7 @@ MINTLESS_MATRIX = [
     pytest.param(
         # A Lightning address alone is enough to sweep over Lightning, with no
         # on-chain rail and no mint anywhere.
-        Choices(onchain="skip", lightning="address", swaps=False, mints=False),
+        Choices(onchain="skip", lightning="address", mints=False),
         Expect(onchain_mode=None, network=None, min_confs=1,
                swaps_enabled=OFF, strict=ON, has_mint=False,
                ln_chain=[("lnaddress", LN_ADDRESS)],
@@ -218,7 +222,7 @@ MINTLESS_MATRIX = [
     pytest.param(
         # A noffer on its own is a destination too — it must not need an LNURL
         # address alongside it to count.
-        Choices(onchain="skip", lightning="noffer", swaps=False, mints=False),
+        Choices(onchain="skip", lightning="noffer", mints=False),
         Expect(onchain_mode=None, network=None, min_confs=1,
                swaps_enabled=OFF, strict=ON, has_mint=False,
                ln_chain=[("noffer", REFERENCE_NOFFER)],
@@ -228,7 +232,7 @@ MINTLESS_MATRIX = [
     pytest.param(
         # Both destinations: address first, noffer as the fallback — the order
         # Invoice::create walks at payment time.
-        Choices(onchain="xpub", lightning="both", swaps=True, mints=False, zero_conf=False),
+        Choices(onchain="xpub", lightning="both", mints=False, zero_conf=False),
         Expect(onchain_mode="xpub", network="mainnet", min_confs=1,
                swaps_enabled=ON, strict=ON, has_mint=False,
                ln_chain=[("lnaddress", LN_ADDRESS), ("noffer", REFERENCE_NOFFER)],
@@ -238,7 +242,7 @@ MINTLESS_MATRIX = [
     pytest.param(
         # Zero-conf on, mainnet xpub, swaps on, no mint: swaps are enabled but
         # there is no mint balance to sweep, so auto-cashout stays off.
-        Choices(onchain="xpub", lightning="skip", swaps=True, mints=False),
+        Choices(onchain="xpub", lightning="skip", mints=False),
         Expect(onchain_mode="xpub", network="mainnet", min_confs=0,
                swaps_enabled=ON, strict=ON, has_mint=False,
                auto_melt_enabled=0, auto_melt_use_swap=OFF),
@@ -246,8 +250,8 @@ MINTLESS_MATRIX = [
     ),
     pytest.param(
         # A reused static address is a valid receive rail but cannot back
-        # swaps, so the swaps answer has to come back off.
-        Choices(onchain="static", lightning="skip", swaps=False, mints=False, zero_conf=False),
+        # swaps, so they stay off.
+        Choices(onchain="static", lightning="skip", mints=False, zero_conf=False),
         Expect(onchain_mode="static", network="mainnet", min_confs=1,
                swaps_enabled=OFF, strict=ON, has_mint=False,
                auto_melt_enabled=0, auto_melt_use_swap=OFF),
@@ -255,7 +259,7 @@ MINTLESS_MATRIX = [
     ),
     pytest.param(
         # Testnet-family key with an explicit sub-network, zero-conf on.
-        Choices(onchain="tpub", lightning="address", swaps=True, mints=False),
+        Choices(onchain="tpub", lightning="address", mints=False),
         Expect(onchain_mode="xpub", network="regtest", min_confs=0,
                swaps_enabled=ON, strict=ON, has_mint=False,
                ln_chain=[("lnaddress", LN_ADDRESS)],
@@ -287,25 +291,16 @@ MINTED_MATRIX = [
         # mint plus swaps plus an xpub, so the balance sweeps on-chain via a
         # submarine swap. Deciding this on the Lightning screen (before the
         # swaps and mints answers exist) would leave it off.
-        Choices(onchain="xpub", lightning="skip", swaps=True, mints=True),
+        Choices(onchain="xpub", lightning="skip", mints=True),
         Expect(onchain_mode="xpub", network="mainnet", min_confs=0,
                swaps_enabled=ON, strict=INHERIT, has_mint=True,
                auto_melt_enabled=1, auto_melt_use_swap=ON),
         id="mint-swaps-xpub-sweeps-onchain",
     ),
     pytest.param(
-        # Same, but swaps declined: nowhere to sweep to, so auto-cashout is off
-        # even though a mint balance can accumulate.
-        Choices(onchain="xpub", lightning="skip", swaps=False, mints=True),
-        Expect(onchain_mode="xpub", network="mainnet", min_confs=0,
-               swaps_enabled=OFF, strict=INHERIT, has_mint=True,
-               auto_melt_enabled=0, auto_melt_use_swap=OFF),
-        id="mint-no-swaps-cannot-sweep",
-    ),
-    pytest.param(
         # A mint with a static address: swaps are impossible (a swap claim
         # needs a fresh address), so again nothing to sweep to.
-        Choices(onchain="static", lightning="skip", swaps=False, mints=True),
+        Choices(onchain="static", lightning="skip", mints=True),
         Expect(onchain_mode="static", network="mainnet", min_confs=0,
                swaps_enabled=OFF, strict=INHERIT, has_mint=True,
                auto_melt_enabled=0, auto_melt_use_swap=OFF),
@@ -313,7 +308,7 @@ MINTED_MATRIX = [
     ),
     pytest.param(
         # Lightning beats swaps when both are available — cheapest rail wins.
-        Choices(onchain="xpub", lightning="address", swaps=True, mints=True),
+        Choices(onchain="xpub", lightning="address", mints=True),
         Expect(onchain_mode="xpub", network="mainnet", min_confs=0,
                swaps_enabled=ON, strict=INHERIT, has_mint=True,
                ln_chain=[("lnaddress", LN_ADDRESS)],
@@ -323,7 +318,7 @@ MINTED_MATRIX = [
     pytest.param(
         # A mint with no on-chain rail at all and no Lightning: the store can
         # take Lightning payments via the mint but has no payout route.
-        Choices(onchain="skip", lightning="skip", swaps=False, mints=True),
+        Choices(onchain="skip", lightning="skip", mints=True),
         Expect(onchain_mode=None, network=None, min_confs=1,
                swaps_enabled=OFF, strict=INHERIT, has_mint=True,
                auto_melt_enabled=0, auto_melt_use_swap=OFF),
@@ -366,7 +361,6 @@ def test_mint_error_paths(
     w.through_store("Mint Errors")
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
-    w.post(step="swaps", swaps_enabled="0")
 
     body = w.post(step="mints", mints_enabled="1", mint_url="", backup_mint_url=mint.url)
     assert "main mint" in (wizard_error(body) or ""), wizard_error(body)
@@ -404,20 +398,28 @@ def test_resubmitting_the_mints_screen_is_idempotent(
 ) -> None:
     """Going Back and re-confirming mints must not mint a second seed (which
     would orphan any ecash already issued against the first) nor duplicate the
-    backup mint row."""
+    backup mint row. Declining first and then choosing a mint via Back must
+    also lift the strict pin the decline set."""
     w = SetupWizard(payserver.url)
     w.through_store("Idempotent Store")
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
-    w.post(step="swaps", swaps_enabled="0")
+
+    body = w.post(step="mints", mints_enabled="0")
+    assert wizard_error(body) is None, wizard_error(body)
+    assert _store(payserver)["strict_no_mint_fallback"] == ON, "declining pins strict"
+    body = w.get("mints")
+    assert wizard_heading(body) == "Cashu mints", "Back onto the mints screen after completion"
 
     mint_answer = dict(
         step="mints", mints_enabled="1",
         mint_url=mint.url, backup_mint_url=backup_mint.url, mint_unit="sat",
     )
-    w.post(**mint_answer)
+    body = w.post(**mint_answer)
+    assert wizard_error(body) is None, wizard_error(body)
     first = _store(payserver)["seed_phrase"]
     assert first
+    assert _store(payserver)["strict_no_mint_fallback"] == OFF, "choosing a mint after a decline lifts the strict pin"
 
     w.post(**mint_answer)
     assert _store(payserver)["seed_phrase"] == first, "the wallet seed must not be regenerated"
@@ -430,7 +432,7 @@ def test_completion_screen_warns_when_no_rail_was_configured(
 ) -> None:
     """Skipping every rail leaves a store that cannot be paid. The final screen
     has to say so rather than claiming the server is ready."""
-    w = walk(payserver, Choices(onchain="skip", lightning="skip", swaps=False, mints=False))
+    w = walk(payserver, Choices(onchain="skip", lightning="skip", mints=False))
     body = w.post(step="cron")
     assert wizard_heading(body).startswith("You"), wizard_heading(body)
     assert "No payment method yet" in body
@@ -441,7 +443,7 @@ def test_completion_screen_is_clean_when_a_rail_exists(
     payserver_with_lnurlp: PayserverHandle,
 ) -> None:
     payserver = payserver_with_lnurlp
-    w = walk(payserver, Choices(onchain="xpub", lightning="address", swaps=True, mints=False))
+    w = walk(payserver, Choices(onchain="xpub", lightning="address", mints=False))
     body = w.post(step="cron")
     assert "No payment method is set up yet" not in body
 
@@ -458,7 +460,7 @@ def test_completion_screen_does_not_cry_wolf_on_a_fresh_session(
     tail POST is bounced to admin), so the fresh session signs in first; it
     still has no wizard store id."""
     payserver = payserver_with_lnurlp
-    walk(payserver, Choices(onchain="skip", lightning="address", swaps=False, mints=False))
+    walk(payserver, Choices(onchain="skip", lightning="address", mints=False))
 
     stranger = SetupWizard(payserver.url)  # brand new cookie jar
     r = stranger.s.post(stranger.url, data={"step": "cron"}, timeout=15, allow_redirects=False)
@@ -486,7 +488,7 @@ def test_wizard_updates_screen_persists_the_choice(payserver: PayserverHandle) -
     """The auto-update screen writes the instance-level opt-in both ways: an
     explicit "Not now" is a decision (stored false), and enabling stores true.
     walk() already answers it with "0", so re-post the screen to flip it."""
-    walk(payserver, Choices(onchain="skip", lightning="skip", swaps=False, mints=False))
+    walk(payserver, Choices(onchain="skip", lightning="skip", mints=False))
     assert _config(payserver, "auto_update_enabled") == "false", (
         "declining automatic updates must persist an explicit false"
     )
@@ -500,24 +502,24 @@ def test_wizard_updates_screen_persists_the_choice(payserver: PayserverHandle) -
     )
 
 
-def test_first_run_swaps_answer_sets_only_the_store_flag(payserver: PayserverHandle) -> None:
+def test_first_run_xpub_default_sets_only_the_store_swaps_flag(payserver: PayserverHandle) -> None:
     """Swaps are store-only now: saying yes on a first run writes the store
     flag and must NOT create a site-wide swaps_enabled config row — that key
     no longer exists as a setting, and a row here would just be a stale-looking
     artifact (it is ignored by resolution either way)."""
-    walk(payserver, Choices(onchain="xpub", lightning="skip", swaps=True, mints=False))
+    walk(payserver, Choices(onchain="xpub", lightning="skip", mints=False))
     assert _config(payserver, "swaps_enabled") is None, (
         "the wizard must not write a site-wide swaps_enabled config row"
     )
     assert _store(payserver)["swaps_enabled"] == ON
 
 
-def test_first_run_declining_swaps_writes_no_config_row(
+def test_first_run_without_an_xpub_leaves_swaps_off_and_writes_no_config_row(
     payserver: PayserverHandle,
 ) -> None:
     """Declining writes only the store flag too — the site-wide layer is gone,
     so no config row may appear in either direction."""
-    walk(payserver, Choices(onchain="xpub", lightning="skip", swaps=False, mints=False))
+    walk(payserver, Choices(onchain="skip", lightning="skip", mints=False))
     assert _config(payserver, "swaps_enabled") is None
     assert _store(payserver)["swaps_enabled"] == OFF
 
@@ -569,7 +571,7 @@ def test_swaps_resolution_is_store_only(
     has an xpub, so the on-chain requirement is met). The stale site-wide
     config row is planted on purpose: if any site fallback survived the
     refactor, the OFF and legacy-INHERIT rows would wrongly flip on."""
-    w = walk(payserver, Choices(onchain="xpub", lightning="skip", swaps=False, mints=False))
+    w = walk(payserver, Choices(onchain="xpub", lightning="skip", mints=False))
     _seed_stale_site_swaps_row(payserver)
     _set_store_swaps_flag(payserver, flag)
 
@@ -598,7 +600,7 @@ def test_add_store_applies_the_same_rail_resolution(
     """A store added later must get the same derived state a first-run store
     would — including the swap sweep rail, which only the combination of
     mints + swaps + xpub produces."""
-    w = walk(payserver, Choices(onchain="skip", lightning="skip", swaps=False, mints=False),
+    w = walk(payserver, Choices(onchain="skip", lightning="skip", mints=False),
              store_name="First Store")
     w.login(payserver.url)
     # Same (admin) session, primed under add_store so the wizard's store id is
@@ -610,7 +612,6 @@ def test_add_store_applies_the_same_rail_resolution(
             onchain_address_mode="xpub", onchain_xpub=MAINNET_XPUB)
     w2.post(step="lightning", lightning_action="skip")
     w2.post(step="zeroconf", zero_conf="1")
-    w2.post(step="swaps", swaps_enabled="1")
     body = w2.post(step="mints", mints_enabled="1",
                    mint_url=mint.url, backup_mint_url=backup_mint.url, mint_unit="sat")
     assert wizard_error(body) is None, wizard_error(body)
@@ -626,7 +627,7 @@ def test_add_store_applies_the_same_rail_resolution(
         conn.close()
 
     assert added is not None, "add_store must create a second store"
-    assert added["swaps_enabled"] == ON
+    assert added["swaps_enabled"] == ON, "add_store applies the xpub swaps default too"
     assert added["strict_no_mint_fallback"] == INHERIT
     assert added["onchain_min_confs"] == 0
     assert added["auto_melt_enabled"] == 1

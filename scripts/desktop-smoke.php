@@ -20,9 +20,11 @@
  * against real Apache and nginx containers.
  *
  * The optional shape argument selects which wizard the target shows:
- *   desktop (default)  terms -> password, "of 10", no security or cron screens
- *   server             terms -> security -> password, "of 12" (data dir
- *                      inside the webroot), cron screen with a crontab line
+ *   desktop (default)  terms -> analytics -> install type -> password,
+ *                      "of 11", no security or cron screens
+ *   server             terms -> analytics -> install type -> security ->
+ *                      password, "of 13" (data dir inside the webroot), cron
+ *                      screen with a crontab line
  *
  * Usage: php desktop-smoke.php <base-url> [desktop|server]   (exit 0 = pass)
  */
@@ -174,21 +176,32 @@ $wpost = function (array $data) use ($ch, $setupUrl, &$wizardCsrf): string {
 
 // --- 2. The wizard, in the requested shape, to completion --------------------
 $body = $wpost(['step' => 'terms', 'terms_legal' => '1', 'terms_warranty' => '1', 'terms_fee' => '1']);
+// Both shapes ask about anonymous usage statistics on screen two; decline
+// (the default), then pick the "something else" installation type, which
+// keeps every rail screen.
+if (heading($body) !== 'Anonymous usage statistics') {
+    fail("accepting the terms must land on the usage-statistics screen, landed on '" . heading($body) . "'", $body);
+}
+$body = $wpost(['step' => 'analytics', 'usage_stats' => '0']);
+if (heading($body) !== 'Choose your installation type') {
+    fail("declining usage statistics must land on the installation-type screen, landed on '" . heading($body) . "'", $body);
+}
+$body = $wpost(['step' => 'install_type', 'install_type' => 'other']);
 if ($shape === 'desktop') {
     if (heading($body) !== 'Create your admin password') {
-        fail("desktop mode must go straight from terms to password, landed on '" . heading($body) . "'", $body);
+        fail("desktop mode must go straight from the installation type to password, landed on '" . heading($body) . "'", $body);
     }
-    if (strpos($body, 'of 10') === false) {
-        fail('step counter must show the desktop count ("of 10")', $body);
+    if (strpos($body, 'of 11') === false) {
+        fail('step counter must show the desktop count ("of 11")', $body);
     }
 } else {
     if (heading($body) !== 'Quick safety check') {
-        fail("server mode must show the security screen after terms, landed on '" . heading($body) . "'", $body);
+        fail("server mode must show the security screen after the installation type, landed on '" . heading($body) . "'", $body);
     }
-    // "of 12": full sequence minus zeroconf (no on-chain rail in this walk),
+    // "of 13": full sequence minus zeroconf (no on-chain rail in this walk),
     // with the security screen present (data dir inside the webroot).
-    if (strpos($body, 'of 12') === false) {
-        fail('step counter must show the server count ("of 12")', $body);
+    if (strpos($body, 'of 13') === false) {
+        fail('step counter must show the server count ("of 13")', $body);
     }
     $body = $wpost(['step' => 'security', 'security_acknowledged' => '1']);
     if (heading($body) !== 'Create your admin password') {
@@ -197,27 +210,29 @@ if ($shape === 'desktop') {
 }
 
 $password = 'desktop-smoke-pw-1234';
-$wpost(['step' => 'password', 'password' => $password, 'confirm_password' => $password]);
+$body = $wpost(['step' => 'password', 'password' => $password, 'confirm_password' => $password]);
+if (heading($body) !== 'E-mail notifications') {
+    fail("the password must land on the e-mail screen, landed on '" . heading($body) . "'", $body);
+}
+// No SMTP server in the smoke rig: skip the e-mail screen.
+$wpost(['step' => 'email', 'email_action' => 'skip']);
 $wpost(['step' => 'store', 'store_name' => 'Smoke Store', 'default_currency' => 'sat']);
 $wpost(['step' => 'onchain', 'onchain_action' => 'skip']);
 $wpost(['step' => 'lightning', 'lightning_action' => 'skip']);
-$wpost(['step' => 'swaps', 'swaps_enabled' => '0']);
 $body = $wpost(['step' => 'mints', 'mints_enabled' => '0']);
 // Both shapes ask the auto-update question after mints; decline it (the
 // safe default) the way a cautious merchant would.
 if (heading($body) !== 'Enable automatic updates?') {
     fail("declining mints must land on the auto-update screen, landed on '" . heading($body) . "'", $body);
 }
-$body = $wpost(['step' => 'updates', 'auto_update' => '0']);
-// Both shapes then ask about anonymous usage statistics; decline (the default).
-if (heading($body) !== 'Anonymous usage statistics') {
-    fail("declining auto-update must land on the usage-statistics screen, landed on '" . heading($body) . "'", $body);
+if (strpos($body, 'wizard-back-link') === false) {
+    fail('the auto-update screen must carry a Back link', $body);
 }
-$body = $wpost(['step' => 'analytics', 'usage_stats' => '0']);
+$body = $wpost(['step' => 'updates', 'auto_update' => '0']);
 
 if ($shape === 'desktop') {
     if (heading($body) !== "You're all set!") {
-        fail("declining usage statistics must land on the completion screen, landed on '" . heading($body) . "'", $body);
+        fail("declining auto-update must land on the completion screen, landed on '" . heading($body) . "'", $body);
     }
     if (strpos($body, 'Background jobs run automatically') === false) {
         fail('completion screen must carry the desktop background-jobs note', $body);
@@ -228,7 +243,10 @@ if ($shape === 'desktop') {
     ok('onboarding wizard completes in its desktop shape (no security or cron screens)');
 } else {
     if (heading($body) !== 'Enable cron') {
-        fail("declining usage statistics must land on the cron screen, landed on '" . heading($body) . "'", $body);
+        fail("declining auto-update must land on the cron screen, landed on '" . heading($body) . "'", $body);
+    }
+    if (strpos($body, 'wizard-back-link') === false) {
+        fail('the cron screen must carry a Back link', $body);
     }
     if (stripos($body, 'crontab') === false) {
         fail('server cron screen must show the crontab instructions', $body);

@@ -18,6 +18,7 @@ import pytest
 
 from fixtures.nutshell import MintHandle
 from fixtures.payserver import PayserverHandle
+from fixtures.setup_helpers import browser_walk_to_store
 from fixtures.strike_api import TEST_STRIKE_KEY, StrikeApiServer
 
 pytestmark = pytest.mark.ui
@@ -35,22 +36,12 @@ def _rows(payserver: PayserverHandle, sql: str) -> list[sqlite3.Row]:
 
 
 def _walk_to_lightning(page, payserver: PayserverHandle, store_name: str) -> None:
-    """terms → security ack → password → store name → skip on-chain → the
+    """terms → analytics → installation type ("something else", which keeps
+    the Strike API option as a section of the Lightning screen) → safety
+    check → password → e-mail skip → store name → skip on-chain → the
     lightning screen."""
     page.set_default_timeout(30000)
-    page.goto(f"{payserver.url}/setup")
-    page.check("#terms_legal")
-    page.check("#terms_warranty")
-    page.check("#terms_fee")
-    page.click("button[type=submit]")
-    page.check("#security_acknowledged")
-    page.click("button[type=submit]")
-    page.fill("#password", ADMIN_PW)
-    page.fill("#confirm_password", ADMIN_PW)
-    page.click("button[type=submit]")
-    page.wait_for_selector("#store_name")
-    page.fill("#store_name", store_name)
-    page.click("button[type=submit]")
+    browser_walk_to_store(page, payserver.url, ADMIN_PW, store_name=store_name)
     page.wait_for_selector("#onchain-form")
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("#lightning_address")
@@ -96,8 +87,8 @@ def test_strike_key_saves_as_chain_head(
     page.click("button[type=submit]:has-text('Continue')")
 
     # The save-time probe ran against the mock (one 1-sat test invoice) and
-    # the wizard advanced to the swaps screen.
-    page.wait_for_selector("h2:has-text('Submarine swaps')")
+    # the wizard advanced to the mints screen (no swaps screen any more).
+    page.wait_for_selector("h2:has-text('Cashu mints')")
     assert len(strike_api.invoices) == 1, "probe issued exactly one test invoice"
 
     rows = _rows(payserver, "SELECT type, address, position FROM store_ln_addresses ORDER BY position")

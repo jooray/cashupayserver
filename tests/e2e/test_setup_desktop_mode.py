@@ -39,25 +39,27 @@ def desktop_payserver() -> Iterator[PayserverHandle]:
 def test_desktop_flow_skips_security_and_cron(desktop_payserver: PayserverHandle) -> None:
     w = SetupWizard(desktop_payserver.url)
 
-    # terms → password directly: no security screen. On this rig the data dir
-    # sits inside the web root (the desktop package's own shape), which is
-    # precisely the case that used to force the screen in.
-    body = w.accept_terms()
+    # installation type → password directly: no security screen. On this rig
+    # the data dir sits inside the web root (the desktop package's own shape),
+    # which is precisely the case that used to force the screen in.
+    w.accept_terms()
+    w.decline_analytics()
+    body = w.choose_install_type("other")
     assert _heading(body) == "Create your admin password", (
-        "desktop mode must go straight from terms to password"
+        "desktop mode must go straight from the installation type to password"
     )
-    # 12 standalone screens minus security and cron.
-    assert "of 10" in body, "the step counter must not promise the dropped screens"
+    # 13 standalone screens minus security and cron.
+    assert "of 11" in body, "the step counter must not promise the dropped screens"
 
     w.post(
         step="password",
         password=SetupWizard.DEFAULT_PASSWORD,
         confirm_password=SetupWizard.DEFAULT_PASSWORD,
     )
+    w.skip_email()
     w.post(step="store", store_name="Desktop Store", default_currency="sat")
     w.post(step="onchain", onchain_action="skip")
-    w.post(step="lightning", lightning_action="skip")
-    body = w.post(step="swaps", swaps_enabled="0")
+    body = w.post(step="lightning", lightning_action="skip")
     assert _heading(body) == "Cashu mints"
 
     # Declining mints flips setup_complete. The auto-update question is asked
@@ -69,12 +71,8 @@ def test_desktop_flow_skips_security_and_cron(desktop_payserver: PayserverHandle
         "desktop mode still asks the auto-update question"
     )
     body = w.post(step="updates", auto_update="0")
-    assert _heading(body) == "Anonymous usage statistics", (
-        "desktop mode asks the usage-statistics question too"
-    )
-    body = w.post(step="analytics", usage_stats="0")
     assert _heading(body) == "You're all set!", (
-        "desktop mode must skip the cron screen after the usage-statistics question"
+        "desktop mode must skip the cron screen after the auto-update question"
     )
     assert "Background jobs run automatically" in body, (
         "the completion screen must say the launcher handles background jobs"
@@ -88,25 +86,29 @@ def test_server_flow_still_has_both_screens(payserver: PayserverHandle) -> None:
     w = SetupWizard(payserver.url)
 
     body = w.accept_terms()
+    assert _heading(body) == "Anonymous usage statistics", "the usage-statistics opt-in is screen two"
+    body = w.decline_analytics()
+    assert _heading(body) == "Choose your installation type", "the installation type is screen three"
+    body = w.choose_install_type("other")
     assert _heading(body) == "Quick safety check", "servers still get the security screen"
 
     body = w.post(step="security", security_acknowledged="1")
     assert _heading(body) == "Create your admin password"
 
-    w.post(
+    body = w.post(
         step="password",
         password=SetupWizard.DEFAULT_PASSWORD,
         confirm_password=SetupWizard.DEFAULT_PASSWORD,
     )
+    assert _heading(body) == "E-mail notifications"
+    w.skip_email()
     w.post(step="store", store_name="Server Store", default_currency="sat")
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
-    w.post(step="swaps", swaps_enabled="0")
     w.post(step="mints", mints_enabled="0")
     body = w.post(step="updates", auto_update="0")
-    assert _heading(body) == "Anonymous usage statistics"
-    body = w.post(step="analytics", usage_stats="0")
     assert _heading(body) == "Enable cron", "servers still get the cron screen"
+    assert 'id="wizard-back-link"' in body, "the cron screen has a Back link"
     # This Linux rig gets the crontab line, not the Windows schtasks variant.
     assert "crontab" in body
     assert "schtasks" not in body

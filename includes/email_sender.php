@@ -61,7 +61,24 @@ class EmailSender {
             return;
         }
 
-        $cfg = self::resolveConfig($storeId);
+        self::sendWithConfig(self::resolveConfig($storeId), $to, $subject, $body);
+    }
+
+    /**
+     * Send with an explicit config (the string map resolveConfig() returns:
+     * host, port, username, password, encryption, from_address, from_name)
+     * instead of the stored one. The setup wizard's e-mail screen uses this
+     * to prove a candidate configuration works BEFORE persisting it. Missing
+     * keys read as blank. Honors the test transport override like send().
+     */
+    public static function sendWithConfig(array $cfg, string $to, string $subject, string $body): void {
+        if (self::$transportOverride !== null) {
+            (self::$transportOverride)($to, $subject, $body);
+            return;
+        }
+        foreach (array_keys(self::FIELDS) as $key) {
+            $cfg[$key] = (string)($cfg[$key] ?? '');
+        }
 
         $fromAddress = $cfg['from_address'];
         if ($fromAddress === '') {
@@ -215,6 +232,51 @@ class EmailSender {
         }
         $env = getenv($name);
         return $env === false ? '' : (string)$env;
+    }
+
+    /**
+     * Parse and validate the SMTP server fields a settings form posts
+     * (smtp_host, smtp_port, smtp_username, smtp_password,
+     * smtp_password_clear, smtp_encryption, smtp_from_address,
+     * smtp_from_name). Returns trimmed scalars plus the raw password and a
+     * clear flag — the password is handled by the caller so the UI can keep
+     * it write-only. Throws on an invalid port / encryption / From address.
+     *
+     * Shared by the admin panel's global and per-store SMTP forms and by the
+     * setup wizard's e-mail screen, which all post the same field names.
+     */
+    public static function smtpFieldsFromPost(array $post): array {
+        $host = trim((string)($post['smtp_host'] ?? ''));
+        $port = trim((string)($post['smtp_port'] ?? ''));
+        $username = trim((string)($post['smtp_username'] ?? ''));
+        $encryption = strtolower(trim((string)($post['smtp_encryption'] ?? '')));
+        $fromAddress = trim((string)($post['smtp_from_address'] ?? ''));
+        $fromName = trim((string)($post['smtp_from_name'] ?? ''));
+        // Password is intentionally not trimmed — leading/trailing spaces can be
+        // significant in a credential.
+        $password = (string)($post['smtp_password'] ?? '');
+        $passwordClear = ($post['smtp_password_clear'] ?? '0') === '1';
+
+        if ($port !== '' && (!ctype_digit($port) || (int)$port < 1 || (int)$port > 65535)) {
+            throw new Exception('SMTP port must be a number between 1 and 65535');
+        }
+        if ($encryption !== '' && !in_array($encryption, ['tls', 'ssl', 'none'], true)) {
+            throw new Exception('SMTP encryption must be tls, ssl, or none');
+        }
+        if ($fromAddress !== '' && !filter_var($fromAddress, FILTER_VALIDATE_EMAIL)) {
+            throw new Exception('Invalid From address');
+        }
+
+        return [
+            'host' => $host,
+            'port' => $port,
+            'username' => $username,
+            'encryption' => $encryption,
+            'from_address' => $fromAddress,
+            'from_name' => $fromName,
+            'password' => $password,
+            'password_clear' => $passwordClear,
+        ];
     }
 
     /**

@@ -23,6 +23,7 @@ import pytest
 
 from fixtures.nutshell import MintHandle
 from fixtures.payserver import PayserverHandle
+from fixtures.setup_helpers import browser_walk_to_store
 
 pytestmark = pytest.mark.ui
 
@@ -46,28 +47,15 @@ def test_mint_discovery_finds_mints(
     page.on("console", lambda m: console_msgs.append(f"[{m.type}] {m.text}"))
 
     # Walk the onboarding wizard to the Cashu mints screen. Order:
-    # terms → security → password → store → on-chain (skip) → lightning (skip)
-    # → swaps (off) → mints. The mints screen hosts the same Discover-Mints
-    # modal and the discoveredMints / openMintDiscovery globals this test
-    # exercises.
-    page.goto(f"{payserver.url}/setup")
-    page.check("#terms_legal")
-    page.check("#terms_warranty")
-    page.check("#terms_fee")
-    page.click("button[type=submit]")
-    page.check("#security_acknowledged")
-    page.click("button[type=submit]")
-    page.fill("#password", "wizard-test-pw")
-    page.fill("#confirm_password", "wizard-test-pw")
-    page.click("button[type=submit]")
-    page.fill("#store_name", "Disco Store")
-    page.click("button[type=submit]")
+    # terms → analytics → installation type → security → password → e-mail
+    # → store → on-chain (skip) → lightning (skip) → mints. The mints screen
+    # hosts the same Discover-Mints modal and the discoveredMints /
+    # openMintDiscovery globals this test exercises.
+    browser_walk_to_store(page, payserver.url, "wizard-test-pw", store_name="Disco Store")
     page.wait_for_selector("#onchain-form")
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("#lightning_address")
     page.click("button:has-text('Skip for now')")
-    page.wait_for_selector("button:has-text('No thanks')")
-    page.click("button:has-text('No thanks')")
     page.wait_for_selector("#mint-manual-toggle")
 
     # Trigger the discovery modal + acknowledge disclaimer so the "Select"

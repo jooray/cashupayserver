@@ -90,12 +90,14 @@ $post = function (array $data) use ($srv, &$csrf): array {
     assert_true($r['status'] < 400, ($data['step'] ?? '?') . ' -> ' . $r['status']);
     return $r;
 };
+$post(['step' => 'analytics', 'usage_stats' => '0']);
+$post(['step' => 'install_type', 'install_type' => 'other']);
 $post(['step' => 'security', 'security_acknowledged' => '1']);
 $post(['step' => 'password', 'password' => 'csrf-test-pw-1234', 'confirm_password' => 'csrf-test-pw-1234']);
+$post(['step' => 'email', 'email_action' => 'skip']);
 $post(['step' => 'store', 'store_name' => 'CSRF Store', 'default_currency' => 'sat']);
 $post(['step' => 'onchain', 'onchain_action' => 'skip']);
 $post(['step' => 'lightning', 'lightning_action' => 'skip']);
-$post(['step' => 'swaps', 'swaps_enabled' => '0']);
 $post(['step' => 'mints', 'mints_enabled' => '0']);
 assert_true(cfg('setup_complete') === true, 'install complete');
 
