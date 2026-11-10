@@ -194,11 +194,9 @@ def test_cashu_type_nudges_lightning_and_requires_a_mint(payserver: PayserverHan
     w = SetupWizard(payserver.url)
     body = w.through_store("Cashu Store", install_type="cashu")
     assert wizard_heading(body) == "On-chain Bitcoin payments"
-    # Reworded warning at the top of the on-chain screen, for every type.
-    assert "Without an on-chain wallet customers won't be able to pay you with on-chain payments" in _flat(body)
-    assert "automatically sweep funds out of your Cashu mint" in _flat(body)
-    assert "swept to a Lightning wallet instead, which appears later in the setup" in _flat(body)
-    assert body.index("Without an on-chain wallet") < body.index('id="onchain-form"'), "the warning sits above the form"
+    # The on-chain screen carries no mint-sweep warning (removed 2026-11-09).
+    assert "Without an on-chain wallet" not in _flat(body)
+    assert "sweep funds out of your Cashu mint" not in _flat(body)
 
     body = w.post(step="onchain", onchain_action="skip")
     assert wizard_heading(body) == "Lightning payments"

@@ -88,6 +88,16 @@ assert_eq(
 );
 assert_eq('seed', SetupFlow::nextStep('mints', $withSeed), 'mints hands over to the seed screen');
 assert_eq('updates', SetupFlow::nextStep('seed', $withSeed), 'the auto-update question follows the seed screen');
+
+// Every installation type is asked about automatic updates — the type only
+// reshapes the rail screens, never the tail.
+foreach (SetupFlow::INSTALL_TYPES as $type) {
+    foreach ([false, true] as $seed) {
+        $seq = SetupFlow::stepSequence('', true, true, false, false, false, $type, $seed);
+        assert_true(in_array('updates', $seq, true), "install type $type (seed=" . var_export($seed, true) . ") keeps the updates screen");
+        assert_true(array_search('updates', $seq, true) > max(array_search('store', $seq, true), (int)array_search('strike', $seq, true), (int)array_search('mints', $seq, true)), "updates follows the rail screens for $type");
+    }
+}
 assert_eq('mints', SetupFlow::backStep('seed', $withSeed), 'Back from the seed screen returns to mints');
 assert_false(in_array('seed', SetupFlow::stepSequence('add_store', true, true, false, false, false, null, true), true), 'add_store has its own hand-off panel, never the seed screen');
 

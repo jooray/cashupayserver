@@ -2116,7 +2116,7 @@ function renderUrlModeDetectionScript(): void { ?>
                             'You don\'t have full control over your funds (Strike does)',
                             'May not be available in your region',
                         ],
-                        'note' => 'Sets up a single Strike screen instead of the on-chain and Lightning wallet screens; Cashu mints stay off.',
+                        'note' => '',
                     ],
                     'own_wallet' => [
                         'title' => '👛 My Own Wallet',
@@ -2797,13 +2797,6 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 }
                 ?>
                 <h2 style="margin-bottom: 1rem;">⛓️ On-chain Bitcoin payments</h2>
-                <div class="warning" style="margin-bottom: 1rem;">
-                    Without an on-chain wallet customers won't be able to pay
-                    you with on-chain payments, nor will we be able to
-                    automatically sweep funds out of your Cashu mint. Mint funds
-                    can be swept to a Lightning wallet instead, which appears
-                    later in the setup.
-                </div>
                 <p style="margin-bottom: 0.75rem;">
                     On-chain payments from your customers always land straight
                     in your off-server wallet. 👛
@@ -3535,8 +3528,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 </p>
                 <p style="margin-bottom: 1.25rem; font-size: 0.9rem; color: #a0aec0;">
                     BareBits talks to Strike with an API key. Don't have a
-                    Strike account yet? Sign up at strike.me first &mdash; a
-                    business account needs Strike's approval.
+                    Strike account yet? Sign up at strike.me first.
                 </p>
 
                 <form method="POST" action="<?= htmlspecialchars(setupSelfUrl()) ?>">
