@@ -101,7 +101,6 @@ def _walk_wizard_mintless(url: str, store: str) -> None:
     w.through_store(store)
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
-    w.post(step="swaps", swaps_enabled="0")
     w.post(step="mints", mints_enabled="0")
 
 

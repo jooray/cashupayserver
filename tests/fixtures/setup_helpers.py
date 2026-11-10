@@ -103,6 +103,62 @@ def wizard_heading(body: str) -> str:
     return text[i:].strip()
 
 
+def browser_walk_to_store(
+    page,
+    base_url: str,
+    password: str,
+    *,
+    install_type: str = "other",
+    store_name: str | None = None,
+) -> None:
+    """Playwright: drive the wizard from the terms gate to the store screen
+    (terms → analytics decline → installation type → safety check → password
+    → e-mail skip), optionally naming the store too and landing on the first
+    rail screen.
+
+    The safety check auto-advances when every probe passes, so it is not
+    clicked: the walk simply waits for the password field. When the screen is
+    held (a failing probe, or a GMP-less host on the own-wallet / Cashu
+    types) it ticks the acknowledgement itself, so the same helper works on
+    every rig. A screen that is absent from the flow (desktop mode, data dir
+    outside the web root) is skipped the same way."""
+    page.goto(f"{base_url.rstrip('/')}/setup")
+    page.check("#terms_legal")
+    page.check("#terms_warranty")
+    page.check("#terms_fee")
+    page.click("button[type=submit]")
+
+    page.wait_for_selector("button[name='usage_stats'][value='0']")
+    page.click("button[name='usage_stats'][value='0']")
+
+    page.wait_for_selector(f"#install-option-{install_type}")
+    page.click(f"#install-option-{install_type} > summary")
+    page.click(f"button[name='install_type'][value='{install_type}']")
+
+    page.wait_for_selector("#password, #security_acknowledged")
+    if page.locator("#security_acknowledged").count() > 0:
+        # Give the auto-advance its chance (both probes have to finish);
+        # fall back to acknowledging by hand when the screen is held.
+        try:
+            page.wait_for_selector("#password", timeout=8000)
+        except Exception:
+            if page.locator("#security_acknowledged").count() > 0:
+                page.check("#security_acknowledged")
+                page.click("#security-form button[type=submit]")
+                page.wait_for_selector("#password")
+    page.fill("#password", password)
+    page.fill("#confirm_password", password)
+    page.click("button[type=submit]")
+
+    page.wait_for_selector("#email-form")
+    page.click("button:has-text('Skip for now')")
+    page.wait_for_selector("#store_name")
+
+    if store_name is not None:
+        page.fill("#store_name", store_name)
+        page.click("button[type=submit]")
+
+
 class SetupWizard:
     """A cookie-carrying session pointed at one payserver's /setup.
 
@@ -186,15 +242,43 @@ class SetupWizard:
         acknowledgement."""
         return self.post(step="terms", terms_legal="1", terms_warranty="1", terms_fee="1")
 
-    def through_store(self, name: str = "Wizard Store", default_currency: str = "sat") -> str:
-        """terms → security ack → password → store name, landing on the on-chain screen."""
+    def decline_analytics(self) -> str:
+        """Screen two: decline the anonymous usage-statistics opt-in."""
+        return self.post(step="analytics", usage_stats="0")
+
+    def choose_install_type(self, install_type: str = "other") -> str:
+        """Screen three: pick an installation type (SetupFlow::INSTALL_TYPES).
+        'other' keeps every rail screen, which is what most walkers want."""
+        return self.post(step="install_type", install_type=install_type)
+
+    def skip_email(self) -> str:
+        """The e-mail notifications screen (after the password): skip it —
+        the e2e stack has no SMTP server to send the verification mail through."""
+        return self.post(step="email", email_action="skip")
+
+    def through_store(
+        self,
+        name: str = "Wizard Store",
+        default_currency: str = "sat",
+        install_type: str = "other",
+    ) -> str:
+        """terms → analytics decline → installation type → security ack →
+        password → e-mail skip → store name, landing on the first rail screen
+        (on-chain, or the Strike screen for install_type='strike').
+
+        The security POST is harmless when that screen is skipped (data dir
+        outside the web root, or desktop mode): an unexpected step simply
+        re-renders without advancing, and the next POST names its own step."""
         self.accept_terms()
+        self.decline_analytics()
+        self.choose_install_type(install_type)
         self.post(step="security", security_acknowledged="1")
         self.post(
             step="password",
             password=self.DEFAULT_PASSWORD,
             confirm_password=self.DEFAULT_PASSWORD,
         )
+        self.skip_email()
         return self.post(step="store", store_name=name, default_currency=default_currency)
 
 
@@ -238,11 +322,20 @@ def run_setup_wizard(
     # including the incoming-fee acknowledgement).
     post("terms", 10, step="terms", terms_legal="1", terms_warranty="1", terms_fee="1")
 
+    # analytics: decline the anonymous usage-statistics opt-in
+    post("analytics", 10, step="analytics", usage_stats="0")
+
+    # install_type: "something else" keeps every rail screen
+    post("install_type", 10, step="install_type", install_type="other")
+
     # security: acknowledge the database-exposure check
     post("security", 10, step="security", security_acknowledged="1")
 
     # password: admin credentials
     post("password", 10, step="password", password=admin_password, confirm_password=admin_password)
+
+    # email: skip — no SMTP server in the e2e stack to verify against
+    post("email (skip)", 10, step="email", email_action="skip")
 
     # store: name + default display/quote currency
     post("store", 10, step="store", store_name=store_name, default_currency=default_currency)
@@ -251,14 +344,12 @@ def run_setup_wizard(
     # zeroconf screen from the sequence.
     post("onchain (skip)", 15, step="onchain", onchain_action="skip")
 
-    # lightning: skip — no LNURL address or noffer.
+    # lightning: skip — no LNURL address or noffer. (Swaps have no screen:
+    # they default off here because this path saved no xpub.)
     post("lightning (skip)", 15, step="lightning", lightning_action="skip")
 
-    # swaps: off (they need an xpub, which this path skipped).
-    post("swaps (off)", 15, step="swaps", swaps_enabled="0")
-
     # mints: main + backup in one submit. Completes setup; the seed phrase is
-    # generated server-side here and surfaced on the `done` screen.
+    # generated server-side here and surfaced on the `seed` screen.
     post(
         "mints",
         60,
@@ -290,7 +381,7 @@ def run_add_store_wizard(
     default_currency: str = "sat",
 ) -> None:
     """Walk the admin-gated add_store wizard (store → onchain skip →
-    lightning skip → swaps off → mints), creating one more store on an
+    lightning skip → mints), creating one more store on an
     already-set-up instance. Each store minted this way gets its own fresh
     wallet seed, so stores on a shared instance never collide at the mint."""
     s = requests.Session()
@@ -320,7 +411,6 @@ def run_add_store_wizard(
     post("store", step="store", store_name=store_name, default_currency=default_currency)
     post("onchain (skip)", step="onchain", onchain_action="skip")
     post("lightning (skip)", step="lightning", lightning_action="skip")
-    post("swaps (off)", step="swaps", swaps_enabled="0")
     post(
         "mints",
         timeout=60,

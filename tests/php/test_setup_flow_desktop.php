@@ -18,24 +18,23 @@ require_once dirname(__DIR__, 2) . '/includes/desktop.php';
 
 $desktop = SetupFlow::stepSequence('', false, true, true);
 assert_eq(
-    ['terms', 'security', 'password', 'store', 'onchain', 'lightning', 'swaps', 'mints', 'updates', 'analytics', 'done'],
+    ['terms', 'analytics', 'install_type', 'security', 'password', 'email', 'store', 'onchain', 'lightning', 'mints', 'updates', 'done'],
     $desktop,
     'desktop drops the cron screen but keeps the auto-update question'
 );
 assert_eq('updates', SetupFlow::nextStep('mints', $desktop), 'on desktop, the auto-update question follows mints');
-assert_eq('analytics', SetupFlow::nextStep('updates', $desktop), 'on desktop, the usage-statistics question follows the auto-update question');
-assert_eq('done', SetupFlow::nextStep('analytics', $desktop), 'on desktop, done follows the usage-statistics question');
+assert_eq('done', SetupFlow::nextStep('updates', $desktop), 'on desktop, done follows the auto-update question');
 
 // The realistic desktop shape: data dir sits inside the web root (app/data),
 // but the security screen is dropped by the caller anyway because the server
 // only listens on loopback — both screens gone.
 $desktopNoSecurity = SetupFlow::stepSequence('', false, false, true);
 assert_eq(
-    ['terms', 'password', 'store', 'onchain', 'lightning', 'swaps', 'mints', 'updates', 'analytics', 'done'],
+    ['terms', 'analytics', 'install_type', 'password', 'email', 'store', 'onchain', 'lightning', 'mints', 'updates', 'done'],
     $desktopNoSecurity,
     'the shipped desktop flow has neither the security nor the cron screen'
 );
-assert_eq('password', SetupFlow::nextStep('terms', $desktopNoSecurity), 'terms goes straight to password on desktop');
+assert_eq('password', SetupFlow::nextStep('install_type', $desktopNoSecurity), 'the installation type goes straight to password on desktop');
 
 // Omitting the flag keeps the screen — every historical call site behaves
 // as before.

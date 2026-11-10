@@ -5,7 +5,7 @@ that write different state:
 
   - declining Cashu mints pins the per-store strict-no-mint-fallback flag and
     leaves the store without a mint rail at all
-  - submarine swaps cannot be enabled without an xpub
+  - submarine swaps stay off without an xpub (they have no screen)
   - a CLINK noffer is accepted alongside a Lightning address and ordered after
     it, matching the chain Invoice::create walks
   - add_store mode runs the same screens against an already-configured install
@@ -23,6 +23,7 @@ import pytest
 from fixtures.browser import open_manual_mints
 from fixtures.nutshell import MintHandle
 from fixtures.payserver import PayserverHandle
+from fixtures.setup_helpers import browser_walk_to_store
 
 pytestmark = pytest.mark.ui
 
@@ -50,19 +51,10 @@ def _rows(payserver: PayserverHandle, sql: str) -> list[sqlite3.Row]:
 
 
 def _walk_to_store(page, payserver: PayserverHandle) -> None:
-    """terms → security ack → password → the store-name screen."""
+    """terms → analytics → installation type → safety check → password →
+    e-mail skip → the store-name screen."""
     page.set_default_timeout(30000)
-    page.goto(f"{payserver.url}/setup")
-    page.check("#terms_legal")
-    page.check("#terms_warranty")
-    page.check("#terms_fee")
-    page.click("button[type=submit]")
-    page.check("#security_acknowledged")
-    page.click("button[type=submit]")
-    page.fill("#password", ADMIN_PW)
-    page.fill("#confirm_password", ADMIN_PW)
-    page.click("button[type=submit]")
-    page.wait_for_selector("#store_name")
+    browser_walk_to_store(page, payserver.url, ADMIN_PW)
 
 
 def test_declining_mints_pins_strict_mode(
@@ -84,19 +76,15 @@ def test_declining_mints_pins_strict_mode(
     page.wait_for_selector("button:has-text('Wait for 1 confirmation')")
     page.click("button:has-text('Wait for 1 confirmation')")
 
-    page.wait_for_selector("button:has-text('Enable submarine swaps')")
-    page.click("button:has-text('Enable submarine swaps')")
-
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
 
     page.wait_for_selector("h2:has-text('Enable automatic updates?')")
     page.click("button:has-text('Not now')")
-    page.wait_for_selector("h2:has-text('Anonymous usage statistics')")
-    page.click("button[name='usage_stats'][value='0']")
     page.wait_for_selector("h2:has-text('Enable cron')")
 
     row = _rows(payserver, "SELECT * FROM stores")[0]
+    assert row["swaps_enabled"] == 1, "an xpub switches submarine swaps on without a screen"
     assert row["strict_no_mint_fallback"] == 1, "declining mints must pin strict mode on the store"
     assert not row["mint_url"], "no mint should have been configured"
     assert not row["seed_phrase"], "no mint means no mint wallet seed"
@@ -104,9 +92,11 @@ def test_declining_mints_pins_strict_mode(
     assert _rows(payserver, "SELECT * FROM store_mints") == [], "no backup mints either"
 
 
-def test_swaps_cannot_be_enabled_without_an_xpub(
+def test_swaps_stay_off_without_an_xpub(
     payserver: PayserverHandle, mint: MintHandle, page
 ) -> None:
+    """Swaps have no screen: skipping on-chain goes straight from Lightning to
+    the mints screen, and the store ends up with swaps off."""
     _walk_to_store(page, payserver)
     page.fill("#store_name", "No Xpub Store")
     page.click("button[type=submit]")
@@ -117,10 +107,12 @@ def test_swaps_cannot_be_enabled_without_an_xpub(
     page.wait_for_selector("#lightning_address")
     page.click("button:has-text('Skip for now')")
 
-    page.wait_for_selector("button:has-text('No thanks')")
-    enable = page.locator("button:has-text('Enable submarine swaps')")
-    assert enable.is_disabled(), "swaps need an on-chain xpub, so the button must be disabled"
-    assert "they need an xpub" in page.content()
+    page.wait_for_selector("h2:has-text('Cashu mints')")
+    assert page.locator("button:has-text('Enable submarine swaps')").count() == 0
+    page.click("button:has-text('No thanks, run without mints')")
+    page.wait_for_selector("h2:has-text('Enable automatic updates?')")
+    row = _rows(payserver, "SELECT * FROM stores")[0]
+    assert row["swaps_enabled"] == 0, "no xpub, so swaps stay off"
 
 
 def test_noffer_is_stored_after_the_lightning_address(
@@ -160,7 +152,7 @@ def test_add_another_noffer_button_saves_multiple(
     second row, and both persist as ordered chain rows. Noffers carry no
     save-time LUD-21 probe, so the plain payserver stack suffices. Also pins
     the section's ONLINE warning and the separate-relays helper copy."""
-    from fixtures.setup_helpers import SECOND_NOFFER
+    from fixtures.setup_helpers import browser_walk_to_store, SECOND_NOFFER
 
     _walk_to_store(page, payserver)
     page.fill("#store_name", "Multi Noffer Store")
@@ -289,14 +281,10 @@ def test_add_store_mode_runs_the_same_screens(
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("#lightning_address")
     page.click("button:has-text('Skip for now')")
-    page.wait_for_selector("button:has-text('No thanks')")
-    page.click("button:has-text('No thanks')")
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
     page.wait_for_selector("h2:has-text('Enable automatic updates?')")
     page.click("button:has-text('Not now')")
-    page.wait_for_selector("h2:has-text('Anonymous usage statistics')")
-    page.click("button[name='usage_stats'][value='0']")
     page.wait_for_selector("h2:has-text('Enable cron')")
 
     page.goto(f"{payserver.url}/admin")
@@ -306,9 +294,9 @@ def test_add_store_mode_runs_the_same_screens(
 
     page.goto(f"{payserver.url}/setup?mode=add_store")
     page.wait_for_selector("h1:has-text('Add New Store')")
-    # add_store mode has no security/password ahead of it, and the counter
-    # starts at five because zero-conf only joins once an on-chain rail exists.
-    assert "Step 1 of 5" in page.locator(".subtitle").inner_text()
+    # add_store mode has no pre-store screens ahead of it, and the counter
+    # starts at four because zero-conf only joins once an on-chain rail exists.
+    assert "Step 1 of 4" in page.locator(".subtitle").inner_text()
     page.fill("#store_name", "Second Store")
     page.click("button[type=submit]")
 
@@ -316,8 +304,6 @@ def test_add_store_mode_runs_the_same_screens(
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("#lightning_address")
     page.click("button:has-text('Skip for now')")
-    page.wait_for_selector("button:has-text('No thanks')")
-    page.click("button:has-text('No thanks')")
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
 
@@ -341,14 +327,10 @@ def test_add_store_with_mints_shows_the_generated_seed_once(
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("#lightning_address")
     page.click("button:has-text('Skip for now')")
-    page.wait_for_selector("button:has-text('No thanks')")
-    page.click("button:has-text('No thanks')")
     page.wait_for_selector("button:has-text('No thanks, run without mints')")
     page.click("button:has-text('No thanks, run without mints')")
     page.wait_for_selector("h2:has-text('Enable automatic updates?')")
     page.click("button:has-text('Not now')")
-    page.wait_for_selector("h2:has-text('Anonymous usage statistics')")
-    page.click("button[name='usage_stats'][value='0']")
     page.wait_for_selector("h2:has-text('Enable cron')")
 
     page.goto(f"{payserver.url}/admin")
@@ -364,8 +346,7 @@ def test_add_store_with_mints_shows_the_generated_seed_once(
     page.click("button:has-text('Skip for now')")
     page.wait_for_selector("#lightning_address")
     page.click("button:has-text('Skip for now')")
-    page.wait_for_selector("button:has-text('No thanks')")
-    page.click("button:has-text('No thanks')")
+    page.wait_for_selector("h2:has-text('Cashu mints')")
 
     open_manual_mints(page)
     page.fill("#mint_url_manual", mint.url)

@@ -224,6 +224,19 @@ class Auth {
         Database::delete('config', 'key = ?', ['admin_password_hash']);
     }
 
+    /**
+     * Set (or clear, with '') the admin account's e-mail address — the
+     * destination of the e-mailed password-reset link. No-op when the admin
+     * account does not exist yet.
+     */
+    public static function setAdminEmail(string $email): void {
+        $existing = self::getUserByUsername('admin');
+        if (!$existing) {
+            return;
+        }
+        Database::update('users', ['email' => $email !== '' ? $email : null], 'id = ?', [$existing['id']]);
+    }
+
     public static function getUserById(string $userId): ?array {
         $row = Database::fetchOne(
             "SELECT id, username, role, email, created_at FROM users WHERE id = ?",

@@ -43,19 +43,24 @@ def _walk_barebits_wizard(wp: WordPressHandle, mint_url: str, backup_mint_url: s
     merchant never types a BareBits password), and CASHUPAY_MANAGED_INSTALL
     (cron screen skipped)."""
     wiz = SetupWizard(wp.url, setup_path="/barebits/setup.php")
-    body = wiz.accept_terms()
+    wiz.accept_terms()
+    wiz.decline_analytics()
+    body = wiz.choose_install_type("other")
     heading = wizard_heading(body)
-    # Managed install: terms lands straight on the store screen — no
-    # security screen (data dir outside the web root) and no password screen
-    # (the admin account was pre-seeded from CASHUPAY_ADMIN_PASSWORD_HASH).
+    # Managed install: the installation type lands straight on the e-mail
+    # screen — no security screen (data dir outside the web root) and no
+    # password screen (the admin account was pre-seeded from
+    # CASHUPAY_ADMIN_PASSWORD_HASH).
     assert "password" not in heading.lower(), (
         f"password screen rendered despite the pre-seeded admin: {heading!r}"
     )
+    assert heading == "E-mail notifications", f"expected the e-mail screen, got {heading!r}"
+    body = wiz.skip_email()
+    heading = wizard_heading(body)
     assert "store" in heading.lower(), f"expected the store screen, got {heading!r}"
     body = wiz.post(step="store", store_name="Alongside Store", default_currency="sat")
     body = wiz.post(step="onchain", onchain_action="skip")
     body = wiz.post(step="lightning", lightning_action="skip")
-    body = wiz.post(step="swaps", swaps_enabled="0")
     body = wiz.post(
         step="mints",
         mints_enabled="1",
@@ -63,12 +68,12 @@ def _walk_barebits_wizard(wp: WordPressHandle, mint_url: str, backup_mint_url: s
         backup_mint_url=backup_mint_url,
         mint_unit="sat",
     )
-    # Managed installs still get the auto-update question after mints…
+    # The mints answer minted a wallet seed: the recovery-phrase screen
+    # follows, then the auto-update question…
+    assert wizard_heading(body) == "Save your recovery phrase", wizard_heading(body)
+    body = wiz.post(step="seed", seed_saved="1")
     assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
     body = wiz.post(step="updates", auto_update="0")
-    # …and the usage-statistics question…
-    assert wizard_heading(body) == "Anonymous usage statistics", wizard_heading(body)
-    body = wiz.post(step="analytics", usage_stats="0")
     # …then must land on completion, never the crontab screen — WP-cron owns
     # the heartbeat.
     heading = wizard_heading(body)

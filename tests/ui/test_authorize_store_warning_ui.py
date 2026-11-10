@@ -25,7 +25,7 @@ pytestmark = pytest.mark.ui
 
 def _create_zero_rail_store(configured: ConfiguredPayserver, store_name: str) -> str:
     """Walk the add_store wizard declining every rail (onchain skip,
-    lightning skip, swaps off, mints declined); returns the new store id."""
+    lightning skip, mints declined); returns the new store id."""
     s = requests.Session()
     r = s.post(
         f"{configured.handle.url}/admin",
@@ -45,7 +45,6 @@ def _create_zero_rail_store(configured: ConfiguredPayserver, store_name: str) ->
     post(step="store", store_name=store_name, default_currency="sat")
     post(step="onchain", onchain_action="skip")
     post(step="lightning", lightning_action="skip")
-    post(step="swaps", swaps_enabled="0")
     post(step="mints", mints_enabled="0")
 
     stores = configured.admin.list_stores()

@@ -107,18 +107,34 @@ def _set_config(handle: PayserverHandle, key: str, value) -> None:
 
 
 def _walk_to_analytics(handle: PayserverHandle) -> tuple[SetupWizard, str]:
-    """Answer every screen up to (not including) the analytics screen, with a
-    mint configured so the payload has something identifying to leave out."""
+    """The analytics screen is screen two: only the terms gate precedes it."""
     w = SetupWizard(handle.url)
-    w.through_store(STORE_NAME)
+    body = w.accept_terms()
+    assert wizard_heading(body) == "Anonymous usage statistics", wizard_heading(body)
+    return w, body
+
+
+def _finish_wizard(w: SetupWizard) -> str:
+    """From the installation-type screen to completion, declining every rail
+    (no mint fixtures needed). Answering the last rail screen is what marks
+    the install complete — and sends the deferred first usage report when
+    the operator opted in on screen two. Returns the done-screen body."""
+    w.choose_install_type("other")
+    w.post(step="security", security_acknowledged="1")
+    w.post(
+        step="password",
+        password=SetupWizard.DEFAULT_PASSWORD,
+        confirm_password=SetupWizard.DEFAULT_PASSWORD,
+    )
+    w.skip_email()
+    w.post(step="store", store_name=STORE_NAME, default_currency="sat")
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
-    w.post(step="swaps", swaps_enabled="0")
     body = w.post(step="mints", mints_enabled="0")
     assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
     body = w.post(step="updates", auto_update="0")
-    assert wizard_heading(body) == "Anonymous usage statistics", wizard_heading(body)
-    return w, body
+    assert wizard_heading(body) == "Enable cron", wizard_heading(body)
+    return w.post(step="cron")
 
 
 def _previews_from_wizard(body: str) -> dict[int, dict]:
@@ -165,18 +181,23 @@ def test_wizard_screen_previews_every_level_and_declining_sends_nothing(request,
         assert p["install_id"] == "(random id, generated when you enable)", "no id exists before opting in"
         assert p["properties"]["install_kind"] == "standalone"
     assert set(previews[1]["properties"]) < set(previews[2]["properties"]) < set(previews[3]["properties"])
-    assert previews[2]["properties"]["store_count"] == 1
+    # Screen two comes before the store exists, so the preview is honest
+    # about that: nothing to count yet.
+    assert previews[2]["properties"]["store_count"] == 0
     assert "stores_with_mint" in previews[2]["properties"]
     for forbidden in ("SECRET-DEPLOYMENT-7", STORE_NAME, "secret-fixture", "mint_url", "deployment"):
         assert forbidden not in json.dumps(previews[3]), f"preview must not contain {forbidden!r}"
 
-    # Decline: explicit off, no id minted, nothing reaches the endpoint, on to cron.
+    # Decline: explicit off, no id minted, nothing reaches the endpoint, on
+    # to the installation type.
     body = w.post(step="analytics", usage_stats="0")
     assert wizard_error(body) is None, wizard_error(body)
-    assert wizard_heading(body) == "Enable cron", wizard_heading(body)
+    assert wizard_heading(body) == "Choose your installation type", wizard_heading(body)
     assert _config(handle, "usage_stats_enabled") is False, "declining stores an explicit false"
     assert _config(handle, "usage_stats_install_id") is None, "declining mints no identifier"
     assert _config(handle, "usage_stats_level") is None
+    _finish_wizard(w)
+    assert endpoint.reports() == [], "completing the wizard sends nothing for a declined install"
 
     # Cron agrees: off, nothing sent, even when driven.
     summary = handle.trigger_cron_json()
@@ -192,7 +213,7 @@ def test_wizard_level_button_opts_in_and_sends_the_previewed_report(request, end
 
     body = w.post(step="analytics", usage_stats="3")
     assert wizard_error(body) is None, wizard_error(body)
-    assert wizard_heading(body) == "Enable cron", wizard_heading(body)
+    assert wizard_heading(body) == "Choose your installation type", wizard_heading(body)
 
     assert _config(handle, "usage_stats_enabled") is True
     assert _config(handle, "usage_stats_level") == 3
@@ -200,7 +221,14 @@ def test_wizard_level_button_opts_in_and_sends_the_previewed_report(request, end
     assert isinstance(install_id, str) and UUID_V4.match(install_id), install_id
     assert "SECRET" not in install_id
 
-    # The first report went out synchronously with the click.
+    # The first report is DEFERRED: on screen two there is nothing to report
+    # yet, so the click alone sends nothing…
+    time.sleep(1)
+    assert endpoint.reports() == [], "opting in on screen two must not send an empty-install report"
+    assert _config(handle, "usage_stats_last_attempt_at") is None
+
+    # …and completing the install (the last rail answer) sends it.
+    _finish_wizard(w)
     reports = endpoint.wait_for_reports(1, timeout_s=5)
     assert len(reports) == 1
     sent = reports[0]["payload"]
@@ -208,8 +236,10 @@ def test_wizard_level_button_opts_in_and_sends_the_previewed_report(request, end
     assert reports[0]["level"] == 3
     assert sent["install_id"] == install_id
     assert sent["level"] == 3
-    # Exactly what the operator previewed, bar the id and the timestamp.
-    assert sent["properties"] == previewed["properties"], "the report IS the preview"
+    # The same shape the operator previewed — the same property set at the
+    # same level; the values moved on because the store now exists.
+    assert set(sent["properties"]) == set(previewed["properties"]), "the report has the previewed shape"
+    assert sent["properties"]["store_count"] == 1
     assert set(sent) == set(previewed)
     assert _config(handle, "usage_stats_last_sent_at") is not None
     assert _config(handle, "usage_stats_last_error") is None
@@ -225,6 +255,7 @@ def test_weekly_cadence_and_one_row_per_install(request, endpoint) -> None:
     handle = _boot(request, endpoint)
     w, _ = _walk_to_analytics(handle)
     w.post(step="analytics", usage_stats="1")
+    _finish_wizard(w)
     first = endpoint.wait_for_reports(1, timeout_s=5)[0]
 
     # Just sent: cron must not send again.
@@ -264,7 +295,8 @@ def test_rig_default_kill_switch_never_sends(request) -> None:
     handle = _boot(request, None)
     w, _ = _walk_to_analytics(handle)
     body = w.post(step="analytics", usage_stats="2")
-    assert wizard_heading(body) == "Enable cron", wizard_heading(body)
+    assert wizard_heading(body) == "Choose your installation type", wizard_heading(body)
+    _finish_wizard(w)
     assert _config(handle, "usage_stats_enabled") is True
     assert _config(handle, "usage_stats_last_attempt_at") is None, "no send was even attempted"
     summary = handle.trigger_cron_json()
@@ -280,7 +312,7 @@ def test_settings_card_toggle_level_and_preview(request, endpoint, browser) -> N
     handle = _boot(request, endpoint)
     w, _ = _walk_to_analytics(handle)
     w.post(step="analytics", usage_stats="0")  # start from an explicit decline
-    w.post(step="cron")
+    _finish_wizard(w)
 
     ctx = _login_ctx(browser, handle)
     try:
@@ -369,7 +401,7 @@ def test_settings_api_refuses_a_bad_level_and_needs_admin(request, endpoint) -> 
     handle = _boot(request, endpoint)
     w, _ = _walk_to_analytics(handle)
     w.post(step="analytics", usage_stats="0")
-    w.post(step="cron")
+    _finish_wizard(w)
 
     import requests
 

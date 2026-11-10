@@ -2,18 +2,20 @@
 /**
  * Completed-install gate in setup.php (SO-2).
  *
- * setup_complete flips at the end of the `mints` screen; the `updates`,
- * `cron` and `done` screens come after it and used to be exempt from the
- * redirect-if-set-up guard for EVERY request. Anyone could therefore POST
- * step=updates to a live install, flip the auto-update opt-in and be handed
- * the cron screen — which lazily mints and renders the cron key (full cron
- * runs on demand, forced "Update now").
+ * setup_complete flips when the last rail screen is answered; the `seed`,
+ * `updates`, `cron` and `done` screens come after it and used to be exempt
+ * from the redirect-if-set-up guard for EVERY request. Anyone could
+ * therefore POST step=updates to a live install, flip the auto-update
+ * opt-in and be handed the cron screen — which lazily mints and renders the
+ * cron key (full cron runs on demand, forced "Update now").
  *
  * Now a tail POST on a completed install is honoured only for the session
  * that just completed the wizard (it still carries the first-run store
  * marker) or a logged-in user; everyone else is redirected to admin and no
- * handler runs. Driven over real HTTP (php -S) because the CLI SAPI cannot
- * observe redirects or sessions.
+ * handler runs. The completing session is additionally allowed to GET any
+ * screen by slug (the Back links from the tail screens land on the rail
+ * screens) until the done screen clears its marker. Driven over real HTTP
+ * (php -S) because the CLI SAPI cannot observe redirects or sessions.
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
@@ -50,14 +52,16 @@ $post = function (array $data) use ($srv, &$csrf): array {
     return $r;
 };
 $post(['step' => 'terms', 'terms_legal' => '1', 'terms_warranty' => '1', 'terms_fee' => '1']);
+$post(['step' => 'analytics', 'usage_stats' => '0']);
+$post(['step' => 'install_type', 'install_type' => 'other']);
 // The security screen is skipped (data dir outside the web root); posting
 // it anyway is harmless and keeps the walk shape-independent.
 $post(['step' => 'security', 'security_acknowledged' => '1']);
 $post(['step' => 'password', 'password' => 'gate-test-pw-1234', 'confirm_password' => 'gate-test-pw-1234']);
+$post(['step' => 'email', 'email_action' => 'skip']);
 $post(['step' => 'store', 'store_name' => 'Gate Store', 'default_currency' => 'sat']);
 $post(['step' => 'onchain', 'onchain_action' => 'skip']);
 $post(['step' => 'lightning', 'lightning_action' => 'skip']);
-$post(['step' => 'swaps', 'swaps_enabled' => '0']);
 $r = $post(['step' => 'mints', 'mints_enabled' => '0']);
 assert_eq('updates', HttpDriver::wizardStep($r['body']), 'declining mints lands on the updates screen');
 assert_true(cfg('setup_complete') === true, 'setup is complete from here');
@@ -88,24 +92,33 @@ $r = $srv->post('/setup.php', ['step' => 'updates', 'auto_update' => '0', 'csrf_
 assert_eq(302, $r['status'], 'a foreign csrf token does not help');
 assert_null(cfg('auto_update_enabled'), 'opt-in still unwritten');
 
+// A stranger can't reach the rail screens by slug either (the Back links
+// of the completing session).
+$r = $srv->get('/setup.php?step=mints');
+assert_eq(302, $r['status'], 'anonymous GET of a rail screen on a completed install is redirected');
+
 // ---- the session that completed the wizard may finish the tail ----------------
 $strangerJar = $srv->switchSession($sessionA);
+// Back from the first tail screen lands on the last rail screen and renders
+// it (a GET by slug) — the completing session is let through.
+$r = $srv->get('/setup.php?step=mints');
+assert_eq(200, $r['status'], 'the completing session may step Back onto the mints screen');
+assert_eq('mints', HttpDriver::wizardStep($r['body']), 'and sees the mints screen');
+assert_true(str_contains($r['body'], 'wizard-back-link'), 'the mints screen has a Back link');
 $r = $post(['step' => 'updates', 'auto_update' => '1']);
 assert_eq(200, $r['status'], 'the completing session answers the updates screen');
-assert_eq('analytics', HttpDriver::wizardStep($r['body']), 'and is shown the usage-statistics screen');
-// A stranger can't answer the usage-statistics screen either (it would opt
-// the install in to sending reports).
+assert_eq('cron', HttpDriver::wizardStep($r['body']), 'and is shown the cron screen');
+assert_true(str_contains($r['body'], 'wizard-back-link'), 'the cron screen has a Back link');
+assert_true(str_contains($r['body'], $cronKey), 'the cron screen renders the cron key for the operator');
+assert_true(cfg('auto_update_enabled') === true, 'the operator answer is written');
+// The usage-statistics screen moved to the front of the wizard: it is no
+// longer a tail screen, so nobody — not even a logged-in operator — can
+// re-answer it on a completed install through setup.php.
 $srv->switchSession($strangerJar);
 $r = $srv->post('/setup.php', ['step' => 'analytics', 'usage_stats' => '3', 'csrf_token' => $csrf]);
 assert_eq(302, $r['status'], 'anonymous step=analytics on a completed install is redirected');
-assert_null(cfg('usage_stats_enabled'), 'usage-statistics opt-in still unwritten');
+assert_true(cfg('usage_stats_enabled') === false, 'the operator\'s decline is unchanged');
 $srv->switchSession($sessionA);
-$r = $post(['step' => 'analytics', 'usage_stats' => '0']);
-assert_eq(200, $r['status'], 'the completing session answers the usage-statistics screen');
-assert_eq('cron', HttpDriver::wizardStep($r['body']), 'and is shown the cron screen');
-assert_true(cfg('usage_stats_enabled') === false, 'the decline is written');
-assert_true(str_contains($r['body'], $cronKey), 'the cron screen renders the cron key for the operator');
-assert_true(cfg('auto_update_enabled') === true, 'the operator answer is written');
 $r = $post(['step' => 'cron']);
 assert_eq(200, $r['status'], 'cron -> done for the completing session');
 assert_true(str_contains($r['body'], 'all set'), 'done screen rendered');
@@ -114,6 +127,8 @@ assert_true(str_contains($r['body'], 'all set'), 'done screen rendered');
 $r = $srv->post('/setup.php', ['step' => 'updates', 'auto_update' => '0', 'csrf_token' => $csrf]);
 assert_eq(302, $r['status'], 'after done the completing session is redirected like anyone else');
 assert_true(cfg('auto_update_enabled') === true, 'opt-in unchanged');
+$r = $srv->get('/setup.php?step=mints');
+assert_eq(302, $r['status'], 'after done the completing session can no longer step Back onto a rail screen');
 $srv->switchSession($strangerJar);
 
 // ---- a logged-in user may finish the tail -----------------------------------
@@ -128,8 +143,7 @@ $r = $srv->post('/setup.php', ['step' => 'updates', 'auto_update' => '0', 'csrf_
 assert_eq(200, $r['status'], 'a logged-in user may answer the updates screen');
 assert_true(cfg('auto_update_enabled') === false, 'their answer is written');
 $r = $srv->post('/setup.php', ['step' => 'analytics', 'usage_stats' => '1', 'csrf_token' => $adminCsrf]);
-assert_eq(200, $r['status'], 'a logged-in user may answer the usage-statistics screen');
-assert_true(cfg('usage_stats_enabled') === true, 'their opt-in is written');
-assert_eq(1, cfg('usage_stats_level'));
+assert_eq(302, $r['status'], 'the usage-statistics screen is not a tail screen: a logged-in POST is redirected to admin (the settings card owns it now)');
+assert_true(cfg('usage_stats_enabled') === false, 'the opt-in is unchanged');
 
 echo "ok\n";

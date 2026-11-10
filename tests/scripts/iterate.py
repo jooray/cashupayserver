@@ -81,7 +81,7 @@ from fixtures.onchain import (  # noqa: E402
     make_onchain_context,
 )
 from fixtures.payserver import PayserverHandle, start_payserver, stop_payserver  # noqa: E402
-from fixtures.setup_helpers import run_setup_wizard  # noqa: E402
+from fixtures.setup_helpers import browser_walk_to_store, run_setup_wizard  # noqa: E402
 
 # ------------------------------------------------------------------------------
 # Config
@@ -518,18 +518,10 @@ def main() -> int:
             page = ctx.new_page()
             page.set_default_timeout(15000)
 
-            page.goto(f"{payserver.url}/setup")
-            page.check("#terms_legal")
-            page.check("#terms_warranty")
-            page.check("#terms_fee")
-            page.click("button[type=submit]")
-            page.check("#security_acknowledged")
-            page.click("button[type=submit]")
-            page.fill("#password", ADMIN_PASSWORD)
-            page.fill("#confirm_password", ADMIN_PASSWORD)
-            page.click("button[type=submit]")
-            page.fill("#store_name", STORE_ONECONF)
-            page.click("button[type=submit]")
+            # terms → analytics (decline) → installation type ("something
+            # else") → safety check (auto-advances) → password → e-mail
+            # (skip) → store name.
+            browser_walk_to_store(page, payserver.url, ADMIN_PASSWORD, store_name=STORE_ONECONF)
             # onchain: skip. The real xpub (Electrum's vpub, on regtest) is
             # registered further down once Electrum is up, via direct SQL —
             # the wizard can't know it yet. Skipping here also drops the
@@ -540,9 +532,7 @@ def main() -> int:
             # admin once the stack is up.
             page.wait_for_selector("#lightning_address")
             page.click("button:has-text('Skip for now')")
-            # swaps: off — they need an xpub, which this store doesn't have yet.
-            page.wait_for_selector("button:has-text('No thanks')")
-            page.click("button:has-text('No thanks')")
+            # (no swaps screen: they stay off because this store has no xpub yet)
             # mints: Nostr discovery can't reach relays from the test sandbox,
             # so go straight to manual entry and point at the two local
             # nutshell instances.
@@ -551,11 +541,11 @@ def main() -> int:
             page.fill("#mint_url_manual", mint.url)
             page.fill("#backup_mint_url_manual", backup_mint.url)
             page.click("#mints-continue-btn")
-            # setup_complete flips here; updates, analytics, cron and done are advisory.
+            # setup_complete flips here; seed, updates, cron and done are advisory.
+            page.wait_for_selector("h2:has-text('Save your recovery phrase')")
+            page.click("button:has-text('continue')")
             page.wait_for_selector("h2:has-text('Enable automatic updates?')")
             page.click("button:has-text('Not now')")
-            page.wait_for_selector("h2:has-text('Anonymous usage statistics')")
-            page.click("button[name='usage_stats'][value='0']")
             page.wait_for_selector("h2:has-text('Enable cron')")
             page.click("button:has-text('Continue')")
             page.wait_for_selector("h2:has-text(\"You're all set!\")")

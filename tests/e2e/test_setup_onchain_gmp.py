@@ -54,6 +54,17 @@ def gmpless_payserver() -> Iterator[PayserverHandle]:
     stop_payserver(handle)
 
 
+def _store_row(handle: PayserverHandle):
+    import sqlite3
+
+    conn = sqlite3.connect(handle.data_dir / "cashupay.sqlite")
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute("SELECT * FROM stores LIMIT 1").fetchone()
+    finally:
+        conn.close()
+
+
 def _validate_xpub(w: SetupWizard, xpub: str) -> dict:
     """POST the wizard's validate_xpub AJAX action; the response must be JSON
     regardless of server health — that IS the regression being pinned."""
@@ -157,17 +168,16 @@ def test_xpub_save_without_gmp_shows_actionable_error(
     assert wizard_heading(body) == "On-chain Bitcoin payments"
 
 
-def test_swaps_step_disabled_without_gmp(gmpless_payserver: PayserverHandle) -> None:
-    """GMP-less host: the swaps screen explains why swaps can't be enabled."""
+def test_swaps_stay_off_without_gmp(gmpless_payserver: PayserverHandle) -> None:
+    """GMP-less host: swaps have no screen and the default leaves them off —
+    the host could not sign a swap claim even if the store had an xpub (and
+    it can't save one here anyway)."""
     w = SetupWizard(gmpless_payserver.url)
     w.through_store("Swaps GMP-less Store")
     w.post(step="onchain", onchain_action="skip")
     body = w.post(step="lightning", lightning_action="skip")
-    assert wizard_heading(body) == "Submarine swaps"
-    assert "GMP" in body
-    # The enable button is rendered disabled ("disabled" follows the value
-    # attribute inside the same <button> tag).
-    assert 'name="swaps_enabled" value="1"' in body
-    enable_chunk = body.split('name="swaps_enabled" value="1"', 1)[1]
-    enable_chunk = enable_chunk.split(">", 1)[0]
-    assert "disabled" in enable_chunk
+    assert wizard_heading(body) == "Cashu mints"
+    body = w.post(step="mints", mints_enabled="0")
+    assert wizard_heading(body) == "Enable automatic updates?"
+    row = _store_row(gmpless_payserver)
+    assert row["swaps_enabled"] == 0

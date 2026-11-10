@@ -130,7 +130,7 @@ def test_wizard_saves_noffer_on_bcmath_host(
     _to_lightning_screen(w, "Noffer Saves Store")
     body = w.post(step="lightning", lightning_action="save", **{"noffers[]": REFERENCE_NOFFER})
     assert wizard_error(body) is None, wizard_error(body)
-    assert wizard_heading(body) == "Submarine swaps"
+    assert wizard_heading(body) == "Cashu mints"
     rows = _chain_rows(gmpless_payserver)
     assert [(r["address"], r["type"]) for r in rows] == [(REFERENCE_NOFFER, "noffer")]
 
@@ -217,7 +217,6 @@ def _walk_wizard_mintless(w: SetupWizard, store: str) -> None:
     minimal path that unlocks the admin dashboard on a degraded host."""
     _to_lightning_screen(w, store)
     w.post(step="lightning", lightning_action="skip")
-    w.post(step="swaps", swaps_enabled="0")
     w.post(step="mints", mints_enabled="0")
 
 

@@ -23,13 +23,38 @@ final class SetupFlow {
      * before the operator could create the rail it times).
      */
     public const STEPS = [
-        'terms', 'security', 'password', 'store', 'onchain', 'lightning',
-        'zeroconf', 'swaps', 'mints', 'updates', 'analytics', 'cron', 'done',
+        'terms', 'analytics', 'install_type', 'security', 'password', 'email',
+        'store', 'onchain', 'lightning', 'strike', 'zeroconf', 'mints', 'seed',
+        'updates', 'cron', 'done',
     ];
+
+    /**
+     * The installation types offered on the install_type screen. Each one
+     * reshapes the rail screens that follow (see stepSequence):
+     *   strike      Strike custodies the funds: the on-chain and Lightning
+     *               screens are replaced by a single Strike screen, and the
+     *               mint screen is dropped (mints stay off).
+     *   own_wallet  The operator's own wallets: every rail screen, as before.
+     *   cashu       A Cashu mint as the primary Lightning receiver: every rail
+     *               screen; the mint screen loses its "run without mints" exit
+     *               and the Lightning screen explains the sweep role.
+     *   other       Maximum customisation: every rail screen, no nudges.
+     */
+    public const INSTALL_TYPES = ['strike', 'own_wallet', 'cashu', 'other'];
+
+    /**
+     * The screens that configure payment rails. Leaving this group (the
+     * advance from its last screen to whatever follows) is the moment the
+     * install is finalised — swaps default, auto-cashout rail, setup_complete
+     * — because which screen is last depends on the installation type and on
+     * whether the zero-conf question applied. See setup.php's
+     * setupFinalizeRails().
+     */
+    public const RAIL_STEPS = ['onchain', 'lightning', 'strike', 'zeroconf', 'mints'];
 
     /** The screens add_store mode walks before returning to admin. */
     public const ADD_STORE_STEPS = [
-        'store', 'onchain', 'lightning', 'zeroconf', 'swaps', 'mints',
+        'store', 'onchain', 'lightning', 'zeroconf', 'mints',
     ];
 
     /**
@@ -52,13 +77,13 @@ final class SetupFlow {
      * Screens that render after setup_complete has been set, and therefore
      * have to survive setup.php's redirect-if-set-up guard.
      *
-     * updates sits here deliberately: the install is usable without an
-     * answer, and abandoning the wizard on this screen leaves automatic
-     * updates at their safe default (off). analytics (the anonymous
-     * usage-statistics opt-in) follows for the same reason: unanswered
-     * means nothing is ever sent.
+     * seed sits here deliberately: the install is usable before the operator
+     * has written the recovery phrase down, and abandoning the wizard on it
+     * loses nothing (the phrase stays readable in store settings). updates
+     * follows for the same reason: unanswered leaves automatic updates at
+     * their safe default (off).
      */
-    public const POST_COMPLETION = ['updates', 'analytics', 'cron', 'done'];
+    public const POST_COMPLETION = ['seed', 'updates', 'cron', 'done'];
 
     public static function isKnownStep(string $step): bool {
         return in_array($step, self::STEPS, true) || $step === self::ADD_STORE_COMPLETE;
@@ -107,12 +132,21 @@ final class SetupFlow {
      * credential left for the wizard to collect. Decided statically from the
      * deployment config so the step counter stays stable across the run.
      *
+     * $installType reshapes the rail screens (see INSTALL_TYPES); null is
+     * "not chosen yet" and renders the default shape.
+     *
+     * $includeSeed adds the recovery-phrase screen after mints. True only
+     * once the mints answer has minted a wallet seed for the store under
+     * construction: like zeroconf, the screen is only counted once it is
+     * certain to appear.
+     *
      * @return string[]
      */
     public static function stepSequence(
         string $mode, bool $includeZeroConf,
         bool $includeSecurity = true, bool $isDesktop = false,
-        bool $externalCron = false, bool $passwordPreseeded = false
+        bool $externalCron = false, bool $passwordPreseeded = false,
+        ?string $installType = null, bool $includeSeed = false
     ): array {
         if ($mode === 'add_store') {
             $steps = self::ADD_STORE_STEPS;
@@ -127,11 +161,42 @@ final class SetupFlow {
             if ($passwordPreseeded) {
                 $steps = array_values(array_diff($steps, ['password']));
             }
+            if ($installType === 'strike') {
+                // Strike holds the funds: its one screen replaces the
+                // on-chain + Lightning pair, and with mints off there is no
+                // seed to write down either.
+                $steps = array_values(array_diff($steps, ['onchain', 'lightning', 'mints', 'seed']));
+            } else {
+                // Every other type (and "not chosen yet", which renders the
+                // same shape so the counter is stable up to the choice) keeps
+                // the Strike API option where it always was: a section of
+                // the Lightning screen.
+                $steps = array_values(array_diff($steps, ['strike']));
+            }
+            if (!$includeSeed) {
+                $steps = array_values(array_diff($steps, ['seed']));
+            }
         }
         if (!$includeZeroConf) {
             $steps = array_values(array_diff($steps, ['zeroconf']));
         }
         return array_values($steps);
+    }
+
+    public static function isInstallType(string $type): bool {
+        return in_array($type, self::INSTALL_TYPES, true);
+    }
+
+    /**
+     * Does advancing from $current to $next leave the rail group? That is
+     * the one moment every rail answer is in — the trigger for finalising
+     * the install (see RAIL_STEPS). $next null means "$current was the last
+     * screen", which only a rail screen can be in a sequence that was
+     * truncated by a test; treat it as leaving too.
+     */
+    public static function leavesRailGroup(string $current, ?string $next): bool {
+        return in_array($current, self::RAIL_STEPS, true)
+            && ($next === null || !in_array($next, self::RAIL_STEPS, true));
     }
 
     /**
@@ -223,19 +288,24 @@ final class SetupFlow {
     }
 
     /**
-     * The screen a "Back" link on $current should point at, or null when there
-     * is no safe target.
+     * The screen a "Back" link on $current should point at, or null when
+     * there is none. Only the opening screen, the completion screen and the
+     * add_store hand-off panel have no Back. A target that must not be
+     * re-entered (NO_BACK_TARGET: the password screen refuses a second
+     * submit once the admin exists; the safety check has nothing new to say)
+     * is stepped over to the nearest earlier screen that can be.
      *
      * @param string[] $steps
      */
     public static function backStep(string $current, array $steps): ?string {
-        if (in_array($current, self::NO_BACK_TARGET, true)
-            || in_array($current, self::POST_COMPLETION, true)
-            || $current === self::ADD_STORE_COMPLETE) {
+        if ($current === 'done' || $current === self::ADD_STORE_COMPLETE) {
             return null;
         }
         $prev = self::prevStep($current, $steps);
-        return in_array($prev, self::NO_BACK_TARGET, true) ? null : $prev;
+        while ($prev !== null && in_array($prev, self::NO_BACK_TARGET, true)) {
+            $prev = self::prevStep($prev, $steps);
+        }
+        return $prev;
     }
 
     /**

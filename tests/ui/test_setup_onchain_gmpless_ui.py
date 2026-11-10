@@ -54,15 +54,31 @@ def test_onchain_screen_on_gmpless_host(
     page.check("#terms_warranty")
     page.check("#terms_fee")
     page.click("button[type=submit]")
+    page.click("button[name='usage_stats'][value='0']")
+    # "My own wallet" leans on xpubs and swaps, so the missing GMP must HOLD
+    # the safety check instead of letting it auto-advance.
+    page.click("#install-option-own_wallet > summary")
+    page.click("button[name='install_type'][value='own_wallet']")
 
-    # security screen: the capability heads-up renders alongside the ack.
+    # security screen: the capability heads-up renders alongside the ack,
+    # and the screen stays up for the operator to read it.
+    page.wait_for_selector("#security_acknowledged")
     assert page.locator("text=GMP extension").first.is_visible()
+    page.wait_for_selector("#security-test-result", state="visible")
+    page.wait_for_selector("#url-mode-result", state="visible")
+    page.wait_for_timeout(1500)
+    assert page.locator("#security_acknowledged").count() == 1, (
+        "a GMP-less host on the own-wallet type must not auto-advance past the safety check"
+    )
+    assert not page.locator("#security-autoadvance").is_visible()
     page.check("#security_acknowledged")
-    page.click("button[type=submit]")
+    page.click("#security-form button[type=submit]")
 
     page.fill("#password", "wizard-test-pw")
     page.fill("#confirm_password", "wizard-test-pw")
     page.click("button[type=submit]")
+    page.wait_for_selector("#email-form")
+    page.click("button:has-text('Skip for now')")
 
     page.fill("#store_name", "GMP-less Browser Store")
     page.click("button[type=submit]")

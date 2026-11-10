@@ -62,7 +62,7 @@ def test_full_flow_persists_every_answer(
     # sits after the lightning screen (where the last possible on-chain
     # receive source, Strike on-chain minting, is answered).
     assert _heading(body) == "Lightning payments"
-    assert "of 13" in body
+    assert "of 14" in body
 
     body = w.post(step="lightning", lightning_action="save", lightning_address="merchant@strike.me")
     assert _heading(body) == "Zero-conf payments"
@@ -73,22 +73,22 @@ def test_full_flow_persists_every_answer(
     ) in body, "the zero-conf screen must link the gaming risk to the help article"
     assert "could try to game it</a>" in body
 
+    # Swaps have no screen of their own any more: zeroconf goes straight to
+    # the mints screen and swaps are switched on because the store has an
+    # xpub (see the row assertions below).
     body = w.post(step="zeroconf", zero_conf="1")
-    assert _heading(body) == "Submarine swaps"
-
-    body = w.post(step="swaps", swaps_enabled="1")
     assert _heading(body) == "Cashu mints"
 
-    # Decline mints — the mint screen is where setup_complete flips.
+    # Decline mints — the last rail screen is where setup_complete flips.
     body = w.post(step="mints", mints_enabled="0")
     assert _heading(body) == "Enable automatic updates?"
+    assert 'id="wizard-back-link"' in body, "the post-completion screens have a Back link"
 
     # Decline automatic updates: the choice must persist as an explicit off.
+    # (Usage statistics were answered on screen two.)
     body = w.post(step="updates", auto_update="0")
-    assert _heading(body) == "Anonymous usage statistics"
-    # Decline usage statistics: an explicit off, nothing is ever sent.
-    body = w.post(step="analytics", usage_stats="0")
     assert _heading(body) == "Enable cron"
+    assert 'id="wizard-back-link"' in body, "the cron screen has a Back link"
     assert "X-CRON-KEY" in body, "the cron screen should render a ready-made crontab line"
 
     body = w.post(step="cron")
@@ -102,7 +102,7 @@ def test_full_flow_persists_every_answer(
     assert row["onchain_network"] == "mainnet"
     assert row["onchain_address_type"] == "P2WPKH"
     assert row["onchain_min_confs"] == 0
-    assert row["swaps_enabled"] == 1
+    assert row["swaps_enabled"] == 1, "an xpub store gets submarine swaps on by default"
     assert row["strict_no_mint_fallback"] == 1, "declining mints pins strict mode"
     assert row["auto_melt_enabled"] == 1, "a Lightning destination enables threshold cashout"
     assert row["auto_melt_use_swap"] == 0, "and it sweeps over Lightning, not via a swap"
@@ -112,7 +112,7 @@ def test_full_flow_persists_every_answer(
 def test_skipping_onchain_removes_the_zeroconf_screen(payserver: PayserverHandle) -> None:
     w = Wizard(payserver)
     body = w.through_store("Skip Onchain")
-    assert "of 12" in body, "without an on-chain rail the wizard is 12 screens, not 13"
+    assert "of 13" in body, "without an on-chain rail the wizard is 13 screens, not 14"
 
     body = w.post(step="onchain", onchain_action="skip")
     assert _heading(body) == "Lightning payments"
@@ -120,7 +120,7 @@ def test_skipping_onchain_removes_the_zeroconf_screen(payserver: PayserverHandle
     # No Strike on-chain answer on the lightning screen either, so there is
     # still nothing for zero-conf to time and the screen stays out.
     body = w.post(step="lightning", lightning_action="skip")
-    assert _heading(body) == "Submarine swaps", "zero-conf must be skipped with nothing to time"
+    assert _heading(body) == "Cashu mints", "zero-conf must be skipped with nothing to time"
 
     # Reaching it directly still renders (it is a known slug) but nothing
     # downstream depends on that; the sequence simply never routes there.
@@ -142,7 +142,7 @@ def test_strike_only_store_is_asked_the_zeroconf_question(
     payserver = payserver_with_strike
     w = Wizard(payserver)
     body = w.through_store("Strike Only")
-    assert "of 12" in body, "no on-chain receive source yet, so no zeroconf screen"
+    assert "of 13" in body, "no on-chain receive source yet, so no zeroconf screen"
 
     body = w.post(step="onchain", onchain_action="skip")
     assert _heading(body) == "Lightning payments"
@@ -153,7 +153,7 @@ def test_strike_only_store_is_asked_the_zeroconf_question(
         step="lightning", lightning_action="save",
         strike_api_key=TEST_STRIKE_KEY,
     )
-    assert _heading(body) == "Submarine swaps", "a Strike key without on-chain must not add zeroconf"
+    assert _heading(body) == "Cashu mints", "a Strike key without on-chain must not add zeroconf"
 
     # Back to lightning; this time tick "also accept on-chain via Strike".
     # The gate probes the key's receive-request scope against the mock.
@@ -163,10 +163,10 @@ def test_strike_only_store_is_asked_the_zeroconf_question(
         strike_onchain="1",
     )
     assert _heading(body) == "Zero-conf payments", "Strike on-chain must pull zeroconf in"
-    assert "of 13" in body, "the step counter must count the screen it just gained"
+    assert "of 14" in body, "the step counter must count the screen it just gained"
 
     body = w.post(step="zeroconf", zero_conf="1")
-    assert _heading(body) == "Submarine swaps"
+    assert _heading(body) == "Cashu mints"
 
     row = _stores(payserver)[0]
     assert row["onchain_min_confs"] == 0, "the zero-conf answer must persist"
@@ -174,7 +174,10 @@ def test_strike_only_store_is_asked_the_zeroconf_question(
     assert not row["onchain_xpub"] and not row["onchain_static_address"]
 
 
-def test_swaps_require_an_xpub_not_a_static_address(payserver: PayserverHandle) -> None:
+def test_swaps_default_on_only_with_an_xpub(payserver: PayserverHandle) -> None:
+    """Submarine swaps have no screen: they are switched on at the end of the
+    rail screens when the store has an xpub (a fresh address per swap), and
+    stay off for a single static address."""
     w = Wizard(payserver)
     w.through_store("Static Store")
     body = w.post(
@@ -190,17 +193,15 @@ def test_swaps_require_an_xpub_not_a_static_address(payserver: PayserverHandle) 
 
     body = w.post(step="lightning", lightning_action="skip")
     assert _heading(body) == "Zero-conf payments", "a static address is still an on-chain rail"
-    w.post(step="zeroconf", zero_conf="0")
-
-    body = w.post(step="swaps", swaps_enabled="1")
-    assert "need an xpub" in (_error(body) or ""), _error(body)
-    # -1 is the untouched legacy column default (it resolves to off; swaps are
-    # store-only) — the point is the rejected answer must not be saved.
-    assert _stores(payserver)[0]["swaps_enabled"] == -1, "the rejected answer must not be saved"
-
-    body = w.post(step="swaps", swaps_enabled="0")
+    body = w.post(step="zeroconf", zero_conf="0")
     assert _heading(body) == "Cashu mints"
-    assert _stores(payserver)[0]["swaps_enabled"] == 0
+    # -1 is the untouched legacy column default: nothing decided until the
+    # last rail screen is answered.
+    assert _stores(payserver)[0]["swaps_enabled"] == -1, "swaps are settled at the end of the rail screens"
+
+    body = w.post(step="mints", mints_enabled="0")
+    assert _heading(body) == "Enable automatic updates?"
+    assert _stores(payserver)[0]["swaps_enabled"] == 0, "a static address cannot back swaps, so they stay off"
 
 
 def test_testnet_family_xpub_takes_the_declared_subnetwork(payserver: PayserverHandle) -> None:
@@ -289,7 +290,7 @@ def test_multiple_noffers_persist_in_order(payserver: PayserverHandle) -> None:
         **{"noffers[]": [REFERENCE_NOFFER, SECOND_NOFFER]},
     )
     assert _error(body) is None, _error(body)
-    assert _heading(body) == "Submarine swaps"
+    assert _heading(body) == "Cashu mints"
 
     conn = sqlite3.connect(payserver.data_dir / "cashupay.sqlite")
     conn.row_factory = sqlite3.Row
@@ -333,11 +334,16 @@ def test_store_step_offers_default_currency_and_persists_it(payserver: Payserver
     currency is written to the store's default_currency column."""
     w = Wizard(payserver)
     w.accept_terms()
+    w.decline_analytics()
+    w.choose_install_type("other")
     w.post(step="security", security_acknowledged="1")
-    # password -> lands on the store screen; inspect that rendered body.
-    store_body = w.post(
-        step="password", password=ADMIN_PW, confirm_password=ADMIN_PW
-    )
+    body = w.post(step="password", password=ADMIN_PW, confirm_password=ADMIN_PW)
+    assert _heading(body) == "E-mail notifications", _heading(body)
+    # The password screen no longer collects a recovery address — that moved
+    # to the e-mail screen.
+    assert 'name="admin_email"' not in w.get("password")
+    # skipping the e-mail screen -> lands on the store screen; inspect that body.
+    store_body = w.skip_email()
     assert 'name="default_currency"' in store_body, "store screen must render a currency selector"
     assert "Payments are always received as Bitcoin" in store_body, "the settlement-note copy must be shown"
     assert 'value="USD"' in store_body, "fiat options must be offered alongside sat"
@@ -355,9 +361,7 @@ def test_store_step_rejects_out_of_range_currency_by_falling_back_to_sat(
     """The selector is a controlled list; a tampered value must not persist —
     it falls back to sat rather than hard-failing an onboarding step."""
     w = Wizard(payserver)
-    w.accept_terms()
-    w.post(step="security", security_acknowledged="1")
-    w.post(step="password", password=ADMIN_PW, confirm_password=ADMIN_PW)
+    w.through_store("Placeholder")
     body = w.post(step="store", store_name="Tamper Store", default_currency="DOGE")
     assert _error(body) is None, _error(body)
     stores = _stores(payserver)
@@ -375,7 +379,6 @@ def test_add_store_does_not_rename_the_store_from_first_run(payserver: Payserver
     w.through_store("Live Store")
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
-    w.post(step="swaps", swaps_enabled="0")
     w.post(step="mints", mints_enabled="0")
     assert [r["name"] for r in _stores(payserver)] == ["Live Store"]
 
@@ -448,17 +451,20 @@ def test_terms_gate_requires_all_three_checkboxes(payserver: PayserverHandle) ->
         assert "accept all three terms" in (_error(body) or ""), _error(body)
         assert _heading(body) == "Let's agree on a few things", "a partial acceptance must not advance"
 
-    # All three ticked advances to the safety check.
+    # All three ticked advances to the usage-statistics opt-in (screen two).
     body = w.post(step="terms", terms_legal="1", terms_warranty="1", terms_fee="1")
     assert _error(body) is None, _error(body)
-    assert _heading(body) == "Quick safety check", _heading(body)
+    assert _heading(body) == "Anonymous usage statistics", _heading(body)
+    # The Back link appears from screen two on; the terms gate has none.
+    assert 'id="wizard-back-link"' in body
+    assert 'id="wizard-back-link"' not in w.get("terms")
 
 
 def test_security_screen_skipped_when_data_dir_is_outside_the_webroot() -> None:
     """The security screen exists to prove the database can't be fetched over
     HTTP. With the data directory outside the web root that exposure is
-    impossible, so the wizard drops the screen — terms goes straight to the
-    password screen and the step counter shrinks accordingly. (The default
+    impossible, so the wizard drops the screen — the installation type goes
+    straight to the password screen and the step counter shrinks accordingly. (The default
     fixture keeps its data dir inside the repo/webroot, which is why every
     other case here still sees the screen.)"""
     import tempfile
@@ -473,14 +479,16 @@ def test_security_screen_skipped_when_data_dir_is_outside_the_webroot() -> None:
         try:
             w = SetupWizard(handle.url)
             body = w.get("terms")
-            assert "of 11" in body, (
-                "skipping the security screen makes the standalone wizard 11 screens"
+            assert "of 12" in body, (
+                "skipping the security screen makes the standalone wizard 12 screens"
             )
 
-            body = w.post(step="terms", terms_legal="1", terms_warranty="1", terms_fee="1")
+            w.accept_terms()
+            w.decline_analytics()
+            body = w.choose_install_type("other")
             assert _error(body) is None, _error(body)
             assert _heading(body) == "Create your admin password", (
-                f"terms must land straight on the password screen, got {_heading(body)!r}"
+                f"the installation type must land straight on the password screen, got {_heading(body)!r}"
             )
             # The terms screen carries the (normally security-screen-hosted)
             # silent URL-mode probe so routing detection still happens.
