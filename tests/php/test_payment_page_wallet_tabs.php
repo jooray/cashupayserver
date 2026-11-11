@@ -13,8 +13,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/wallet_tabs.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/wallet_tabs.php';
 
 make_store('store_plain');                       // never answered (NULL)
 make_store('store_all');
@@ -52,7 +52,7 @@ mk_invoice('venmo_oc', 'store_venmo', false, true);
 mk_invoice('venmo_ln', 'store_venmo', true, false);
 mk_invoice('none_both', 'store_none', true, true);
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $runner = $dataDir . '/payment_runner.php';
 file_put_contents($runner, sprintf(<<<'PHP2'
 <?php

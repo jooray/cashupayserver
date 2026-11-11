@@ -14,7 +14,7 @@
  *   4. Invalid aux length is still rejected.
  */
 
-require_once __DIR__ . '/../../includes/crypto/schnorr.php';
+require_once __DIR__ . '/../../app/includes/crypto/schnorr.php';
 
 $failures = 0;
 $total = 0;

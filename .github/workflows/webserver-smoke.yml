@@ -6,7 +6,7 @@ name: Webserver smoke
 #    then runs scripts/webserver-smoke.sh (routing/deny/header curl checks)
 #    and scripts/desktop-smoke.php in its server shape (full wizard → admin →
 #    API key → Greenfield API), plus an authenticated /health check.
-#  - nginx-smoke serves the repo tree with the canonical docker/nginx-site.conf
+#  - nginx-smoke serves the repo's app/ tree with the canonical docker/nginx-site.conf
 #    through the tests' nginx+php-fpm image and runs the same two scripts.
 # The full e2e suite runs against these backends locally only
 # (tests/scripts/run-tests.sh with no --backend flag); CI keeps the suite on
@@ -15,17 +15,17 @@ name: Webserver smoke
 on:
   pull_request:
     paths:
-      - ".htaccess"
-      - "router.php"
-      - "index.php"
-      - "setup.php"
-      - "health.php"
-      - "api.php"
-      - "admin.php"
-      - "includes/setup_flow.php"
-      - "includes/database.php"
-      - "includes/auth.php"
-      - "includes/desktop.php"
+      - "app/.htaccess"
+      - "app/router.php"
+      - "app/index.php"
+      - "app/setup.php"
+      - "app/health.php"
+      - "app/api.php"
+      - "app/admin.php"
+      - "app/includes/setup_flow.php"
+      - "app/includes/database.php"
+      - "app/includes/auth.php"
+      - "app/includes/desktop.php"
       - "docker/**"
       - "tests/docker/**"
       - "scripts/webserver-smoke.sh"
@@ -128,19 +128,20 @@ jobs:
           php-version: "8.3"
           extensions: curl, json, gmp, mbstring, sqlite3
           coverage: none
-      - run: composer install --no-dev --no-progress --optimize-autoloader --ignore-platform-reqs
+      - run: composer install --working-dir=app --no-dev --no-progress --optimize-autoloader --ignore-platform-reqs
 
       - name: Build nginx test image
         run: docker build -f tests/docker/Dockerfile.nginx-test -t barebits-nginx tests/docker/
 
       - name: Render canonical config and run container
         # Same substitution contract as tests/fixtures/webserver.py: the three
-        # "# TEST-SUBST:" anchors in docker/nginx-site.conf. The app tree is
-        # mounted at its own path (the repo's identical-path convention).
+        # "# TEST-SUBST:" anchors in docker/nginx-site.conf. The repo is
+        # mounted at its own path (the identical-path convention) and the
+        # served tree is its app/ directory — the application root.
         run: |
           mkdir -p /tmp/nginx-conf
           sed -e "s|^.*# TEST-SUBST: listen$|    listen 8081;|" \
-              -e "s|^.*# TEST-SUBST: root$|    root $GITHUB_WORKSPACE;|" \
+              -e "s|^.*# TEST-SUBST: root$|    root $GITHUB_WORKSPACE/app;|" \
               -e "s|^.*# TEST-SUBST: fastcgi_pass$|        fastcgi_pass unix:/tmp/fpm/fpm.sock;|" \
               docker/nginx-site.conf > /tmp/nginx-conf/site.conf
           # Only directive lines may carry a leftover anchor — the file's

@@ -47,6 +47,7 @@ from . import backend, binaries
 from .boltz_regtest import BoltzRegtestHandle
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+APP_ROOT = REPO_ROOT / "app"
 
 
 def _php_bin() -> Path:
@@ -354,8 +355,8 @@ class PayserverProc:
 def _php_eval(data_dir: Path, snippet: str) -> str:
     code = (
         f"define('CASHUPAY_DATA_DIR', {str(data_dir)!r});\n"
-        f"require_once {str(REPO_ROOT / 'includes' / 'database.php')!r};\n"
-        f"require_once {str(REPO_ROOT / 'includes' / 'config.php')!r};\n"
+        f"require_once {str(APP_ROOT / 'includes' / 'database.php')!r};\n"
+        f"require_once {str(APP_ROOT / 'includes' / 'config.php')!r};\n"
         + snippet
     )
     res = subprocess.run([str(_php_bin()), "-r", code], capture_output=True, text=True)
@@ -461,7 +462,7 @@ def setup_payserver(workdir: Path, vpub: str, boltz_api_url: str,
         "if ($d !== false && $d !== '' && !defined('CASHUPAY_DATA_DIR')) {\n"
         "    define('CASHUPAY_DATA_DIR', $d);\n"
         "}\n"
-        f"return require {str(REPO_ROOT / 'router.php')!r};\n"
+        f"return require {str(APP_ROOT / 'router.php')!r};\n"
     )
     env = os.environ.copy()
     env["CASHUPAY_DATA_DIR"] = str(data_dir)
@@ -477,8 +478,8 @@ def setup_payserver(workdir: Path, vpub: str, boltz_api_url: str,
     port = free_port()
     log = (data_dir / "payserver.log").open("ab")
     proc = subprocess.Popen(
-        [str(_php_bin()), "-S", f"127.0.0.1:{port}", "-t", str(REPO_ROOT), str(wrapper)],
-        cwd=str(REPO_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
+        [str(_php_bin()), "-S", f"127.0.0.1:{port}", "-t", str(APP_ROOT), str(wrapper)],
+        cwd=str(APP_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
     )
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
@@ -845,7 +846,7 @@ def setup_payserver_for_sweep(workdir: Path, vpub: str, mint_url: str,
 
     seed_phrase = _php_eval(
         data_dir,
-        "require_once " + repr(str(REPO_ROOT / "cashu-wallet-php" / "CashuWallet.php")) + ";"
+        "require_once " + repr(str(APP_ROOT / "cashu-wallet-php" / "CashuWallet.php")) + ";"
         "echo \\Cashu\\Mnemonic::generate();",
     ).strip()
     admin_pw_hash = _php_eval(
@@ -916,7 +917,7 @@ def setup_payserver_for_sweep(workdir: Path, vpub: str, mint_url: str,
         "if ($d !== false && $d !== '' && !defined('CASHUPAY_DATA_DIR')) {\n"
         "    define('CASHUPAY_DATA_DIR', $d);\n"
         "}\n"
-        f"return require {str(REPO_ROOT / 'router.php')!r};\n"
+        f"return require {str(APP_ROOT / 'router.php')!r};\n"
     )
     env = os.environ.copy()
     env["CASHUPAY_DATA_DIR"] = str(data_dir)
@@ -928,8 +929,8 @@ def setup_payserver_for_sweep(workdir: Path, vpub: str, mint_url: str,
     port = free_port()
     log = (data_dir / "payserver.log").open("ab")
     proc = subprocess.Popen(
-        [str(_php_bin()), "-S", f"127.0.0.1:{port}", "-t", str(REPO_ROOT), str(wrapper)],
-        cwd=str(REPO_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
+        [str(_php_bin()), "-S", f"127.0.0.1:{port}", "-t", str(APP_ROOT), str(wrapper)],
+        cwd=str(APP_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
     )
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:

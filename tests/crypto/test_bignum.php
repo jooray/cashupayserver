@@ -14,7 +14,7 @@
  * differential comparison needs both.
  */
 
-require_once __DIR__ . '/../../includes/crypto/bignum.php';
+require_once __DIR__ . '/../../app/includes/crypto/bignum.php';
 
 if (!function_exists('gmp_init') || !function_exists('bcadd')) {
     echo "SKIP: differential test needs both GMP and BCMath\n";

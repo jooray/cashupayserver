@@ -12,7 +12,7 @@
 declare(strict_types=1);
 require __DIR__ . '/../php/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/swap/claimer.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/claimer.php';
 
 // ---- live fetch against a mock Esplora /fee-estimates -----------------------
 $probe = stream_socket_server('tcp://127.0.0.1:0', $eno, $estr);

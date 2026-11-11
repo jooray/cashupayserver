@@ -57,7 +57,7 @@ assert_true($listening, 'listener child bound the port');
 putenv('CASHUPAY_HELPER_TICK=1');
 putenv('CASHUPAY_HELPER_BOOT_TIMEOUT=5');
 putenv('CASHUPAY_BROWSER_CMD=echo {url} > ' . $marker);
-putenv('CASHUPAY_DESKTOP_APP_DIR=' . $repoRoot);
+putenv('CASHUPAY_DESKTOP_APP_DIR=' . $repoRoot . '/app');
 putenv('CASHUPAY_DATA_DIR=' . $dataDir);
 // Keep the ticked cron passes from reaching out to GitHub mid-test.
 putenv('CASHUPAY_UPDATER_DISABLED=1');

@@ -21,7 +21,7 @@ $repoRoot = dirname(__DIR__, 2);
 $runner = $repoRoot . '/windows/cron-runner.php';
 
 function run_cron_runner(string $runner, string $repoRoot, string $dataDir): array {
-    putenv('CASHUPAY_DESKTOP_APP_DIR=' . $repoRoot);
+    putenv('CASHUPAY_DESKTOP_APP_DIR=' . $repoRoot . '/app');
     putenv('CASHUPAY_DATA_DIR=' . $dataDir);
     putenv('CASHUPAY_UPDATER_DISABLED=1');
     $out = [];

@@ -16,7 +16,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 require __DIR__ . '/http_driver.php';
 $dir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/background.php';
+require_once dirname(__DIR__, 2) . '/app/includes/background.php';
 
 function reset_server_vars(): void {
     unset($_SERVER['HTTPS'], $_SERVER['SERVER_ADDR'], $_SERVER['SERVER_PORT'], $_SERVER['SERVER_NAME']);

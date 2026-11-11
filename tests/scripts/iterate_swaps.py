@@ -46,6 +46,7 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+APP_ROOT = REPO_ROOT / "app"  # the served application tree
 TESTS_DIR = REPO_ROOT / "tests"
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
@@ -308,7 +309,7 @@ def setup_payserver_with_stores(workdir: Path, vpub: str, mint_url: str,
         "if ($d !== false && $d !== '' && !defined('CASHUPAY_DATA_DIR')) {\n"
         "    define('CASHUPAY_DATA_DIR', $d);\n"
         "}\n"
-        f"return require {str(REPO_ROOT / 'router.php')!r};\n"
+        f"return require {str(APP_ROOT / 'router.php')!r};\n"
     )
     env = os.environ.copy()
     env["CASHUPAY_DATA_DIR"] = str(data_dir)
@@ -320,8 +321,8 @@ def setup_payserver_with_stores(workdir: Path, vpub: str, mint_url: str,
     port = swap_stack.free_port()
     log = (data_dir / "payserver.log").open("ab")
     proc = subprocess.Popen(
-        [str(swap_stack.PHP), "-S", f"127.0.0.1:{port}", "-t", str(REPO_ROOT), str(wrapper)],
-        cwd=str(REPO_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
+        [str(swap_stack.PHP), "-S", f"127.0.0.1:{port}", "-t", str(APP_ROOT), str(wrapper)],
+        cwd=str(APP_ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
     )
     deadline = time.monotonic() + 20
     import urllib.request

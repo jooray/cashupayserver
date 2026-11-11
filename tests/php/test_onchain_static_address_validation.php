@@ -15,8 +15,8 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/wallet.php';
-require_once dirname(__DIR__, 2) . '/includes/crypto/taproot.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/wallet.php';
+require_once dirname(__DIR__, 2) . '/app/includes/crypto/taproot.php';
 
 // --- non-Taproot types keep working (regression guard) ---
 assert_true(

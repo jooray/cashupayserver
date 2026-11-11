@@ -6,7 +6,7 @@
  *   https://github.com/bitcoin/bips/blob/master/bip-0341/wallet-test-vectors.json
  */
 
-require_once __DIR__ . '/../../includes/crypto/taproot.php';
+require_once __DIR__ . '/../../app/includes/crypto/taproot.php';
 
 $failures = 0;
 $total = 0;

@@ -17,15 +17,15 @@ $tmp = sys_get_temp_dir() . '/cashupay-feegate-test-' . bin2hex(random_bytes(4))
 mkdir($tmp, 0700, true);
 define('CASHUPAY_DATA_DIR', $tmp);
 
-require_once __DIR__ . '/../../includes/database.php';
-require_once __DIR__ . '/../../includes/config.php';
-require_once __DIR__ . '/../../includes/invoice.php';
-require_once __DIR__ . '/../../includes/swap/factory.php';
-require_once __DIR__ . '/../../includes/swap/config.php';
-require_once __DIR__ . '/../../includes/swap/provider.php';
-require_once __DIR__ . '/../../includes/crypto/secp256k1.php';
-require_once __DIR__ . '/../../includes/crypto/taproot.php';
-require_once __DIR__ . '/../../includes/crypto/tx_builder.php';
+require_once __DIR__ . '/../../app/includes/database.php';
+require_once __DIR__ . '/../../app/includes/config.php';
+require_once __DIR__ . '/../../app/includes/invoice.php';
+require_once __DIR__ . '/../../app/includes/swap/factory.php';
+require_once __DIR__ . '/../../app/includes/swap/config.php';
+require_once __DIR__ . '/../../app/includes/swap/provider.php';
+require_once __DIR__ . '/../../app/includes/crypto/secp256k1.php';
+require_once __DIR__ . '/../../app/includes/crypto/taproot.php';
+require_once __DIR__ . '/../../app/includes/crypto/tx_builder.php';
 
 $failures = 0;
 $total = 0;

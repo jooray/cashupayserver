@@ -10,7 +10,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/background.php';
+require_once dirname(__DIR__, 2) . '/app/includes/background.php';
 
 // cron.php's refusal paths end in a bare `exit` (status 0). A case that trips
 // one kills this process mid-file "successfully", and run.php counts the
@@ -88,7 +88,7 @@ function run_cron(array $get): array {
     $_SERVER['REQUEST_URI'] = '/cron.php';
     $_GET = $get;
     ob_start();
-    require dirname(__DIR__, 2) . '/cron.php';
+    require dirname(__DIR__, 2) . '/app/cron.php';
     $out = ob_get_clean();
     $decoded = json_decode($out, true);
     assert_true(is_array($decoded), 'cron.php output is JSON');

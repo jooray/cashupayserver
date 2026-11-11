@@ -18,7 +18,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 require __DIR__ . '/mock_strike_api.php';
-require_once dirname(__DIR__, 2) . '/includes/strike/client.php';
+require_once dirname(__DIR__, 2) . '/app/includes/strike/client.php';
 
 // ---------- 1. pure helpers ----------
 assert_eq('0.00000001', StrikeClient::satsToBtc(1), '1 sat');

@@ -12,7 +12,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/cart.php';
+require_once dirname(__DIR__, 2) . '/app/includes/cart.php';
 
 make_store('store_cart', null, 'sat');
 

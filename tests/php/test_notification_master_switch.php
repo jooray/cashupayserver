@@ -7,7 +7,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/notification_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/notification_sender.php';
 
 function pending_count(): int {
     return (int)(Database::fetchOne("SELECT COUNT(*) AS c FROM notification_queue")['c'] ?? 0);

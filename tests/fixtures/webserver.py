@@ -14,7 +14,7 @@ Container invariants that keep every existing test working unchanged:
   - --user <host uid>:<gid>: files the server writes (sqlite WAL, uploads) are
     read/writable by pytest and vice versa (password-reset sentinel, etc.).
   - a single identical-path bind mount of the repo root: workdirs and data
-    dirs live under tests/.tmp inside the repo, so DOCUMENT_ROOT, realpath
+    dirs live under app/.tmp inside the served tree, so DOCUMENT_ROOT, realpath
     checks (Database::isDataDirOutsideWebroot) and URLs match php -S exactly.
 
 Docker is invoked as `sudo -n docker`, the suite's house style (see

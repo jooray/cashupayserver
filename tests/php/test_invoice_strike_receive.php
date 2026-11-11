@@ -20,7 +20,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
 require __DIR__ . '/mock_strike_api.php';
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 $KEY = 'INVKEY00' . str_repeat('F', 32);
 

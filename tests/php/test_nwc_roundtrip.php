@@ -11,7 +11,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/nwc/client.php';
+require_once dirname(__DIR__, 2) . '/app/includes/nwc/client.php';
 
 use swentel\nostr\Key\Key;
 

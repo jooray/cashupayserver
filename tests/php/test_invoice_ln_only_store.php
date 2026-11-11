@@ -22,8 +22,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
-require_once dirname(__DIR__, 2) . '/includes/dev_fee.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/dev_fee.php';
 
 use swentel\nostr\Key\Key;
 

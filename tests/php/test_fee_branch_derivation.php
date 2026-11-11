@@ -12,9 +12,9 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/onchain/wallet.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/payments.php';
-require_once dirname(__DIR__, 2) . '/includes/fee_redirect.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/wallet.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/payments.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_redirect.php';
 require_once dirname(__DIR__, 2) . '/scripts/fee-branch-descriptors.php';
 
 use BitWasp\Bitcoin\Key\Factory\HierarchicalKeyFactory;
@@ -83,7 +83,7 @@ $row = Database::fetchOne("SELECT next_index FROM onchain_xpub_state WHERE xpub_
 assert_eq(2, (int)$row['next_index'], 'branched counter keyed by xpub/branch');
 
 // ---- fee-redirect candidates thread the stored branch to the dev fee only ----
-require_once dirname(__DIR__, 2) . '/includes/fee_branch.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_branch.php';
 Config::set(FeeBranch::CONFIG_BRANCH, 33);
 $store = [
     'hosting_fee_destination' => 'host@op.com', 'hosting_fee_onchain_xpub' => $xpubA,

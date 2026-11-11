@@ -9,7 +9,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 define('CASHUPAY_IN_CRON', true);
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 make_store('s1', 'http://127.0.0.1:1'); // dead mint: getWalletForStore fails at loadMint
 Database::update('stores', ['seed_phrase' => 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about'], 'id = ?', ['s1']);

@@ -12,9 +12,9 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/updater.php';
-require_once dirname(__DIR__, 2) . '/includes/notification_sender.php';
-require_once dirname(__DIR__, 2) . '/includes/email_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/updater.php';
+require_once dirname(__DIR__, 2) . '/app/includes/notification_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/email_sender.php';
 
 $shaA = 'notifsha-' . str_repeat('a', 31);
 $shaB = 'notifsha-' . str_repeat('b', 31);

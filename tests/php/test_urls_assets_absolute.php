@@ -14,8 +14,8 @@ declare(strict_types=1);
 require_once __DIR__ . '/harness.php';
 
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/urls.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/urls.php';
 
 // Pin a known base so the assertion is deterministic (no auto-detect from
 // $_SERVER, which is empty under the CLI test runner).

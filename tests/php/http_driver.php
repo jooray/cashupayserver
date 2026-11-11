@@ -23,7 +23,7 @@ final class HttpDriver {
 
     public static function start(string $dataDir, array $env = []): self {
         $d = new self();
-        $repo = dirname(__DIR__, 2);
+        $repo = dirname(__DIR__, 2) . '/app';
         $d->port = self::freePort();
         $d->base = 'http://127.0.0.1:' . $d->port;
         $d->cookieJar = $dataDir . '/driver-cookies-' . bin2hex(random_bytes(4)) . '.txt';

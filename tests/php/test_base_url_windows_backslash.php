@@ -20,8 +20,8 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
 
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/urls.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/urls.php';
 
 $_SERVER['HTTP_HOST'] = '127.0.0.1:8737';
 unset($_SERVER['HTTPS']);
@@ -56,7 +56,7 @@ assert_eq(
 // upd_base_url() mirrors Config::getBaseUrl() and must normalize the same
 // way — the updater health probe self-request uses it.
 define('CASHUPAY_UPDATE_PHP_NO_RUN', true);
-require dirname(__DIR__, 2) . '/update.php';
+require dirname(__DIR__, 2) . '/app/update.php';
 
 $_SERVER['SCRIPT_NAME'] = '/sub\\dir/update.php';
 assert_eq(

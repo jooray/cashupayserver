@@ -16,7 +16,7 @@ require __DIR__ . '/harness.php';
 putenv('CASHUPAY_USAGE_STATS_ENDPOINT');
 fresh_db();
 putenv('CASHUPAY_USAGE_STATS_ENDPOINT');
-require_once dirname(__DIR__, 2) . '/includes/usage_stats.php';
+require_once dirname(__DIR__, 2) . '/app/includes/usage_stats.php';
 
 assert_eq('https://getbarebits.com/analytics/report.php', CASHUPAY_USAGE_STATS_ENDPOINT, 'production default URL');
 

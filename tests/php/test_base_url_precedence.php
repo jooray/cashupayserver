@@ -21,7 +21,7 @@ fresh_db();
 
 define('CASHUPAY_BASE_URL', 'https://shop.example/barebits/');
 
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 // Autodetection would produce http://pay.test — the assertions below prove
 // it never gets the chance while the pin exists.

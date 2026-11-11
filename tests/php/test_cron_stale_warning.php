@@ -6,7 +6,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/background.php';
+require_once dirname(__DIR__, 2) . '/app/includes/background.php';
 
 $threshold = Background::CRON_STALE_THRESHOLD_SECS;
 $now = time();

@@ -7,7 +7,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/security.php';
+require_once dirname(__DIR__, 2) . '/app/includes/security.php';
 
 fresh_db(); // Config::get reads the DB; trusted_proxies comes from env here.
 

@@ -136,10 +136,10 @@ if (PHP_SAPI === 'cli' && isset($argv[0]) && realpath($argv[0]) === __FILE__) {
         fwrite(STDERR, (string)preg_replace('/^.*?\/\*\*(.*?)\*\/.*$/s', '$1', file_get_contents(__FILE__)) . "\n");
         exit(0);
     }
-    require_once __DIR__ . '/../includes/dev_fee.php';
-    require_once __DIR__ . '/../includes/fee_branch.php';
-    require_once __DIR__ . '/../includes/onchain/wallet.php';
-    require_once __DIR__ . '/../includes/safe_http.php';
+    require_once __DIR__ . '/../app/includes/dev_fee.php';
+    require_once __DIR__ . '/../app/includes/fee_branch.php';
+    require_once __DIR__ . '/../app/includes/onchain/wallet.php';
+    require_once __DIR__ . '/../app/includes/safe_http.php';
 
     $network = (string)($opts['network'] ?? CASHUPAY_DEV_FEE_ONCHAIN_NETWORK);
     $type    = (string)($opts['type'] ?? CASHUPAY_DEV_FEE_ONCHAIN_ADDRESS_TYPE);

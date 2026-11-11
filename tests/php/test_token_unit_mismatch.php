@@ -14,7 +14,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
 
-require_once dirname(__DIR__, 2) . '/includes/offline_cashu.php';
+require_once dirname(__DIR__, 2) . '/app/includes/offline_cashu.php';
 
 use Cashu\Wallet;
 use Cashu\WalletStorage;

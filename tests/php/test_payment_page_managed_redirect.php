@@ -19,7 +19,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 make_store('store_redir');
 
@@ -46,7 +46,7 @@ function make_invoice(string $id, ?string $redirectUrl): void {
     ]);
 }
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $runner = $dataDir . '/payment_redirect_runner.php';
 file_put_contents($runner, sprintf(<<<'PHP'
 <?php

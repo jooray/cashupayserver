@@ -6,7 +6,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/clink/noffer.php';
+require_once dirname(__DIR__, 2) . '/app/includes/clink/noffer.php';
 
 // ---------- round-trip with all fields ----------
 $pk = str_repeat('ab', 32);

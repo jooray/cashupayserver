@@ -14,7 +14,7 @@ require __DIR__ . '/harness.php';
 // The provider records host failures via EndpointHealth (config table), so it
 // needs an isolated DB even though the test itself is network-only.
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/onchain/provider.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/provider.php';
 
 $ADDR = 'bc1qexampleexampleexampleexampleexampleexx';
 

@@ -17,7 +17,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/harness.php';
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 
 // Every PHP entry point that renders HTML, plus all first-party JS.
 $scanned = array_merge(

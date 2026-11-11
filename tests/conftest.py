@@ -67,7 +67,13 @@ from fixtures import webserver  # noqa: E402
 DEFAULT_ADMIN_PASSWORD = "test-admin-pw-1234"
 DEFAULT_STORE_NAME = "Test Store"
 
-SESSION_TMP = TESTS_DIR / ".tmp"
+# Session scratch (per-test workdirs, data dirs, logs). Lives INSIDE the served
+# application tree (app/.tmp) on purpose: a fixture server's data dir is then
+# under the web root, the shape of a shared-hosting install, so the wizard
+# shows its security screen and the deny rules (router.php / .htaccess /
+# nginx) are exercised against real files. Gitignored, never copied by the
+# build scripts, and hidden-path-denied like any dot-directory.
+SESSION_TMP = TESTS_DIR.parent / "app" / ".tmp"
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +177,7 @@ def _maybe_remove_workdir(workdir: Path, green: bool) -> None:
 
 def _sweep_stale_fixture_processes() -> None:
     """Kill fixture processes (php -S, bitcoind, lnd, mint, …) orphaned by a
-    previous killed run: anything whose cmdline references tests/.tmp. Runs
+    previous killed run: anything whose cmdline references app/.tmp. Runs
     before this session creates its own workdirs, so a live match is stale by
     definition — except a concurrently running suite on this same checkout;
     opt out with CASHUPAY_NO_STALE_SWEEP=1 in that case."""

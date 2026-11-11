@@ -19,7 +19,7 @@ putenv('CASHUPAY_FREE_TRIAL_UNTIL');
 putenv('CASHUPAY_FREE_TRIAL_REVENUE_SATS');
 
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/free_trial.php';
+require_once dirname(__DIR__, 2) . '/app/includes/free_trial.php';
 
 $status = FreeTrial::status();
 assert_true($status['configured'], 'constants set → configured');

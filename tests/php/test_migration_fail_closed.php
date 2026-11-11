@@ -18,7 +18,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/auth.php';
+require_once dirname(__DIR__, 2) . '/app/includes/auth.php';
 
 if (function_exists('posix_geteuid') && posix_geteuid() === 0) {
     echo "skip: running as root, read-only simulation impossible\n";

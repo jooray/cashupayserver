@@ -12,7 +12,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/updater.php';
+require_once dirname(__DIR__, 2) . '/app/includes/updater.php';
 
 $base = sys_get_temp_dir() . '/cashupay_overlay_test_' . bin2hex(random_bytes(6));
 $src = $base . '/source';

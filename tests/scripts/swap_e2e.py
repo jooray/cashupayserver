@@ -45,6 +45,7 @@ import urllib.error
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+APP_ROOT = REPO_ROOT / "app"  # the served application tree
 PHP = REPO_ROOT / "tests" / "bin" / "php-8.3.31" / "php"
 BOLTZ_REGTEST_URL = "http://localhost:29001"
 BOLTZ_SCRIPTS_CONTAINER = "boltz-scripts"
@@ -89,8 +90,8 @@ def php_eval(data_dir: Path, snippet: str) -> str:
     """Run a PHP snippet with CASHUPAY_DATA_DIR pre-defined."""
     code = (
         f"define('CASHUPAY_DATA_DIR', {str(data_dir)!r});\n"
-        f"require_once {str(REPO_ROOT / 'includes' / 'database.php')!r};\n"
-        f"require_once {str(REPO_ROOT / 'includes' / 'config.php')!r};\n"
+        f"require_once {str(APP_ROOT / 'includes' / 'database.php')!r};\n"
+        f"require_once {str(APP_ROOT / 'includes' / 'config.php')!r};\n"
         + snippet
     )
     res = subprocess.run([str(PHP), "-r", code], capture_output=True, text=True)
@@ -208,11 +209,11 @@ def start_payserver(data_dir: Path, port: int) -> subprocess.Popen:
         "if ($d !== false && $d !== '' && !defined('CASHUPAY_DATA_DIR')) {\n"
         "    define('CASHUPAY_DATA_DIR', $d);\n"
         "}\n"
-        f"return require {str(REPO_ROOT / 'router.php')!r};\n"
+        f"return require {str(APP_ROOT / 'router.php')!r};\n"
     )
     proc = subprocess.Popen(
-        [str(PHP), "-S", f"127.0.0.1:{port}", "-t", str(REPO_ROOT), str(wrapper)],
-        cwd=str(REPO_ROOT),
+        [str(PHP), "-S", f"127.0.0.1:{port}", "-t", str(APP_ROOT), str(wrapper)],
+        cwd=str(APP_ROOT),
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

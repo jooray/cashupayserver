@@ -19,7 +19,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/security.php';
+require_once dirname(__DIR__, 2) . '/app/includes/security.php';
 
 if (!class_exists('\Cashu\ConnectGuard', false)) {
     echo "skip: cashu-wallet-php has no ConnectGuard yet (guard wiring is a no-op until it does)\n";

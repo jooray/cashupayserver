@@ -19,13 +19,13 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/payments.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/provider.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/config.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/config.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/factory.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/provider.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/payments.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/provider.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/factory.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/provider.php';
 
 $xpub = 'xpub69uEaVYoN1mZyMon8qwRP41YjYyevp3YxJ68ymBGV7qmXZ9rsbMy9kBZnLNPg3TLjKd2EnMw5BtUFQCGrTVDjQok859LowMV2SEooseLCt1';
 

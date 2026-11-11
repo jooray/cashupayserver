@@ -9,7 +9,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/safe_http.php';
+require_once dirname(__DIR__, 2) . '/app/includes/safe_http.php';
 
 // isPlainHostSyntax matrix
 foreach (['example.com', 'mint.example.co.uk', 'cashu_mint', 'a-b.c-d', '8.8.8.8', '[2606:4700::1]', 'x1.y2'] as $h) {

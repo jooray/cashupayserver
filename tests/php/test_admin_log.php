@@ -14,8 +14,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/admin_log.php';
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/admin_log.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 make_store('store_log_a');
 make_store('store_log_b');

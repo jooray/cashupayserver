@@ -17,7 +17,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
 require __DIR__ . '/updater_fixture.php';
-require_once dirname(__DIR__, 2) . '/includes/updater.php';
+require_once dirname(__DIR__, 2) . '/app/includes/updater.php';
 
 // .htaccess in the shipped tree, plus its hash that BUILD_INFO carries.
 $shippedHtaccess = "# new htaccess\nRewriteEngine On\n";

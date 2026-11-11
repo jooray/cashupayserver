@@ -26,7 +26,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 // ---------------------------------------------------------------- mock mint
 
@@ -98,7 +98,7 @@ Database::insert('users', [
     'created_at'    => Database::timestamp(),
 ]);
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $runner = $dataDir . '/admin_mint_runner.php';
 file_put_contents($runner, sprintf(<<<'PHP'
 <?php
@@ -162,7 +162,7 @@ Database::insert('stores', [
     'created_at' => Database::timestamp(),
 ]);
 // Mirror the mintless setup path: strict-no-mint-fallback pinned ON.
-require_once dirname(__DIR__, 2) . '/includes/swap/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/config.php';
 SwapsConfig::setStoreStrictOverride('store_seedless', SwapsConfig::FORCE_ON);
 $res = admin_post([
     'action' => 'enable_store_mint',

@@ -15,8 +15,8 @@ putenv('CASHUPAY_DEV_FEE_BRANCH_ENDPOINT=' . $ep->url);
 putenv('CASHUPAY_ALLOW_PRIVATE_ENDPOINTS=1');
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/dev_fee.php';
-require_once dirname(__DIR__, 2) . '/includes/fee_branch.php';
+require_once dirname(__DIR__, 2) . '/app/includes/dev_fee.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_branch.php';
 
 assert_eq($ep->url, CASHUPAY_DEV_FEE_BRANCH_ENDPOINT, 'env override reaches the constant');
 assert_false(FeeBranch::isDisabled(), 'explicit endpoint enables the client even on a test rig');

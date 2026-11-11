@@ -14,8 +14,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/usage_stats.php';
-require_once dirname(__DIR__, 2) . '/includes/products.php';
+require_once dirname(__DIR__, 2) . '/app/includes/usage_stats.php';
+require_once dirname(__DIR__, 2) . '/app/includes/products.php';
 
 $NOW = 1_800_000_000;
 $MINT  = 'https://mint.secret-example.com';

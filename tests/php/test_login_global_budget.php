@@ -16,7 +16,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/security.php';
+require_once dirname(__DIR__, 2) . '/app/includes/security.php';
 
 $granted = 0;
 for ($i = 1; $i <= 25; $i++) {

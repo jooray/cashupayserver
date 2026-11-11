@@ -19,7 +19,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 // The session needs a real admin row so anything resolving currentUser works.
 Database::insert('users', [
@@ -30,7 +30,7 @@ Database::insert('users', [
     'created_at'    => Database::timestamp(),
 ]);
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $runner = $dataDir . '/admin_notif_runner.php';
 file_put_contents($runner, sprintf(<<<'PHP'
 <?php

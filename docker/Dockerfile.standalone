@@ -18,15 +18,16 @@ RUN mkdir -p /usr/src/sqlite-plugin \
     && curl -L https://github.com/WordPress/sqlite-database-integration/archive/refs/heads/main.tar.gz \
     | tar xz -C /usr/src/sqlite-plugin --strip-components=1
 
-# Copy CashuPayServer source for standalone mode
-COPY includes/ /opt/cashupayserver/includes/
-COPY templates/ /opt/cashupayserver/templates/
-COPY assets/ /opt/cashupayserver/assets/
-COPY api-keys/ /opt/cashupayserver/api-keys/
-COPY cashu-wallet-php/CashuWallet.php /opt/cashupayserver/cashu-wallet-php/CashuWallet.php
-COPY cashu-wallet-php/bip39-english.txt /opt/cashupayserver/cashu-wallet-php/bip39-english.txt
-COPY admin.php setup.php api.php payment.php receive.php cron.php router.php index.php /opt/cashupayserver/
-COPY .htaccess /opt/cashupayserver/
+# Copy CashuPayServer source for standalone mode. The application tree lives
+# under app/ in the repository; it is flattened here to the installed layout.
+# Build from the repo root: docker build -f docker/Dockerfile.standalone .
+COPY app/includes/ /opt/cashupayserver/includes/
+COPY app/assets/ /opt/cashupayserver/assets/
+COPY app/api-keys/ /opt/cashupayserver/api-keys/
+COPY app/cashu-wallet-php/CashuWallet.php /opt/cashupayserver/cashu-wallet-php/CashuWallet.php
+COPY app/cashu-wallet-php/bip39-english.txt /opt/cashupayserver/cashu-wallet-php/bip39-english.txt
+COPY app/admin.php app/setup.php app/api.php app/payment.php app/receive.php app/cron.php app/router.php app/index.php /opt/cashupayserver/
+COPY app/.htaccess /opt/cashupayserver/
 
 # Create data directory
 RUN mkdir -p /opt/cashupayserver/data \

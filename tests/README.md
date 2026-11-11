@@ -97,7 +97,7 @@ The WP tier used to run `wp core install` (+ plugin activations, + the whole
 WooCommerce/BTCPay install for checkout tests) per test. Now the first install
 of each DB-affecting shape per session — `bare` (no cashupay plugin), `plugin`
 (cashupay active), `woo` (plugin + WooCommerce + BTC store + one product) — is
-kept as a golden tree under `tests/.tmp/wp-golden-*`, and every later test
+kept as a golden tree under `app/.tmp/wp-golden-*`, and every later test
 gets a `cp -a` clone of it (`fixtures/wordpress.py`).
 
 Safe because the only per-instance state is serve-time: each clone gets a
@@ -134,7 +134,7 @@ free disk/RAM before each pytest pass and refuses to start below 4G disk /
 2G available RAM (warns below 10G / 4G) — `CASHUPAY_SKIP_PREFLIGHT=1`
 bypasses. Every run ends with pytest's `--durations` ranking of the slowest
 tests and fixture setups, so future speedup work starts from data. At session start, orphaned
-fixture processes from previously killed runs (anything with `tests/.tmp` in
+fixture processes from previously killed runs (anything with `app/.tmp` in
 its cmdline) are swept — set `CASHUPAY_NO_STALE_SWEEP=1` when deliberately
 running two suites concurrently from this checkout.
 
@@ -158,8 +158,12 @@ tests/
   wordpress/           # WordPress plugin tests (wp-cli + sqlite drop-in)
   scripts/             # run-tests.sh, download-binaries.sh
   bin/                 # cached binaries (gitignored)
-  .tmp/                # per-test isolated dirs (gitignored)
 ```
+
+Per-test isolated dirs live in `app/.tmp/` (gitignored): inside the served
+application tree on purpose, so a fixture server's data dir sits under the web
+root like a shared-hosting install (wizard security screen, deny rules on real
+files). See `SESSION_TMP` in `conftest.py`.
 
 ## Pinned versions
 

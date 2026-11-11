@@ -9,7 +9,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/security.php';
+require_once dirname(__DIR__, 2) . '/app/includes/security.php';
 
 // Accepted.
 assert_eq('https://example.com/return', Security::sanitizeUrl('https://example.com/return'), 'https');

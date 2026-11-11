@@ -16,8 +16,8 @@ require __DIR__ . '/harness.php';
 putenv('CASHUPAY_DEV_FEE_BRANCH_ENDPOINT');
 fresh_db();
 putenv('CASHUPAY_DEV_FEE_BRANCH_ENDPOINT');
-require_once dirname(__DIR__, 2) . '/includes/dev_fee.php';
-require_once dirname(__DIR__, 2) . '/includes/fee_branch.php';
+require_once dirname(__DIR__, 2) . '/app/includes/dev_fee.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_branch.php';
 
 assert_eq('https://getbarebits.com/xpub/xpub.php', CASHUPAY_DEV_FEE_BRANCH_ENDPOINT, 'production default URL');
 
@@ -36,7 +36,7 @@ assert_true($st['disabled']);
 assert_null($st['endpoint'], 'status hides the endpoint when disabled');
 
 // Fee-redirect candidates carry branch=null -> shared-chain derivation.
-require_once dirname(__DIR__, 2) . '/includes/fee_redirect.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_redirect.php';
 $cands = FeeRedirect::candidates(['onchain_network' => 'mainnet'], ['dev_owed' => 5, 'hosting_owed' => 0]);
 assert_null($cands[0]['branch'], 'dev candidate has no branch');
 assert_null($cands[1]['branch'], 'hosting candidate never has a branch');

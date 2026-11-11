@@ -49,7 +49,7 @@ function run_with_disabled(string $disabled, string $code): array {
     return [$rc, implode("\n", $out)];
 }
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $prelude = 'require_once ' . var_export($root . '/includes/clink/client.php', true) . ';';
 
 // 1. GMP disabled + BCMath present: the gate is OPEN and the advisory fires.

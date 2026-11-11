@@ -20,8 +20,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 // ---------------------------------------------------------------------------
 // 1. Resolution
@@ -86,7 +86,7 @@ Database::insert('users', [
     'created_at'    => Database::timestamp(),
 ]);
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $runner = $dataDir . '/admin_po_runner.php';
 file_put_contents($runner, sprintf(<<<'PHP'
 <?php

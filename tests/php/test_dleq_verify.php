@@ -9,7 +9,7 @@
 
 declare(strict_types=1);
 
-require_once __DIR__ . '/../../cashu-wallet-php/CashuWallet.php';
+require_once __DIR__ . '/../../app/cashu-wallet-php/CashuWallet.php';
 
 use Cashu\Crypto;
 

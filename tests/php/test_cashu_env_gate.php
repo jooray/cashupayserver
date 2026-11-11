@@ -24,7 +24,7 @@ function run_with_disabled(string $disabled, string $code): array {
     return [$rc, implode("\n", $out)];
 }
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $prelude = 'require_once ' . var_export($root . '/includes/cashu_env.php', true) . ';'
     . 'echo CashuEnv::environmentError() ?? "NULL";';
 

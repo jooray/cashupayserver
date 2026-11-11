@@ -7,7 +7,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 $Ys = ['02aa', '02bb', '02cc'];
 $spent = fn(string $y) => ['Y' => $y, 'state' => 'SPENT', 'witness' => null];

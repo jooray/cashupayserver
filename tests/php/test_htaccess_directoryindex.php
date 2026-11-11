@@ -18,7 +18,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 
-$htaccess = dirname(__DIR__, 2) . '/.htaccess';
+$htaccess = dirname(__DIR__, 2) . '/app/.htaccess';
 assert_true(is_file($htaccess), '.htaccess exists at repo root');
 
 $contents = file_get_contents($htaccess);

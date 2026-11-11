@@ -8,7 +8,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/email_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/email_sender.php';
 
 // No SMTP host defined yet.
 assert_eq(false, EmailSender::isSmtpConfigured(), 'isSmtpConfigured false when host unset');

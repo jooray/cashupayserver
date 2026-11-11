@@ -20,13 +20,13 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 require __DIR__ . '/mock_mint_stub.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/factory.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/poller.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/provider.php';
-require_once dirname(__DIR__, 2) . '/includes/crypto/secp256k1.php';
-require_once dirname(__DIR__, 2) . '/includes/crypto/taproot.php';
-require_once dirname(__DIR__, 2) . '/includes/crypto/tx_builder.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/factory.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/poller.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/provider.php';
+require_once dirname(__DIR__, 2) . '/app/includes/crypto/secp256k1.php';
+require_once dirname(__DIR__, 2) . '/app/includes/crypto/taproot.php';
+require_once dirname(__DIR__, 2) . '/app/includes/crypto/tx_builder.php';
 
 /** Trimmed twin of tests/swap/test_mock_flow.php's provider: valid taproot swap, scripted status. */
 final class MockSwapProvider implements SwapProvider {

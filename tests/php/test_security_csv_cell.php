@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/security.php';
+require_once dirname(__DIR__, 2) . '/app/includes/security.php';
 
 // Dangerous leading characters -> single-quote prefixed.
 assert_eq("'=HYPERLINK(\"http://evil\",\"x\")", Security::csvCell('=HYPERLINK("http://evil","x")'), 'equals');

@@ -9,7 +9,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/endpoint_health.php';
+require_once dirname(__DIR__, 2) . '/app/includes/endpoint_health.php';
 
 // Unknown endpoint: not cooling down.
 assert_false(EndpointHealth::isCoolingDown('rates:nosuch'), 'unknown endpoint is not cooling down');

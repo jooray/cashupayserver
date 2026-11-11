@@ -9,7 +9,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 
 // file => expected number of warning instances
 $surfaces = [

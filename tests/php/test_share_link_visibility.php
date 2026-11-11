@@ -19,8 +19,8 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
 
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/urls.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/urls.php';
 
 // --- Shareable: public hosts, any scheme/port/path ---------------------------
 assert_true(Urls::paymentLinkShareable(false, 'https://pay.example.com'),

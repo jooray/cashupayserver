@@ -21,11 +21,11 @@ define('CASHUPAY_DATA_DIR', $tmp);
 define('CASHUPAY_SWAPS_FEE_FALLBACK_MAX_PCT', 5.0);
 define('CASHUPAY_SWAPS_FEE_FALLBACK_MAX_SATS', 2000);
 
-require_once __DIR__ . '/../../includes/database.php';
+require_once __DIR__ . '/../../app/includes/database.php';
 Database::ensureExists();
 Database::initialize();
-require_once __DIR__ . '/../../includes/config.php';
-require_once __DIR__ . '/../../includes/swap/config.php';
+require_once __DIR__ . '/../../app/includes/config.php';
+require_once __DIR__ . '/../../app/includes/swap/config.php';
 
 $failures = 0;
 $total = 0;

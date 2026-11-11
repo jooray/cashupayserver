@@ -16,7 +16,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/stats.php';
+require_once dirname(__DIR__, 2) . '/app/includes/stats.php';
 
 const SECRET_COLUMNS = ['strike_api_key', 'nwc_uri', 'noffer_ephemeral_sk', 'cashu_offline_token'];
 

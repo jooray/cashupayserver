@@ -13,7 +13,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
 require __DIR__ . '/updater_fixture.php';
-require_once dirname(__DIR__, 2) . '/includes/updater.php';
+require_once dirname(__DIR__, 2) . '/app/includes/updater.php';
 
 // --- Accessor round-trips ---
 assert_eq([], Updater::getBlockedShas(), 'blocked list starts empty');

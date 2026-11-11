@@ -1,6 +1,10 @@
 # Production deploy of CashuPayServer (BareBits fork).
 # See docs/docker-production.md for the operator guide.
 #
+# Lives in docker/ so the repository root stays documentation-only; the build
+# context is still the repo root. Run from the repo root with:
+#   docker compose -f docker/docker-compose.yml up -d --build
+#
 # TLS belongs in a reverse proxy in front of this service (Caddy, Traefik,
 # nginx, Cloudflare). This image only serves HTTP on port 80 inside the
 # container, mapped to 8080 on the host to leave port 80 free for the proxy.
@@ -8,7 +12,7 @@
 services:
   cashupayserver:
     build:
-      context: .
+      context: ..
       dockerfile: docker/Dockerfile.production
     image: cashupayserver:latest
     container_name: cashupayserver

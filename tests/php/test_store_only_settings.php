@@ -10,11 +10,11 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/config.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/auto_melt.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/factory.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/auto_melt.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/factory.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/config.php';
 
 $xpub = 'tpubD6NzVbkrYhZ4WaWSyoBvQwbpLkojyoTZPRsgXELWz3Popb3qkjcJyJUGLnL4qHHoQvao8ESaAstxYSnhyswJ76uZPStJRJCTKvosUCJZL5B';
 

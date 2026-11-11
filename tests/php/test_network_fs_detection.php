@@ -9,7 +9,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/background.php';
+require_once dirname(__DIR__, 2) . '/app/includes/background.php';
 
 /** Write $table to a fresh temp file (one per call — tests hold several at once). */
 function with_mounts(string $table): string {

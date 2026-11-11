@@ -13,7 +13,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/locks.php';
+require_once dirname(__DIR__, 2) . '/app/includes/locks.php';
 
 $a = cashupay_acquire_lock('funds_s1');
 assert_true(is_resource($a), 'first acquire succeeds');

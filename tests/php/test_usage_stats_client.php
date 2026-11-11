@@ -16,7 +16,7 @@ putenv('CASHUPAY_USAGE_STATS_ENDPOINT=' . $ep->url);
 putenv('CASHUPAY_ALLOW_PRIVATE_ENDPOINTS=1');
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/usage_stats.php';
+require_once dirname(__DIR__, 2) . '/app/includes/usage_stats.php';
 make_store('s1', 'https://mint.example.com');
 $NOW = 1_800_000_000;
 

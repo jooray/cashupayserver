@@ -11,8 +11,8 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/setup_flow.php';
-require_once dirname(__DIR__, 2) . '/includes/desktop.php';
+require_once dirname(__DIR__, 2) . '/app/includes/setup_flow.php';
+require_once dirname(__DIR__, 2) . '/app/includes/desktop.php';
 
 // --- Desktop drops the cron screen ----------------------------------------
 
