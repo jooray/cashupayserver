@@ -587,6 +587,7 @@ if (isset($_GET['api'])) {
                     ];
                 })(),
                 'cronStaleWarning' => Background::cronStaleWarning(),
+                'networkFsWarning' => Background::networkFsWarning(),
                 // Money the store handed out in tokens nobody has cashed in
                 // yet, the per-account (primary + backup mint) breakdown so
                 // failover-settled funds are never invisible, and the recent
@@ -634,12 +635,6 @@ if (isset($_GET['api'])) {
                 'last_full_seen_ago_sec' => $fullSeenAt > 0 ? ($now - $fullSeenAt) : null,
                 'last_swaps_seen_ago_sec' => $swapsSeenAt > 0 ? ($now - $swapsSeenAt) : null,
             ]);
-            break;
-
-        case 'dismiss_cron_warning':
-            Auth::requireAdmin();
-            Background::dismissCronWarning();
-            echo json_encode(['success' => true]);
             break;
 
         case 'upgrade_banner':
@@ -1798,6 +1793,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         case 'dismiss_auto_rollback':
             Auth::requireAdmin();
             Config::set('updater_auto_rollback_dismissed', true);
+            echo json_encode(['success' => true]);
+            break;
+
+        // Dashboard banner dismissals. These live in this POST switch because
+        // the dashboard's postWithCsrf() sends `action=`, which the `?api=`
+        // GET dispatcher above never sees — dismiss_cron_warning sat there
+        // until 2026-11 and the stale-cron banner silently came back on every
+        // dashboard load.
+        case 'dismiss_cron_warning':
+            Auth::requireAdmin();
+            Background::dismissCronWarning();
+            echo json_encode(['success' => true]);
+            break;
+
+        case 'dismiss_network_fs_warning':
+            Auth::requireAdmin();
+            Background::dismissNetworkFsWarning();
             echo json_encode(['success' => true]);
             break;
 
@@ -6365,6 +6377,14 @@ header('Cache-Control: no-cache, must-revalidate');
                     <a href="#" class="btn btn-secondary js-goto-settings" style="padding: 0.25rem 0.75rem; font-size: 0.8rem; flex-shrink: 0;">Settings · Copy cron URL</a>
                     <button id="btn-dismiss-cron-stale" aria-label="Dismiss" style="background: transparent; border: 0; color: var(--text-secondary); cursor: pointer; font-size: 1.2rem; line-height: 1; padding: 0 0.25rem; flex-shrink: 0;">×</button>
                 </div>
+                <div id="network-fs-banner" class="hidden" style="background: rgba(245, 101, 101, 0.12); border: 1px solid rgba(245, 101, 101, 0.45); border-radius: 8px; padding: 0.75rem 1rem; margin-bottom: 1rem; font-size: 0.9rem; display: flex; align-items: flex-start; gap: 0.75rem;" data-admin-only="true">
+                    <span style="flex-shrink: 0; font-size: 1.1rem; line-height: 1.2;">💾</span>
+                    <span style="flex: 1;">
+                        <strong style="display: block; margin-bottom: 0.15rem;">Your database is on a network filesystem</strong>
+                        <span id="network-fs-banner-text" style="color: var(--text-secondary); font-size: 0.85rem;"></span>
+                    </span>
+                    <button id="btn-dismiss-network-fs" aria-label="Dismiss" style="background: transparent; border: 0; color: var(--text-secondary); cursor: pointer; font-size: 1.2rem; line-height: 1; padding: 0 0.25rem; flex-shrink: 0;">×</button>
+                </div>
                 <div class="balance-card">
                     <div class="balance-label">Balance stored in Cashu Mint</div>
                     <div class="balance-amount" id="balance-amount">---</div>
@@ -9521,6 +9541,8 @@ header('Cache-Control: no-cache, must-revalidate');
             if (updateNowBannerBtn) updateNowBannerBtn.addEventListener('click', startManualUpdate);
             const dismissCronBtn = document.getElementById('btn-dismiss-cron-stale');
             if (dismissCronBtn) dismissCronBtn.addEventListener('click', dismissCronStaleBanner);
+            const dismissNetFsBtn = document.getElementById('btn-dismiss-network-fs');
+            if (dismissNetFsBtn) dismissNetFsBtn.addEventListener('click', dismissNetworkFsBanner);
             document.getElementById('btn-logout').addEventListener('click', logout);
 
             // My Account + Users
@@ -10266,6 +10288,7 @@ header('Cache-Control: no-cache, must-revalidate');
                 // Reliability banner / settings cards.
                 updateReliabilityBanner(dashboardData.reliability);
                 updateCronStaleBanner(dashboardData.cronStaleWarning || null);
+                updateNetworkFsBanner(dashboardData.networkFsWarning || null);
 
                 // Static-address manual-confirmation banner. Visible on every
                 // admin view (it lives above the view containers) but the
@@ -15715,6 +15738,46 @@ header('Cache-Control: no-cache, must-revalidate');
                 banner.classList.remove('hidden');
             } else {
                 banner.classList.add('hidden');
+            }
+        }
+
+        // Data directory on NFS/SMB/etc. (Database::networkFilesystemWarning).
+        // SQLite's locks are not honoured over network shares, so concurrent
+        // payments can corrupt the database — the ecash in it. Shown until the
+        // operator dismisses it for this particular mount (Background keys the
+        // dismissal on the detected evidence, so a later move re-arms it).
+        function updateNetworkFsBanner(state) {
+            const banner = document.getElementById('network-fs-banner');
+            if (!banner) return;
+            if (!state) {
+                banner.classList.add('hidden');
+                return;
+            }
+            const text = document.getElementById('network-fs-banner-text');
+            if (text) {
+                let detail;
+                if (state.reason === 'journal') {
+                    detail = 'SQLite could not enable write-ahead logging on ' + state.path
+                        + ' (mode in effect: ' + (state.journalMode || 'unknown') + ').';
+                } else {
+                    detail = state.path + ' is on a ' + state.fsType + ' mount (' + state.mountPoint + ').';
+                }
+                text.textContent = detail
+                    + ' SQLite file locking is not reliable on network or shared-folder filesystems,'
+                    + ' so two payments confirming at once can corrupt the database and the ecash in it.'
+                    + ' Move the data directory to a local disk (CASHUPAY_DATA_DIR in includes/config.local.php).'
+                    + ' If you are sure this setup is safe, dismiss this notice.';
+            }
+            banner.classList.remove('hidden');
+        }
+
+        async function dismissNetworkFsBanner() {
+            const banner = document.getElementById('network-fs-banner');
+            if (banner) banner.classList.add('hidden');
+            try {
+                await postWithCsrf(adminUrl, 'action=dismiss_network_fs_warning');
+            } catch (e) {
+                // No-op; banner will reappear on next dashboard load if dismissal didn't persist.
             }
         }
 

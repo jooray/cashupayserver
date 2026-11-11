@@ -37,6 +37,26 @@ class Database {
     private static ?string $dataDir = null;
     /** Last connect/migration failure in this process (see getMigrationError). */
     private static ?string $migrationError = null;
+    /**
+     * The journal mode SQLite actually reports after connect() asks for WAL
+     * (lower-case, e.g. 'wal' or 'delete'); null before the first connect.
+     * Anything but 'wal' means the filesystem refused write-ahead logging —
+     * see networkFilesystemWarning().
+     */
+    private static ?string $journalMode = null;
+    /** Busy/locked retries performed in this process (tests + diagnostics). */
+    private static int $busyRetries = 0;
+
+    /**
+     * How many times a lock-contended statement is attempted before the
+     * SQLITE_BUSY surfaces. Every attempt already waits the connection's
+     * busy_timeout (5 s), so 3 attempts bound a request at ~15.5 s — inside
+     * PHP's default 30 s max_execution_time with room for the real work.
+     */
+    public const BUSY_RETRY_ATTEMPTS = 3;
+    /** Jittered pause between attempts, microseconds. */
+    private const BUSY_RETRY_SLEEP_MIN_US = 50_000;
+    private const BUSY_RETRY_SLEEP_MAX_US = 250_000;
 
     /**
      * Get the data directory path
@@ -75,6 +95,153 @@ class Database {
         }
 
         return strpos($dataDir, $docRoot) !== 0;
+    }
+
+    /**
+     * Filesystem types SQLite must not live on. True network protocols plus
+     * the VM shared-folder drivers whose byte-range locking is known to be
+     * broken for SQLite. Deliberately NOT here: overlay (Docker), every
+     * local type, generic fuse (a local FUSE mount is fine), tmpfs. A bind
+     * mount or Docker volume reports its underlying type, so none of those
+     * trigger either.
+     */
+    public const NETWORK_FS_TYPES = [
+        'nfs', 'nfs3', 'nfs4', 'cifs', 'smb3', 'smbfs', 'fuse.sshfs', 'afs',
+        'glusterfs', 'fuse.glusterfs', 'ceph', 'fuse.ceph', 'davfs', 'fuse.davfs2',
+        'lustre', 'gfs2', 'ocfs2', '9p', 'vboxsf',
+    ];
+
+    /**
+     * Is the data directory on a filesystem SQLite cannot safely use?
+     *
+     * SQLite upstream is explicit that network filesystems are unsafe: the
+     * byte-range locks WAL mode and busy-waiting rely on are not honoured
+     * reliably over NFS/SMB (two processes can both believe they hold the
+     * write lock, which corrupts the database — here, the ecash). Two
+     * independent signals, either one enough to warn:
+     *
+     *   - 'mount':   the directory's own mount point (longest-prefix match
+     *                in /proc/mounts, Linux only; a UNC path on Windows) has
+     *                a type in NETWORK_FS_TYPES. The evidence (type + mount
+     *                point) is returned so the operator can judge it.
+     *   - 'journal': connect() asked for WAL and SQLite answered with some
+     *                other mode. That is a hard fact about this host
+     *                regardless of what the mount table says.
+     *
+     * macOS and other platforms have no mount table to read, and a Windows
+     * mapped drive letter cannot be told from a local disk without shelling
+     * out, so those are documented false negatives rather than guesses.
+     * Define CASHUPAY_IGNORE_NETWORK_FS (config.local.php) to silence the
+     * warning everywhere once the setup is understood.
+     *
+     * @return array{reason: string, fsType: ?string, mountPoint: ?string, journalMode: ?string, path: string}|null
+     */
+    public static function networkFilesystemWarning(): ?array {
+        if (defined('CASHUPAY_IGNORE_NETWORK_FS') && CASHUPAY_IGNORE_NETWORK_FS) {
+            return null;
+        }
+        $dir = self::getDataDir();
+        $mount = self::detectNetworkMount($dir);
+        if ($mount !== null) {
+            return [
+                'reason' => 'mount',
+                'fsType' => $mount['fsType'],
+                'mountPoint' => $mount['mountPoint'],
+                'journalMode' => self::$journalMode,
+                'path' => $dir,
+            ];
+        }
+        // Only consult the journal mode once a connection exists; opening
+        // one here would create the database on a not-yet-installed host.
+        if (self::$journalMode !== null && self::$journalMode !== 'wal') {
+            return [
+                'reason' => 'journal',
+                'fsType' => null,
+                'mountPoint' => null,
+                'journalMode' => self::$journalMode,
+                'path' => $dir,
+            ];
+        }
+        return null;
+    }
+
+    /**
+     * Mount-table half of networkFilesystemWarning(), with the inputs
+     * injectable so the parser is testable without a real share.
+     *
+     * @param string|null $mountsFile Linux mount table to read (default
+     *        /proc/mounts; the CASHUPAY_MOUNTS_FILE env var overrides it for
+     *        the test rigs, which have no network share to mount).
+     * @param string|null $osFamily PHP_OS_FAMILY override.
+     * @return array{fsType: string, mountPoint: string}|null
+     */
+    public static function detectNetworkMount(
+        string $dir, ?string $mountsFile = null, ?string $osFamily = null
+    ): ?array {
+        $osFamily = $osFamily ?? PHP_OS_FAMILY;
+        if ($osFamily === 'Windows') {
+            // \\server\share\... (or the forward-slash spelling) is always a
+            // network share; drive letters are not distinguishable here.
+            if (preg_match('#^(\\\\\\\\|//)[^\\\\/]#', $dir) === 1) {
+                return ['fsType' => 'UNC share', 'mountPoint' => $dir];
+            }
+            return null;
+        }
+        if ($osFamily !== 'Linux') {
+            return null;
+        }
+        if ($mountsFile === null) {
+            $env = getenv('CASHUPAY_MOUNTS_FILE');
+            $mountsFile = ($env !== false && $env !== '') ? $env : '/proc/mounts';
+        }
+        if (!is_readable($mountsFile)) {
+            return null;
+        }
+        $table = @file_get_contents($mountsFile);
+        if (!is_string($table) || $table === '') {
+            return null;
+        }
+        // The directory may not exist yet on a first run; fall back to the
+        // configured spelling so a relative path still matches nothing
+        // rather than throwing.
+        $real = realpath($dir);
+        $target = rtrim($real !== false ? $real : $dir, '/');
+        if ($target === '') {
+            $target = '/';
+        }
+
+        $best = null;
+        $bestLen = -1;
+        foreach (preg_split('/\r?\n/', $table) as $line) {
+            $parts = preg_split('/\s+/', trim($line));
+            if ($parts === false || count($parts) < 3) {
+                continue;
+            }
+            // /proc/mounts escapes space, tab, newline and backslash as
+            // octal (\040 etc.) in the mount point.
+            $mountPoint = preg_replace_callback(
+                '/\\\\([0-7]{3})/',
+                static fn(array $m): string => chr(octdec($m[1])),
+                $parts[1]
+            );
+            $fsType = strtolower($parts[2]);
+            $mp = rtrim($mountPoint, '/');
+            $isPrefix = $mp === ''
+                ? true // the root mount covers everything
+                : ($target === $mp || strpos($target, $mp . '/') === 0);
+            if (!$isPrefix) {
+                continue;
+            }
+            $len = strlen($mp);
+            if ($len > $bestLen) {
+                $bestLen = $len;
+                $best = ['fsType' => $fsType, 'mountPoint' => $mp === '' ? '/' : $mp];
+            }
+        }
+        if ($best === null || !in_array($best['fsType'], self::NETWORK_FS_TYPES, true)) {
+            return null;
+        }
+        return $best;
     }
 
     /**
@@ -196,10 +363,28 @@ class Database {
         $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
         $pdo->exec('PRAGMA foreign_keys = ON');
-        $pdo->exec('PRAGMA journal_mode = WAL');
+        // The pragma answers with the mode that is now in effect. SQLite
+        // silently keeps the old mode when the filesystem cannot support WAL
+        // (no shared-memory mapping, locking that does not work across
+        // processes — network shares, chiefly), so the answer is the one
+        // reliable signal that the data directory is on an unsuitable
+        // filesystem. Kept for networkFilesystemWarning().
+        $mode = $pdo->query('PRAGMA journal_mode = WAL')->fetchColumn();
+        self::$journalMode = is_string($mode) ? strtolower($mode) : null;
         $pdo->exec('PRAGMA busy_timeout = 5000'); // Wait up to 5 seconds for locks
 
         return $pdo;
+    }
+
+    /**
+     * Journal mode in effect on the shared connection ('wal' on a healthy
+     * install), or null before the first connect.
+     */
+    public static function journalMode(): ?string {
+        if (self::$journalMode === null) {
+            self::getInstance();
+        }
+        return self::$journalMode;
     }
 
     /**
@@ -2117,28 +2302,112 @@ HTACCESS;
      * Implementation note: issuing `BEGIN IMMEDIATE` via exec() does NOT set
      * PDO's internal in-transaction flag, which breaks PDO::commit()/rollBack()
      * ("There is no active transaction"). So we start a normal PDO transaction
-     * (sets the flag, emits a deferred BEGIN) and then force the RESERVED lock
-     * with a no-op header write — re-setting `user_version` to its current
-     * value. SQLite takes the write lock when a write statement begins
-     * executing, regardless of whether it changes any bytes, so this upgrades
-     * the lock up front while leaving every value untouched. (user_version is
-     * unused by this app.)
+     * (sets the flag, emits a deferred BEGIN) and then force the write lock
+     * with a no-op write statement — a DELETE whose WHERE never matches.
+     * SQLite takes the write lock when a write statement begins executing,
+     * regardless of whether it touches any row, so this upgrades the lock up
+     * front while leaving every value untouched.
+     *
+     * The no-op write MUST be the first statement of the transaction. SQLite
+     * only runs the busy handler (busy_timeout) for a connection that has no
+     * read transaction open yet; once a SELECT (or a PRAGMA read) has taken a
+     * snapshot inside the transaction, a write that finds the lock taken
+     * fails with SQLITE_BUSY at once, without waiting. An earlier version of
+     * this helper read `PRAGMA user_version` before writing it back and
+     * therefore gave up instantly under any write contention instead of
+     * queueing for up to 5 s — measured, not theoretical.
      */
     public static function beginImmediate(): bool {
         $pdo = self::getInstance();
-        $pdo->beginTransaction();
-        try {
-            $ver = (int)$pdo->query('PRAGMA user_version')->fetchColumn();
-            $pdo->exec('PRAGMA user_version = ' . $ver);
-        } catch (\Throwable $e) {
-            // If the lock can't be taken (e.g. busy_timeout exhausted), don't
-            // leave a half-open deferred transaction behind.
-            if ($pdo->inTransaction()) {
-                $pdo->rollBack();
+        // Nothing has been applied when the lock grab fails, so the whole
+        // begin is safe to re-run: a busy_timeout exhausted by a burst of
+        // concurrent settlements gets a few more chances before the caller
+        // sees the exception (see retryOnBusy()).
+        self::retryOnBusy(static function () use ($pdo): void {
+            $pdo->beginTransaction();
+            try {
+                $pdo->exec('DELETE FROM config WHERE 0');
+            } catch (\Throwable $e) {
+                // If the lock can't be taken (e.g. busy_timeout exhausted), don't
+                // leave a half-open deferred transaction behind.
+                if ($pdo->inTransaction()) {
+                    $pdo->rollBack();
+                }
+                throw $e;
             }
-            throw $e;
-        }
+        }, 'beginImmediate');
         return true;
+    }
+
+    /**
+     * Is $e SQLite telling us another connection holds the lock? Matches the
+     * SQLITE_BUSY (5) / SQLITE_LOCKED (6) driver codes PDO exposes in
+     * errorInfo[1], with the message as a fallback for drivers that leave
+     * errorInfo empty (PDO::prepare() failures do on some builds).
+     */
+    public static function isBusyError(\Throwable $e): bool {
+        if (!($e instanceof \PDOException)) {
+            return false;
+        }
+        $code = $e->errorInfo[1] ?? null;
+        if ($code === 5 || $code === 6) {
+            return true;
+        }
+        $msg = strtolower($e->getMessage());
+        return strpos($msg, 'database is locked') !== false
+            || strpos($msg, 'database table is locked') !== false
+            || strpos($msg, 'database schema is locked') !== false;
+    }
+
+    /**
+     * Run $fn, re-running it up to BUSY_RETRY_ATTEMPTS times when SQLite
+     * reports the database busy/locked. Only for work that is safe to repeat
+     * because a busy failure means NOTHING was applied: a single autocommit
+     * statement, or the lock grab at the start of a transaction. Never wrap
+     * the body of an open transaction — its earlier statements are not
+     * replayed, and a stale read snapshot cannot be upgraded by waiting.
+     *
+     * busy_timeout (5 s per attempt) already absorbs ordinary contention;
+     * this covers the burst case — many invoices settling in the same
+     * second, a cron tick overlapping a checkout — where the wait alone
+     * ran out. Attempts beyond the first are logged so an operator whose
+     * host is genuinely too slow for the load can see it in the PHP log.
+     *
+     * @template T
+     * @param callable(): T $fn
+     * @return T
+     */
+    public static function retryOnBusy(callable $fn, string $what = 'statement') {
+        $attempt = 1;
+        while (true) {
+            try {
+                return $fn();
+            } catch (\Throwable $e) {
+                if (!self::isBusyError($e) || $attempt >= self::BUSY_RETRY_ATTEMPTS) {
+                    if ($attempt > 1) {
+                        error_log(sprintf(
+                            'CASHUPAY: SQLite still busy after %d attempts (%s): %s',
+                            $attempt, $what, $e->getMessage()
+                        ));
+                    }
+                    throw $e;
+                }
+                self::$busyRetries++;
+                if ($attempt === 1) {
+                    error_log(sprintf(
+                        'CASHUPAY: SQLite busy on %s, retrying (up to %d attempts)',
+                        $what, self::BUSY_RETRY_ATTEMPTS
+                    ));
+                }
+                usleep(random_int(self::BUSY_RETRY_SLEEP_MIN_US, self::BUSY_RETRY_SLEEP_MAX_US));
+                $attempt++;
+            }
+        }
+    }
+
+    /** Busy/locked retries performed so far in this process. */
+    public static function busyRetryCount(): int {
+        return self::$busyRetries;
     }
 
     /**
@@ -2176,9 +2445,21 @@ HTACCESS;
      * Execute query with parameters
      */
     public static function query(string $sql, array $params = []): PDOStatement {
-        $stmt = self::getInstance()->prepare($sql);
-        $stmt->execute($params);
-        return $stmt;
+        $pdo = self::getInstance();
+        $run = static function () use ($pdo, $sql, $params): PDOStatement {
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute($params);
+            return $stmt;
+        };
+        if ($pdo->inTransaction()) {
+            // Inside a transaction a busy failure must reach the caller's
+            // rollback: re-running one statement would silently drop the
+            // ones before it and act on a read snapshot that is already stale.
+            return $run();
+        }
+        // Autocommit: the statement is the whole unit of work, so a busy
+        // failure left nothing behind and it is safe to try again.
+        return self::retryOnBusy($run, 'autocommit statement');
     }
 
     /**

@@ -229,8 +229,14 @@ $passwordPreseeded = ManagedInstall::adminSeededFromProvisionedHash();
 // The Windows desktop package drops it too: its server only listens on
 // 127.0.0.1 and router.php refuses /data requests, so the screen's manual
 // Apache/nginx hardening walkthrough has nothing to protect against.
+// A data directory on a network filesystem (NFS/SMB, VM shared folders)
+// keeps the screen too, whatever the web-root answer: SQLite's locks are
+// not reliable there, and this screen is where the operator is told so
+// before any money lands in the database.
+$networkFsWarning = Database::networkFilesystemWarning();
 $securityScreenNeeded = SetupFlow::missingRequirements() !== []
-    || (!Database::isDataDirOutsideWebroot() && !$isDesktop);
+    || (!Database::isDataDirOutsideWebroot() && !$isDesktop)
+    || $networkFsWarning !== null;
 
 // Installation type chosen on the install_type screen. The session is the
 // source of truth during the run; the config copy survives a lost session
@@ -2344,6 +2350,35 @@ function renderUrlModeDetectionScript(): void { ?>
                             best-tested cryptography and to unlock everything.
                         </div>
                     <?php endif; ?>
+                    <?php if ($networkFsWarning !== null): ?>
+                        <!-- Database::networkFilesystemWarning(): the data
+                             directory sits on NFS/SMB/a VM shared folder, or
+                             SQLite refused WAL mode there. Locks are not
+                             honoured across processes on such filesystems,
+                             so concurrent payments can corrupt the database.
+                             Holds the auto-advance (netFsHoldsScreen below);
+                             the operator may still continue with the button. -->
+                        <div class="warning" id="network-fs-warning" style="margin-bottom: 1.5rem;">
+                            <strong>Heads up: your data directory is on a network filesystem.</strong>
+                            <?php if ($networkFsWarning['reason'] === 'journal'): ?>
+                                SQLite could not enable write-ahead logging on
+                                <code><?= htmlspecialchars($networkFsWarning['path']) ?></code>
+                                (mode in effect: <code><?= htmlspecialchars((string)($networkFsWarning['journalMode'] ?? 'unknown')) ?></code>),
+                                which is what happens on filesystems that cannot lock files properly.
+                            <?php else: ?>
+                                <code><?= htmlspecialchars($networkFsWarning['path']) ?></code> is on a
+                                <code><?= htmlspecialchars((string)$networkFsWarning['fsType']) ?></code> mount
+                                (<code><?= htmlspecialchars((string)$networkFsWarning['mountPoint']) ?></code>).
+                            <?php endif; ?>
+                            SQLite's file locking is not reliable on network or shared-folder
+                            filesystems, so two payments confirming at the same moment can corrupt
+                            the database &mdash; and the ecash stored in it. Keep the data directory on a
+                            local disk: point <code>CASHUPAY_DATA_DIR</code> in
+                            <code>includes/config.local.php</code> at a local path and reload this page.
+                            If you are certain this setup is safe, you can continue anyway with the
+                            button below; the admin dashboard will remind you until you dismiss it there.
+                        </div>
+                    <?php endif; ?>
                     <!-- Security Check Section -->
                     <h3 style="margin-bottom: 0.75rem;">🛡️ Protecting your database</h3>
                     <p style="margin-bottom: 1rem; color: #a0aec0; font-size: 0.9rem;">
@@ -2515,10 +2550,11 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                     (function () {
                         var results = { db: null, url: null };
                         var gmpHoldsScreen = <?= json_encode($gmpHoldsScreen) ?>;
+                        var netFsHoldsScreen = <?= json_encode($networkFsWarning !== null) ?>;
                         var advanced = false;
                         window.setupSecurityCheckDone = function (which, passed) {
                             results[which] = !!passed;
-                            if (advanced || gmpHoldsScreen || results.db !== true || results.url !== true) {
+                            if (advanced || gmpHoldsScreen || netFsHoldsScreen || results.db !== true || results.url !== true) {
                                 return;
                             }
                             advanced = true;
