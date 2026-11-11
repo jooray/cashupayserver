@@ -117,7 +117,11 @@ jobs:
         # wp-checkout job below (the WooCommerce checkout tier on real
         # Apache and nginx).
         run: |
-          ./tests/scripts/run-tests.sh --backend=phps -v --split-group=${{ matrix.shard }}/3
+          # --skip-upgrade-tier: the published-release upgrade matrix
+          # (tests/upgrade/) is part of the LOCAL full run only — it installs
+          # real past releases from GitHub and runs for many minutes each.
+          ./tests/scripts/run-tests.sh --backend=phps -v --split-group=${{ matrix.shard }}/3 \
+            --skip-upgrade-tier
         env:
           PYTHONUNBUFFERED: "1"
           # The WP tests consume these exact artifacts instead of rebuilding
@@ -240,6 +244,62 @@ jobs:
           retention-days: 7
           if-no-files-found: ignore
           include-hidden-files: true
+
+  php-unit:
+    name: PHP unit suite
+    # tests/php/run.php — every updater, migration, crypto and swap unit test.
+    # This suite had no CI job until the upgrade-testing work: it ran only
+    # when a developer remembered to. Runs on the same pinned static PHP
+    # binary the e2e fixtures use (tests/fixtures/binaries.py), with the
+    # composer vendor/ the on-chain tests need, installed the way
+    # run-tests.sh installs it.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+
+    steps:
+      - name: Use HTTPS for SSH-form submodule URLs
+        run: |
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Cache binary downloads (static PHP, composer)
+        uses: actions/cache@v4
+        with:
+          path: |
+            tests/bin
+          key: bins-${{ runner.os }}-${{ hashFiles('tests/fixtures/binaries.py') }}
+          restore-keys: |
+            bins-${{ runner.os }}-
+
+      - name: Pinned PHP + composer vendor/
+        id: php
+        run: |
+          python3 - <<'PYEOF' | tee php-path.txt
+          import subprocess, sys
+          sys.path.insert(0, "tests")
+          from fixtures import binaries
+          php = binaries.ensure(binaries.PHP)["php"]
+          composer = binaries.ensure_file(binaries.COMPOSER)
+          subprocess.run(
+              [str(php), str(composer), "install", "--no-progress", "--no-dev",
+               "--optimize-autoloader", "--ignore-platform-reqs"],
+              cwd="app", check=True,
+          )
+          print(f"php={php}")
+          PYEOF
+          grep '^php=' php-path.txt >> "$GITHUB_OUTPUT"
+
+      - name: Run PHP unit suite
+        run: |
+          "${{ steps.php.outputs.php }}" -v
+          "${{ steps.php.outputs.php }}" tests/php/run.php
+        env:
+          CASHUPAY_DEV_FEE_BRANCH_ENDPOINT: disabled
+          CASHUPAY_USAGE_STATS_ENDPOINT: disabled
 
   build-artifacts:
     name: Build artifacts

@@ -87,6 +87,30 @@ def pytest_addoption(parser) -> None:
         help="Run only the Mth of N deterministic file-level suite shards "
         "(whole files stay together; see fixtures/partition.py).",
     )
+    parser.addoption(
+        "--skip-upgrade-tier",
+        action="store_true",
+        default=False,
+        help="Do not collect tests/upgrade/ (the published-release upgrade matrix: "
+        "needs GitHub for the release window and runs for many minutes per release). "
+        "CI passes this; the local full run does not.",
+    )
+
+
+UPGRADE_TIER_DIR = TESTS_DIR / "upgrade"
+
+
+def pytest_ignore_collect(collection_path, config) -> bool | None:
+    """--skip-upgrade-tier drops tests/upgrade/ before collection, so CI never
+    even resolves the release window (a GitHub API call) for tests it will
+    not run."""
+    if config.getoption("--skip-upgrade-tier"):
+        try:
+            Path(str(collection_path)).resolve().relative_to(UPGRADE_TIER_DIR)
+        except ValueError:
+            return None
+        return True
+    return None
 
 
 def pytest_report_header(config) -> str:
@@ -94,6 +118,8 @@ def pytest_report_header(config) -> str:
     spec = config.getoption("--split-group")
     if spec:
         header += f" | suite shard: {spec}"
+    if config.getoption("--skip-upgrade-tier"):
+        header += " | upgrade tier: skipped"
     return header
 
 
