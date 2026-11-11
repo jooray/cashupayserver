@@ -93,6 +93,10 @@ def test_setup_wizard_completes_in_browser(
     page.fill("#backup_mint_url_manual", backup_mint.url)
     page.click("#mints-continue-btn")
 
+    # The wallet-tabs question follows the last rail screen; skip it.
+    page.wait_for_selector("h2:has-text('Popular wallet tabs')")
+    page.click("button[name='wallet_tabs_action'][value='skip']")
+
     # The seed is generated silently and revealed on its own screen, together
     # with the mint URLs it belongs to, with a print button.
     page.wait_for_selector("h2:has-text('Save your recovery phrase')")
@@ -159,8 +163,8 @@ def test_setup_wizard_without_onchain_skips_zeroconf(
     browser_walk_to_store(page, payserver.url, "wizard-test-pw", store_name="No Onchain Store")
 
     page.wait_for_selector("#onchain-form")
-    assert "of 13" in page.locator(".subtitle").inner_text(), (
-        "without an on-chain rail the wizard should advertise 13 screens, not 14"
+    assert "of 14" in page.locator(".subtitle").inner_text(), (
+        "without an on-chain rail the wizard should advertise 14 screens, not 15"
     )
     page.click("button:has-text('Skip for now')")
 
@@ -220,8 +224,8 @@ def test_outside_webroot_skips_security_screen_but_still_detects_url_mode(
             page.click("#install-option-other > summary")
             page.click("button[name='install_type'][value='other']")
             page.wait_for_selector("#password")
-            assert "of 12" in page.locator(".subtitle").inner_text(), (
-                "skipping the security screen should advertise 12 screens"
+            assert "of 13" in page.locator(".subtitle").inner_text(), (
+                "skipping the security screen should advertise 13 screens"
             )
         finally:
             stop_payserver(handle)

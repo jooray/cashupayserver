@@ -541,7 +541,12 @@ def main() -> int:
             page.fill("#mint_url_manual", mint.url)
             page.fill("#backup_mint_url_manual", backup_mint.url)
             page.click("#mints-continue-btn")
-            # setup_complete flips here; seed, updates, cron and done are advisory.
+            # setup_complete flips here; wallet tabs, seed, updates, cron and
+            # done are advisory. Keep all three wallet tabs (pre-ticked) so
+            # the dev stack's payment page shows the Cash App / Venmo /
+            # PayPal tabs.
+            page.wait_for_selector("h2:has-text('Popular wallet tabs')")
+            page.click("button[name='wallet_tabs_action'][value='save']")
             page.wait_for_selector("h2:has-text('Save your recovery phrase')")
             page.click("button:has-text('continue')")
             page.wait_for_selector("h2:has-text('Enable automatic updates?')")

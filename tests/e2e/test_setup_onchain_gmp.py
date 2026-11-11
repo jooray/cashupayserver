@@ -178,6 +178,6 @@ def test_swaps_stay_off_without_gmp(gmpless_payserver: PayserverHandle) -> None:
     body = w.post(step="lightning", lightning_action="skip")
     assert wizard_heading(body) == "Cashu mints"
     body = w.post(step="mints", mints_enabled="0")
-    assert wizard_heading(body) == "Enable automatic updates?"
+    assert wizard_heading(body) == "Popular wallet tabs"
     row = _store_row(gmpless_payserver)
     assert row["swaps_enabled"] == 0

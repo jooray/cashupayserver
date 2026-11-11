@@ -166,6 +166,11 @@ def walk(
         body = w.post(step="mints", mints_enabled="0")
     assert wizard_error(body) is None, wizard_error(body)
 
+    # wallet_tabs follows the last rail screen on every path; skip it (none).
+    assert wizard_heading(body) == "Popular wallet tabs", wizard_heading(body)
+    body = w.post(step="wallet_tabs", wallet_tabs_action="skip")
+    assert wizard_error(body) is None, wizard_error(body)
+
     # A seed was minted: the recovery-phrase screen comes first.
     if choices.mints:
         assert wizard_heading(body) == "Save your recovery phrase", wizard_heading(body)
@@ -615,6 +620,9 @@ def test_add_store_applies_the_same_rail_resolution(
     body = w2.post(step="mints", mints_enabled="1",
                    mint_url=mint.url, backup_mint_url=backup_mint.url, mint_unit="sat")
     assert wizard_error(body) is None, wizard_error(body)
+    # add_store asks about wallet tabs last; answering it is the hand-off.
+    assert wizard_heading(body) == "Popular wallet tabs", wizard_heading(body)
+    body = w2.post(step="wallet_tabs", wallet_tabs_action="skip")
     # A seed was generated, so add_store stops on its hand-off panel to show it.
     assert wizard_heading(body) == "Your store is ready!", wizard_heading(body)
 

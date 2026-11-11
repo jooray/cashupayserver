@@ -112,7 +112,7 @@ class Database {
                 // on existing installs that haven't yet picked it up. All migrations
                 // are idempotent, so a fire is safe.
                 $hasLatestMigration = $hasConfig
-                    && self::columnExists($pdo, 'invoices', 'ln_expires_at');
+                    && self::columnExists($pdo, 'stores', 'wallet_tabs');
                 // The auto-withdraw → auto-cashout rename is a data-only migration
                 // (config key + notification event labels) with no schema artifact
                 // to mark it done, so probe for the legacy config key directly. The
@@ -338,6 +338,11 @@ HTACCESS;
             -- listed first) on load. 'onchain' | 'lightning'; NULL = on-chain
             -- (the historical default). See Invoice::firstPaymentMethod.
             invoice_first_method TEXT DEFAULT NULL,
+            -- Popular-wallet tabs on the customer invoice page: comma-
+            -- separated WalletTabs keys (cashapp,venmo,paypal) in canonical
+            -- order. NULL = never answered (wizard pre-checks all three);
+            -- '' = explicitly none. See WalletTabs::enabled.
+            wallet_tabs TEXT DEFAULT NULL,
             -- Timestamps
             created_at INTEGER NOT NULL
         );
@@ -1823,9 +1828,17 @@ HTACCESS;
         // invoice page shows first when an invoice offers both on-chain and
         // Lightning. NULL keeps the historical on-chain-first behaviour.
         // (stores.invoice_first_method was the migration marker before the
-        // 2026-10 security port; invoices.last_poll_error is now, see getInstance.)
+        // 2026-10 security port; stores.wallet_tabs is now, see getInstance.)
         if (!self::columnExists($pdo, 'stores', 'invoice_first_method')) {
             $pdo->exec("ALTER TABLE stores ADD COLUMN invoice_first_method TEXT DEFAULT NULL");
+        }
+
+        // Per-store "Popular wallet tabs" (Cash App / Venmo / PayPal tabs on
+        // the customer invoice page, see WalletTabs). NULL keeps existing
+        // stores exactly as they were: no wallet tabs. stores.wallet_tabs is
+        // the getInstance() migration marker for this set.
+        if (!self::columnExists($pdo, 'stores', 'wallet_tabs')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN wallet_tabs TEXT DEFAULT NULL");
         }
 
         // Money-safety port (security/upstream-audit-port). All additive and
@@ -1844,7 +1857,7 @@ HTACCESS;
         }
 
         // Long-lived (shareable) invoices. All additive and idempotent;
-        // invoices.ln_expires_at is the getInstance() migration marker for
+        // invoices.ln_expires_at was the getInstance() migration marker for
         // this set.
         //
         //   long_lived      1 for invoices created as shareable payment

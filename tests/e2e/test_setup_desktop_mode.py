@@ -48,8 +48,8 @@ def test_desktop_flow_skips_security_and_cron(desktop_payserver: PayserverHandle
     assert _heading(body) == "Create your admin password", (
         "desktop mode must go straight from the installation type to password"
     )
-    # 13 standalone screens minus security and cron.
-    assert "of 11" in body, "the step counter must not promise the dropped screens"
+    # 14 standalone screens minus security and cron.
+    assert "of 12" in body, "the step counter must not promise the dropped screens"
 
     w.post(
         step="password",
@@ -67,6 +67,8 @@ def test_desktop_flow_skips_security_and_cron(desktop_payserver: PayserverHandle
     # wizard must land on the completion screen with the background-jobs note,
     # never on the crontab instructions.
     body = w.post(step="mints", mints_enabled="0")
+    assert _heading(body) == "Popular wallet tabs", "the wallet-tabs question follows mints on desktop too"
+    body = w.post(step="wallet_tabs", wallet_tabs_action="skip")
     assert _heading(body) == "Enable automatic updates?", (
         "desktop mode still asks the auto-update question"
     )
@@ -106,6 +108,7 @@ def test_server_flow_still_has_both_screens(payserver: PayserverHandle) -> None:
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
     w.post(step="mints", mints_enabled="0")
+    w.post(step="wallet_tabs", wallet_tabs_action="skip")
     body = w.post(step="updates", auto_update="0")
     assert _heading(body) == "Enable cron", "servers still get the cron screen"
     assert 'id="wizard-back-link"' in body, "the cron screen has a Back link"

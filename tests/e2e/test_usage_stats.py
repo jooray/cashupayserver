@@ -131,6 +131,8 @@ def _finish_wizard(w: SetupWizard) -> str:
     w.post(step="onchain", onchain_action="skip")
     w.post(step="lightning", lightning_action="skip")
     body = w.post(step="mints", mints_enabled="0")
+    assert wizard_heading(body) == "Popular wallet tabs", wizard_heading(body)
+    body = w.post(step="wallet_tabs", wallet_tabs_action="skip")
     assert wizard_heading(body) == "Enable automatic updates?", wizard_heading(body)
     body = w.post(step="updates", auto_update="0")
     assert wizard_heading(body) == "Enable cron", wizard_heading(body)

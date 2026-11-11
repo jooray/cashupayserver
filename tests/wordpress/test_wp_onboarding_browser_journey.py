@@ -147,6 +147,10 @@ def _walk_wizard_in_iframe(page) -> None:
     frame.locator("h2:has-text('Cashu mints')").wait_for()
     frame.locator("button:has-text('No thanks, run without mints')").click()
 
+    # The wallet-tabs question follows the last rail screen; skip it.
+    frame.locator("h2:has-text('Popular wallet tabs')").wait_for()
+    frame.locator("button[name='wallet_tabs_action'][value='skip']").click()
+
     # Automatic updates are opt-in everywhere (incl. managed installs): the
     # wizard asks once, after the mints screen. Decline — the merchant can
     # enable them later from the Auto-update card.

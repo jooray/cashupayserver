@@ -21,11 +21,17 @@ final class SetupFlow {
      * lightning screen. Asking earlier would skip the question entirely for a
      * Strike-only store (no xpub/static address, so the screen dropped out
      * before the operator could create the rail it times).
+     *
+     * wallet_tabs (the Cash App / Venmo / PayPal tabs on the invoice page,
+     * see WalletTabs) comes right after the rail screens: the tabs repeat
+     * the rails the operator has just configured. It is the first
+     * post-completion screen, so abandoning the wizard there leaves the
+     * store without wallet tabs (the admin card can add them later).
      */
     public const STEPS = [
         'terms', 'analytics', 'install_type', 'security', 'password', 'email',
-        'store', 'onchain', 'lightning', 'strike', 'zeroconf', 'mints', 'seed',
-        'updates', 'cron', 'done',
+        'store', 'onchain', 'lightning', 'strike', 'zeroconf', 'mints',
+        'wallet_tabs', 'seed', 'updates', 'cron', 'done',
     ];
 
     /**
@@ -52,9 +58,14 @@ final class SetupFlow {
      */
     public const RAIL_STEPS = ['onchain', 'lightning', 'strike', 'zeroconf', 'mints'];
 
-    /** The screens add_store mode walks before returning to admin. */
+    /**
+     * The screens add_store mode walks before returning to admin. The
+     * wallet_tabs answer is per store, so a store added later is asked too;
+     * the hand-off to admin (or to the seed panel) happens when it is
+     * answered, not when the rail group is left.
+     */
     public const ADD_STORE_STEPS = [
-        'store', 'onchain', 'lightning', 'zeroconf', 'mints',
+        'store', 'onchain', 'lightning', 'zeroconf', 'mints', 'wallet_tabs',
     ];
 
     /**
@@ -81,9 +92,11 @@ final class SetupFlow {
      * has written the recovery phrase down, and abandoning the wizard on it
      * loses nothing (the phrase stays readable in store settings). updates
      * follows for the same reason: unanswered leaves automatic updates at
-     * their safe default (off).
+     * their safe default (off). wallet_tabs opens the group: unanswered
+     * means no wallet tabs, which is how every store behaved before the
+     * screen existed.
      */
-    public const POST_COMPLETION = ['seed', 'updates', 'cron', 'done'];
+    public const POST_COMPLETION = ['wallet_tabs', 'seed', 'updates', 'cron', 'done'];
 
     public static function isKnownStep(string $step): bool {
         return in_array($step, self::STEPS, true) || $step === self::ADD_STORE_COMPLETE;
