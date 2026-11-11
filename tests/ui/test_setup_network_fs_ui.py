@@ -1,5 +1,6 @@
 """Data directory on a network filesystem: the wizard's safety check holds
-with the warning and the admin dashboard keeps a dismissible banner.
+with the warning and the admin dashboard keeps a dismissible banner. The
+stale-cron banner's dismissal is proven to persist in the same run.
 
 A real NFS/SMB share is not available to the rig, so the Linux mount table
 is substituted through the CASHUPAY_MOUNTS_FILE seam
@@ -93,6 +94,20 @@ def test_network_fs_warning_holds_wizard_and_shows_dashboard_banner(
         # the wizard suites) and look at the dashboard.
         result = run_setup_wizard(base, mint_url=mint.url, backup_mint_url=backup_mint.url)
 
+        # Age the install so the stale-cron banner shows too: its dismiss
+        # button had the same dispatcher mismatch as this feature's first
+        # cut, so both dismissals are proven to persist here.
+        db_path = outside / "cashupay.sqlite"
+        conn = sqlite3.connect(db_path)
+        try:
+            conn.execute(
+                "UPDATE config SET value = ? WHERE key = 'installed_at'",
+                (str(int(time.time()) - 3 * 86400),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
         page.goto(f"{base}/admin")
         page.fill("#password-input", result.admin_password)
         page.click("#password-submit")
@@ -121,7 +136,6 @@ def test_network_fs_warning_holds_wizard_and_shows_dashboard_banner(
         # The dismissal is persisted against the detected evidence and
         # survives a reload. The banner hides before the POST completes, so
         # give the write a moment to land.
-        db_path = outside / "cashupay.sqlite"
         dismissed = None
         for _ in range(40):
             dismissed = _config_value(db_path, "network_fs_warning_dismissed")
@@ -132,10 +146,30 @@ def test_network_fs_warning_holds_wizard_and_shows_dashboard_banner(
             f"dismissal not persisted: config={dismissed!r}; POST answered HTTP {resp.status}"
         )
 
+        # Stale-cron banner: same flow, same persistence check.
+        cron_banner = page.locator("#cron-stale-banner")
+        cron_banner.wait_for(state="visible")
+        with page.expect_response(
+            lambda r: r.request.method == "POST" and "admin" in r.url
+            and "dismiss_cron_warning" in (r.request.post_data or ""),
+            timeout=15000,
+        ) as cron_resp_info:
+            page.click("#btn-dismiss-cron-stale")
+        assert cron_resp_info.value.status == 200
+        cron_banner.wait_for(state="hidden")
+        cron_dismissed = None
+        for _ in range(40):
+            cron_dismissed = _config_value(db_path, "cron_warning_dismissed_at")
+            if cron_dismissed is not None:
+                break
+            time.sleep(0.25)
+        assert cron_dismissed is not None, "stale-cron dismissal not persisted"
+
         page.reload()
         wait_for_dashboard_settled(page)
         page.wait_for_timeout(1000)
         assert banner.is_hidden(), "dismissed banner came back after reload"
+        assert cron_banner.is_hidden(), "dismissed stale-cron banner came back after reload"
     finally:
         stop_payserver(handle)
         shutil.rmtree(outside, ignore_errors=True)

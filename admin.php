@@ -637,12 +637,6 @@ if (isset($_GET['api'])) {
             ]);
             break;
 
-        case 'dismiss_cron_warning':
-            Auth::requireAdmin();
-            Background::dismissCronWarning();
-            echo json_encode(['success' => true]);
-            break;
-
         case 'upgrade_banner':
             Auth::requireAdmin();
             echo json_encode(['state' => Stats::upgradeBannerState()]);
@@ -1802,10 +1796,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             echo json_encode(['success' => true]);
             break;
 
-        // Dashboard "data directory is on a network filesystem" notice
-        // (Background::networkFsWarning). Lives in this POST switch because
+        // Dashboard banner dismissals. These live in this POST switch because
         // the dashboard's postWithCsrf() sends `action=`, which the `?api=`
-        // GET dispatcher above never sees.
+        // GET dispatcher above never sees — dismiss_cron_warning sat there
+        // until 2026-11 and the stale-cron banner silently came back on every
+        // dashboard load.
+        case 'dismiss_cron_warning':
+            Auth::requireAdmin();
+            Background::dismissCronWarning();
+            echo json_encode(['success' => true]);
+            break;
+
         case 'dismiss_network_fs_warning':
             Auth::requireAdmin();
             Background::dismissNetworkFsWarning();
