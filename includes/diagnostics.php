@@ -58,6 +58,7 @@ class Diagnostics {
         'last_external_cron_at',
         'last_external_cron_swaps_at',
         'last_proof_sync',
+        'network_fs_warning_dismissed',
         'notifications_enabled',
         'notifications_invoice_paid_enabled',
         'notifications_auto_cashout_enabled',

@@ -20,7 +20,11 @@ shared-hosting deploy described in the README — just packaged for
 - **Persistent volume:** `/var/www/html`. The app source lives here so
   the in-app auto-updater can overlay files durably across restarts;
   the SQLite database, cache, and update backups live under
-  `/var/www/html/data/`.
+  `/var/www/html/data/`. Back the volume with local disk: SQLite's file
+  locking is not reliable on NFS/SMB or VM shared folders, and the app
+  warns in the wizard and on the dashboard when it detects one (see
+  "Keep the database on a local disk" in the README). One volume per
+  container — never point two containers at the same `data/`.
 - **In-container cron:** A background loop runs `cron.php` every
   `CRON_INTERVAL_SECONDS` (default 60). Set to `0` if you'd rather run
   cron from an external scheduler.

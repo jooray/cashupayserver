@@ -274,6 +274,28 @@ curl -I https://yoursite.com/barebits/data/cashupay.sqlite
 define('CASHUPAY_DATA_DIR', '/home/user/cashupay-data');
 ```
 
+### Keep the database on a local disk
+
+The database is SQLite in write-ahead-logging (WAL) mode. Concurrent payments
+are safe on a local filesystem: writers queue on a file lock for a few
+milliseconds each, every settlement is a status-guarded update that can only
+succeed once, and a lock wait that runs out is retried automatically before
+the request fails.
+
+That safety depends on file locking that works, which network filesystems do
+not reliably provide. **Never place `data/` on NFS, SMB/CIFS, sshfs, or a VM
+shared folder (VirtualBox `vboxsf`, 9p).** Two processes can both believe they
+hold the write lock there, which corrupts the database — and the ecash in it.
+This also rules out sharing one `data/` directory between several web servers;
+each install needs its own local copy.
+
+The setup wizard's safety check and the admin dashboard warn when the data
+directory is detected on such a filesystem (Linux reads the mount table, Windows
+recognises `\\server\share` paths; macOS and mapped drive letters are not
+detected) or when SQLite could not enable WAL mode there. If you have verified
+your setup is safe, dismiss the dashboard notice or add
+`define('CASHUPAY_IGNORE_NETWORK_FS', true);` to `includes/config.local.php`.
+
 ### Seed Phrase
 
 Your seed phrase is your backup of funds stored in your Cashu mint (if enabled). Write it down and store it safely. If you lose access to your server, you can recover your funds with the seed phrase.

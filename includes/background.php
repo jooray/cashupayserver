@@ -323,6 +323,48 @@ class Background {
     }
 
     /**
+     * Dashboard state for the "data directory is on a network filesystem"
+     * warning (Database::networkFilesystemWarning), or null when there is
+     * nothing to show. A dismissal is remembered against the evidence that
+     * was dismissed — mount type + mount point, or the refused journal mode
+     * — so it stays quiet for that setup but fires again if the data
+     * directory later moves to a different share.
+     */
+    public static function networkFsWarning(): ?array {
+        $warning = Database::networkFilesystemWarning();
+        if ($warning === null) {
+            return null;
+        }
+        $signature = self::networkFsSignature($warning);
+        $dismissed = (string) Config::get('network_fs_warning_dismissed', '');
+        if ($dismissed !== '' && hash_equals($dismissed, $signature)) {
+            return null;
+        }
+        return $warning;
+    }
+
+    /**
+     * Record the operator's dismissal of the network-filesystem warning for
+     * the currently detected setup (see networkFsWarning()).
+     */
+    public static function dismissNetworkFsWarning(): void {
+        $warning = Database::networkFilesystemWarning();
+        if ($warning === null) {
+            return;
+        }
+        Config::set('network_fs_warning_dismissed', self::networkFsSignature($warning));
+    }
+
+    private static function networkFsSignature(array $warning): string {
+        return implode('|', [
+            $warning['reason'],
+            (string) ($warning['fsType'] ?? ''),
+            (string) ($warning['mountPoint'] ?? ''),
+            (string) ($warning['journalMode'] ?? ''),
+        ]);
+    }
+
+    /**
      * Mark proof sync as completed
      */
     public static function markSynced(): void {

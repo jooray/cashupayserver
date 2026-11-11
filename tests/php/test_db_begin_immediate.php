@@ -12,7 +12,9 @@
  *   2. The write lock is genuinely held from the start: a *second* connection
  *      to the same database file cannot write while the transaction is open,
  *      even though the transaction has not issued any app write yet.
- *   3. user_version (the no-op lock-grab column) is left untouched.
+ *   3. user_version is left untouched (an earlier version of the helper
+ *      re-wrote it as its lock-grab; the current one uses a no-op DELETE —
+ *      see test_db_busy_retry for why the write has to come first).
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
