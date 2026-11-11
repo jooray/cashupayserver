@@ -11,7 +11,7 @@
  * Exits 0 on success, 1 on failure.
  */
 
-require_once __DIR__ . '/../includes/ipgeo.php';
+require_once __DIR__ . '/../app/includes/ipgeo.php';
 
 $ok = IpGeo::refresh();
 $path = IpGeo::getCsvPath();

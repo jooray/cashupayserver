@@ -9,7 +9,7 @@
  * Exit code 1: one or more rows are not bcrypt — see stderr for details.
  */
 
-require_once __DIR__ . '/../includes/database.php';
+require_once __DIR__ . '/../app/includes/database.php';
 
 $dbPath = $argv[1] ?? Database::getDbPath();
 if (!file_exists($dbPath)) {

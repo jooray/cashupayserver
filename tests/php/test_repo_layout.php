@@ -140,6 +140,20 @@ assert_true(str_contains($verify, 'app/includes/config.php'), 'verify-release-ve
 $testingRelease = file_get_contents("$repo/.github/workflows/testing-release.yml");
 assert_true(str_contains($testingRelease, 'app/includes/config.php'), 'testing-release.yml reads app/includes/config.php');
 
+// Tooling scripts outside app/ that need application code must reach it via
+// app/ (scripts/fee-branch-descriptors.php required ../includes/ and only
+// CI's fee-branch e2e caught it).
+foreach (['scripts', 'windows', 'wordpress'] as $toolDir) {
+    foreach (glob("$repo/$toolDir/*.php") ?: [] as $file) {
+        $src = file_get_contents($file);
+        $rel = substr($file, strlen($repo) + 1);
+        assert_true(
+            !preg_match("#__DIR__ \\. '/\\.\\./(includes|cashu-wallet-php|vendor|api-keys|assets)/#", $src),
+            "$rel requires application code via app/ (not a bare ../includes/ path)"
+        );
+    }
+}
+
 // ---- 4. Local-state ignores follow the tree --------------------------------
 $gitignore = file_get_contents("$repo/.gitignore");
 assert_true(str_contains($gitignore, "app/data/**"), '.gitignore ignores app/data/**');
