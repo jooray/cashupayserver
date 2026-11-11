@@ -19,9 +19,9 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/auth.php';
-require_once dirname(__DIR__, 2) . '/includes/managed.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/auth.php';
+require_once dirname(__DIR__, 2) . '/app/includes/managed.php';
 
 // Make sure nothing leaks in from the invoking shell.
 foreach (['CASHUPAY_MANAGED_INSTALL', 'CASHUPAY_SHOP_URL',

@@ -24,8 +24,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/background.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/background.php';
 
 /**
  * Run cron.php once in a subprocess with the given $_GET.
@@ -45,7 +45,7 @@ function run_cron_subprocess(array $get): array {
         . "    \$c = http_response_code();\n"
         . "    echo \"\\nHTTP_STATUS:\" . (\$c === false ? 200 : \$c);\n"
         . "});\n";
-    $code .= "require " . var_export(dirname(__DIR__, 2) . '/cron.php', true) . ";\n";
+    $code .= "require " . var_export(dirname(__DIR__, 2) . '/app/cron.php', true) . ";\n";
     file_put_contents($driver, $code);
 
     $out = [];

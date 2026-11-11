@@ -13,7 +13,7 @@ declare(strict_types=1);
 require_once __DIR__ . '/harness.php';
 fresh_db();
 
-require_once dirname(__DIR__, 2) . '/includes/payment_path_debug.php';
+require_once dirname(__DIR__, 2) . '/app/includes/payment_path_debug.php';
 
 // ---- enabled(): default OFF, flips with the config key --------------------
 

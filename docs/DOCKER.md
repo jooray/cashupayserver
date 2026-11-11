@@ -4,8 +4,8 @@ A Docker setup for testing CashuPayServer with WordPress + WooCommerce. Uses SQL
 
 > **Looking for production deploy?** This file documents the *test* image.
 > For deploying CashuPayServer to a server, see
-> [docs/docker-production.md](docs/docker-production.md) and the
-> `docker-compose.yml` at the repo root.
+> [docker-production.md](docker-production.md) and
+> `docker/docker-compose.yml`.
 
 ## Prerequisites
 
@@ -14,6 +14,9 @@ A Docker setup for testing CashuPayServer with WordPress + WooCommerce. Uses SQL
 ## Standalone
 
 CashuPayServer runs as a separate PHP app on port 8080. WordPress on port 80.
+
+All commands run from the repository root (the build context; the Dockerfile
+copies the application tree from `app/`).
 
 ```bash
 # Build

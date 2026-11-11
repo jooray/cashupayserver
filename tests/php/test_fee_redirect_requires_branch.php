@@ -11,9 +11,9 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/fee_redirect.php';
-require_once dirname(__DIR__, 2) . '/includes/fee_branch.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/wallet.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_redirect.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_branch.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/wallet.php';
 
 assert_true(FeeBranch::isDisabled(), 'harness pins the endpoint off');
 

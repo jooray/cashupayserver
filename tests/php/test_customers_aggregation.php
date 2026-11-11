@@ -10,7 +10,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/customers.php';
+require_once dirname(__DIR__, 2) . '/app/includes/customers.php';
 
 make_store('s1');
 make_store('s2');

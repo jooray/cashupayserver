@@ -8,8 +8,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/store_ln_addresses.php';
-require_once dirname(__DIR__, 2) . '/includes/clink/noffer.php';
+require_once dirname(__DIR__, 2) . '/app/includes/store_ln_addresses.php';
+require_once dirname(__DIR__, 2) . '/app/includes/clink/noffer.php';
 
 $store = 'store_mixed';
 make_store($store);

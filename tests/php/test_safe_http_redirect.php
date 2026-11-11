@@ -13,7 +13,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/safe_http.php';
+require_once dirname(__DIR__, 2) . '/app/includes/safe_http.php';
 
 // ---- resolveRedirectTarget --------------------------------------------------
 $base = 'https://mint.example.com/info/v1?x=1';

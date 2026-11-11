@@ -25,10 +25,10 @@
 require __DIR__ . '/harness.php';
 fresh_db();
 
-require_once dirname(__DIR__, 2) . '/includes/lightning_address.php';
-require_once dirname(__DIR__, 2) . '/includes/store_ln_addresses.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/config.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/auto_melt.php';
+require_once dirname(__DIR__, 2) . '/app/includes/lightning_address.php';
+require_once dirname(__DIR__, 2) . '/app/includes/store_ln_addresses.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/auto_melt.php';
 
 use Cashu\Proof;
 use Cashu\WalletStorage;

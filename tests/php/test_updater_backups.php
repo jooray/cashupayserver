@@ -13,7 +13,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/updater.php';
+require_once dirname(__DIR__, 2) . '/app/includes/updater.php';
 
 // Set up a fake install root in a tempdir.
 $root = sys_get_temp_dir() . '/cashupay_updater_test_' . bin2hex(random_bytes(6));

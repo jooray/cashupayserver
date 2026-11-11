@@ -68,7 +68,7 @@ def _encode_noffer(pubkey: str, relay_url: str) -> str:
         " 'offer' => 'e2e-offline', 'price_type' => ClinkNoffer::PRICE_SPONTANEOUS]);"
     )
     out = subprocess.run(
-        [php, "-r", script, str(REPO_ROOT), pubkey, relay_url],
+        [php, "-r", script, str(REPO_ROOT / "app"), pubkey, relay_url],
         capture_output=True, text=True, timeout=30, check=True,
     ).stdout.strip()
     assert out.startswith("noffer1"), out

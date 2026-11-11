@@ -15,8 +15,8 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
 require __DIR__ . '/mock_strike_api.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/config.php';
-require_once dirname(__DIR__, 2) . '/includes/store_ln_addresses.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/store_ln_addresses.php';
 
 $KEY = 'GATEKEY0000' . str_repeat('E', 29);
 $KEY2 = 'GATEKEY2000' . str_repeat('F', 29);

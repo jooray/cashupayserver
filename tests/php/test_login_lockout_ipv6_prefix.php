@@ -14,7 +14,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/security.php';
+require_once dirname(__DIR__, 2) . '/app/includes/security.php';
 
 assert_eq('login_attempts_2001:db8:1:2::/64', Security::lockoutKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), '/64 key');
 assert_eq('login_attempts_2001:db8:1:2::/64', Security::lockoutKey('[2001:db8:1:2::1]'), 'brackets stripped, same /64');

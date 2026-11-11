@@ -7,7 +7,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 $store = 'store_nl';
 make_store($store);

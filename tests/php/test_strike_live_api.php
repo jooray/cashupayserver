@@ -19,7 +19,7 @@ if ($key === false || trim($key) === '') {
 }
 $key = trim($key);
 
-require_once dirname(__DIR__, 2) . '/includes/strike/client.php';
+require_once dirname(__DIR__, 2) . '/app/includes/strike/client.php';
 
 assert_true(StrikeClient::isValidKey($key), 'provided key passes the shape check');
 

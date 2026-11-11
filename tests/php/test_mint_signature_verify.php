@@ -14,7 +14,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/cashu-wallet-php/CashuWallet.php';
+require_once dirname(__DIR__, 2) . '/app/cashu-wallet-php/CashuWallet.php';
 
 use Cashu\Wallet;
 use Cashu\BigInt;

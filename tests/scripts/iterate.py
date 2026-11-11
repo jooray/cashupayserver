@@ -10,7 +10,7 @@ or:
     tests/scripts/iterate.py    # if marked executable; uses tests/.venv automatically
 
 Each run is meant to be ephemeral — the script itself is tracked, but the
-workdirs it creates under tests/.tmp/ are not.
+workdirs it creates under app/.tmp/ are not.
 """
 from __future__ import annotations
 
@@ -125,7 +125,7 @@ CLINK_FEES_LN_USER = "clink_fees"       # dev-fee payout is redirected to this l
 CASHUME_FUNDING_SAT = 100_000_000   # 1 BTC pre-loaded into the cashu.me wallet
 AUTOMINE_INTERVAL_SEC = 30          # regtest blocks tick this often so 1-conf invoices settle
 
-ITERATE_ROOT = TESTS_DIR / ".tmp"
+ITERATE_ROOT = REPO_ROOT / "app" / ".tmp"  # inside the served tree, like the pytest fixtures
 PLAYWRIGHT_BROWSERS = TESTS_DIR / "bin" / "playwright-browsers"
 
 
@@ -139,7 +139,7 @@ def kill_stale_processes() -> None:
     unrelated processes on the host."""
     needles = [
         str(TESTS_DIR / "bin"),
-        str(TESTS_DIR / ".tmp"),
+        str(REPO_ROOT / "app" / ".tmp"),
         str(NUTSHELL_VENV / "bin" / "mint"),
         str(PLAYWRIGHT_BROWSERS),
     ]

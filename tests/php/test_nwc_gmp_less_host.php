@@ -19,7 +19,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/nwc/client.php';
+require_once dirname(__DIR__, 2) . '/app/includes/nwc/client.php';
 
 use swentel\nostr\Key\Key;
 
@@ -44,7 +44,7 @@ function run_with_disabled(string $disabled, string $code): array {
     return [$rc, implode("\n", $out)];
 }
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $prelude = 'require_once ' . var_export($root . '/includes/nwc/client.php', true) . ';';
 
 // 1. GMP disabled + BCMath present: gate OPEN, advisory fires.

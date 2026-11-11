@@ -6,7 +6,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/lnurl_receive.php';
+require_once dirname(__DIR__, 2) . '/app/includes/lnurl_receive.php';
 
 $port = random_int(40000, 49999);
 $serverDir = sys_get_temp_dir() . '/lnurl_verify_test_' . bin2hex(random_bytes(4));

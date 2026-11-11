@@ -12,7 +12,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 make_store('store_re');
 
@@ -44,7 +44,7 @@ Database::insert('invoices', $base + [
     ]),
 ]);
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $runner = $dataDir . '/payment_runner.php';
 file_put_contents($runner, sprintf(<<<'PHP'
 <?php
@@ -101,7 +101,7 @@ assert_false(str_contains($html, '<script>alert(1)</script>'), 'reason text is H
 assert_true(str_contains($html, '&lt;script&gt;'), 'escaped entities rendered instead');
 
 // --- site-wide suppress switch hides the banner and the JSON mirror -----------
-require_once dirname(__DIR__, 2) . '/includes/admin_log.php';
+require_once dirname(__DIR__, 2) . '/app/includes/admin_log.php';
 Config::set(AdminLog::SUPPRESS_CONFIG_KEY, true);
 $html = run_payment_page('inv_re_banner');
 assert_false(str_contains($html, 'class="receive-errors"'), 'suppressed: no banner');

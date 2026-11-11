@@ -2,7 +2,7 @@
 
 Spawns a single bitcoind in regtest mode on free ports, exposes RPC + ZMQ.
 Session-scoped: one daemon for the whole pytest run, isolated under
-tests/.tmp/<session_id>/bitcoind/.
+app/.tmp/<session_id>/bitcoind/.
 """
 from __future__ import annotations
 

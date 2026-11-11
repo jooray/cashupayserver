@@ -17,7 +17,7 @@ require __DIR__ . '/harness.php';
 define('CASHUPAY_IN_CRON', true);
 
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/webhook_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/webhook_sender.php';
 
 // Grab a free port by binding :0 and reading the assigned port, then release
 // it for the built-in server — avoids the random-port collisions that make a

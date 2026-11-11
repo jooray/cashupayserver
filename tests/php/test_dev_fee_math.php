@@ -8,7 +8,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/dev_fee.php';
+require_once dirname(__DIR__, 2) . '/app/includes/dev_fee.php';
 
 $store = 'store_math';
 make_store($store, 'https://m.example.com');

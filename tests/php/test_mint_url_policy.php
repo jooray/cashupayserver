@@ -15,7 +15,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 // ---- validateMintUrl -----------------------------------------------------
 assert_eq('https://mint.example', Config::validateMintUrl('  https://mint.example/  '), 'trim + trailing slash');

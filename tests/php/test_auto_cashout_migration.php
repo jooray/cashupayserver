@@ -13,7 +13,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 /** Force the next Database call to reconnect and re-run the migration gate. */
 function reset_db_singleton(): void {

@@ -8,7 +8,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/crypto/taproot.php';
+require_once dirname(__DIR__, 2) . '/app/includes/crypto/taproot.php';
 
 // A minimal, well-formed unsigned tx: 1 input, 1 output (OP_1 spk), value 1000.
 $hex =

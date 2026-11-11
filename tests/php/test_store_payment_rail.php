@@ -15,8 +15,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/store_ln_addresses.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/store_ln_addresses.php';
 
 function bare_store(string $id, array $extra = []): void {
     Database::insert('stores', array_merge([

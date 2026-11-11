@@ -6,7 +6,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/notification_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/notification_sender.php';
 
 Config::set('notifications_enabled', true);
 Config::set('notifications_invoice_paid_enabled', true);

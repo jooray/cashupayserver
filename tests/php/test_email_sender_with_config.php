@@ -12,8 +12,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/email_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/email_sender.php';
 
 // --- sendWithConfig honours the transport override --------------------------
 $captured = [];

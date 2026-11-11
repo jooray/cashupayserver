@@ -19,7 +19,7 @@ declare(strict_types=1);
 
 if (($argv[1] ?? '') === '--child') {
     define('CASHUPAY_DATA_DIR', (string)$argv[2]);
-    require_once dirname(__DIR__, 2) . '/includes/security.php';
+    require_once dirname(__DIR__, 2) . '/app/includes/security.php';
     $startAt = (float)$argv[3];
     while (microtime(true) < $startAt) {
         usleep(200);
@@ -30,7 +30,7 @@ if (($argv[1] ?? '') === '--child') {
 
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/security.php';
+require_once dirname(__DIR__, 2) . '/app/includes/security.php';
 
 // ---- sequential --------------------------------------------------------------
 $ip = '198.51.100.23';
@@ -53,7 +53,7 @@ assert_true(Security::reserveLoginAttempt($ip), 'and the budget is fresh again')
 // The counter lives under the data directory (CASHUPAY_DATA_DIR), not the
 // code tree: a read-only or mis-owned code tree used to disable lockouts.
 assert_true(is_dir($dataDir . '/cache'), 'rate-limit cache lives under CASHUPAY_DATA_DIR');
-$repoCache = dirname(__DIR__, 2) . '/data/cache';
+$repoCache = dirname(__DIR__, 2) . '/app/data/cache';
 $leaked = is_dir($repoCache) ? glob($repoCache . '/*.cache') : [];
 foreach ($leaked as $f) {
     assert_true(filemtime($f) < $_SERVER['REQUEST_TIME'] - 5, 'no new cache file written under the repo data/cache');

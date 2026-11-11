@@ -8,7 +8,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/cashu-wallet-php/CashuWallet.php';
+require_once dirname(__DIR__, 2) . '/app/cashu-wallet-php/CashuWallet.php';
 
 use Cashu\CashuException;
 use Cashu\Proof;

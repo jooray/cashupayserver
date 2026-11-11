@@ -50,10 +50,10 @@ jobs:
         # so the -testing suffix is the only difference. run_number keeps each
         # testing build's tag unique and monotonic.
         run: |
-          version="$(grep -oE "define\('CASHUPAY_VERSION',\s*'[^']+'\)" includes/config.php \
+          version="$(grep -oE "define\('CASHUPAY_VERSION',\s*'[^']+'\)" app/includes/config.php \
             | sed -E "s/.*'([^']+)'\)/\1/" | head -1)"
           if [ -z "$version" ]; then
-            echo "ERROR: could not read CASHUPAY_VERSION from includes/config.php" >&2
+            echo "ERROR: could not read CASHUPAY_VERSION from app/includes/config.php" >&2
             exit 1
           fi
           echo "tag=v${version}-testing.${{ github.run_number }}" >> "$GITHUB_OUTPUT"

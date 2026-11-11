@@ -8,7 +8,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/selfserve.php';
+require_once dirname(__DIR__, 2) . '/app/includes/selfserve.php';
 
 // A payment-capable store (has a mint + seed phrase).
 $paid = 'store_ss_paid';

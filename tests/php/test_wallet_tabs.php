@@ -11,7 +11,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/wallet_tabs.php';
+require_once dirname(__DIR__, 2) . '/app/includes/wallet_tabs.php';
 
 // --- Keys ------------------------------------------------------------------
 assert_eq(['cashapp', 'venmo', 'paypal'], WalletTabs::ALL, 'three wallets, in tab order');
@@ -21,7 +21,7 @@ foreach (WalletTabs::ALL as $k) {
     foreach (['label', 'file', 'class', 'sources', 'note', 'button'] as $field) {
         assert_true(array_key_exists($field, WalletTabs::BRANDS[$k]), "$k brand carries $field");
     }
-    assert_true(is_file(dirname(__DIR__, 2) . '/images/payment-methods/' . WalletTabs::BRANDS[$k]['file']),
+    assert_true(is_file(dirname(__DIR__, 2) . '/app/images/payment-methods/' . WalletTabs::BRANDS[$k]['file']),
         "$k logo exists under images/payment-methods/ (the brand row's own artwork)");
 }
 assert_false(WalletTabs::isKnown('strike'), 'brands without a tab are not wallets');

@@ -7,7 +7,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/nwc/uri.php';
+require_once dirname(__DIR__, 2) . '/app/includes/nwc/uri.php';
 
 $pk = str_repeat('a1', 32);
 $sk = str_repeat('b2', 32);

@@ -9,7 +9,7 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 // A representative store row as returned by SELECT * FROM stores, with the
 // dashboard's derived fields already attached.

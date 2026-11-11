@@ -25,8 +25,8 @@
  */
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/payments.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/provider.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/payments.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/provider.php';
 
 fresh_db();
 make_store('s1');

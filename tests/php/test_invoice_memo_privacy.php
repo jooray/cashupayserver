@@ -16,7 +16,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 // ---------------------------------------------------------------------------
 // 1. Resolution — showStoreNameOnInvoice / showNoteOnInvoice
@@ -109,7 +109,7 @@ assert_eq($longName, Invoice::buildInvoiceMemo(['name' => $longName], null, 0),
 // ---------------------------------------------------------------------------
 // 3. Persistence — columns round-trip and feed the builder via Config::getStore
 // ---------------------------------------------------------------------------
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 $sid = 'store_privacy';
 make_store($sid, 'http://127.0.0.1:1');
 Database::update('stores', ['name' => 'Acme Coffee'], 'id = ?', [$sid]);

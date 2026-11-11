@@ -13,7 +13,7 @@ require __DIR__ . '/harness.php';
 define('CASHUPAY_IN_CRON', true);
 
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 make_store('s1', 'https://mint.example');
 Database::insert('webhooks', [

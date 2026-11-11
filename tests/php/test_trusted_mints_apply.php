@@ -2,9 +2,9 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/mint_reliability.php';
-require_once dirname(__DIR__, 2) . '/includes/trusted_mints.php';
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/mint_reliability.php';
+require_once dirname(__DIR__, 2) . '/app/includes/trusted_mints.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 // Plant a cached trusted list directly on disk so we can test apply* without
 // needing network. Refresh-from-URL is exercised in a separate test.

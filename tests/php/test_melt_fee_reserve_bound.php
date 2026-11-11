@@ -10,7 +10,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/lightning_address.php';
+require_once dirname(__DIR__, 2) . '/app/includes/lightning_address.php';
 
 $m = new ReflectionMethod('LightningAddress', 'assertSaneFeeReserve');
 $m->setAccessible(true);

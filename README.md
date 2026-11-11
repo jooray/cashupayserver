@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/img/barebits-logo.svg">
-    <img src="assets/img/barebits-logo-dark.svg" alt="BareBits" width="360">
+    <source media="(prefers-color-scheme: dark)" srcset="app/assets/img/barebits-logo.svg">
+    <img src="app/assets/img/barebits-logo-dark.svg" alt="BareBits" width="360">
   </picture>
 </p>
 
@@ -331,7 +331,7 @@ The simplest way to run BareBits locally:
 
 ```bash
 git clone --recurse-submodules https://github.com/BareBits/cashupayserver.git
-cd cashupayserver
+cd cashupayserver/app
 # Install PHP dependencies (bitwasp/bitcoin for on-chain payment support).
 # Composer is only needed for development and at build time — the deploy zip
 # bundles vendor/ so end users don't need Composer on their hosting.
@@ -339,7 +339,12 @@ php composer.phar install --no-dev --ignore-platform-reqs   # or: composer insta
 php -S localhost:8000 router.php
 ```
 
-If `composer.phar` isn't checked in, fetch it once with:
+The application lives in the repository's `app/` directory — the exact tree a
+release zip extracts to (`admin.php`, `includes/`, `assets/`, ...). Everything
+outside `app/` (tests, build scripts, Docker files, docs) is development
+tooling that never ships. Serve `app/` as the web root, never the repo root.
+
+If `composer.phar` isn't checked in, fetch it once (inside `app/`) with:
 
 ```bash
 curl -sS https://getcomposer.org/installer | php
@@ -353,7 +358,7 @@ The `router.php` handles routing and **blocks access to sensitive directories** 
 
 A Docker configuration is available for **testing only** (not production). It includes WordPress, WooCommerce, and the BTCPay plugin pre-installed with SQLite (no MySQL needed).
 
-See [DOCKER.md](DOCKER.md) for detailed setup instructions, persistent data volumes, and troubleshooting.
+See [docs/DOCKER.md](docs/DOCKER.md) for detailed setup instructions, persistent data volumes, and troubleshooting.
 
 #### Standalone + WordPress
 
@@ -386,7 +391,7 @@ This starts:
 If you modify the mint-discovery submodule:
 
 ```bash
-cd mint-discovery
+cd app/mint-discovery
 npm install
 npm run build
 cp dist/mint-discovery.bundle.js ../assets/js/
@@ -394,20 +399,18 @@ cp dist/mint-discovery.bundle.js ../assets/js/
 
 ## Security for Development Environments
 
-**When running directly from the git repository (not from the distribution zip), you MUST ensure your web server blocks access to sensitive files.**
+**When running directly from the git repository (not from the distribution zip), serve the `app/` directory as the web root and make sure your web server blocks access to sensitive files.**
 
-The distribution zip only includes necessary files. The git repository contains test scripts, examples, and documentation that should never be web-accessible.
+The distribution zip only includes necessary files. The git repository's `app/` directory is that same tree plus the `mint-discovery/` submodule source; everything else in the repository (tests, build scripts, Docker files, docs) sits outside `app/` and is never reachable when `app/` is the web root. Never point a web server at the repository root.
 
 ### What Needs Protection
 
-| Directory/File | Contains | Risk if Exposed |
+| Directory/File (inside `app/`) | Contains | Risk if Exposed |
 |---------------|----------|-----------------|
 | `data/` | SQLite database with ecash tokens | **Critical** - Loss of funds |
 | `includes/` | PHP classes | Code execution |
 | `cashu-wallet-php/` | Library with test scripts | Code execution |
 | `mint-discovery/` | Node.js source | Info leak |
-| `scripts/` | Build scripts | Info leak |
-| `docker/` | Docker configs | Info leak |
 
 ### Apache (Development)
 
@@ -451,7 +454,7 @@ scripts/webserver-smoke.sh https://yoursite.com --nginx  # nginx
 Using `router.php` is safe - it blocks sensitive paths:
 
 ```bash
-php -S localhost:8000 router.php
+cd app && php -S localhost:8000 router.php
 ```
 
 **Do NOT use** `php -S localhost:8000` without the router - it will serve all files!

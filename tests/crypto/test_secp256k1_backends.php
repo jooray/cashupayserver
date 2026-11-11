@@ -11,7 +11,7 @@
  * Skips when either backend is unavailable.
  */
 
-require_once __DIR__ . '/../../includes/crypto/secp256k1.php';
+require_once __DIR__ . '/../../app/includes/crypto/secp256k1.php';
 
 if (!function_exists('gmp_init') || !function_exists('bcadd')) {
     echo "SKIP: differential test needs both GMP and BCMath\n";

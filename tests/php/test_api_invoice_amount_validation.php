@@ -9,7 +9,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/api/invoices.php';
+require_once dirname(__DIR__, 2) . '/app/includes/api/invoices.php';
 
 // ---- Accepted shapes ----
 

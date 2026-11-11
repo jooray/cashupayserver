@@ -10,7 +10,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/notification_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/notification_sender.php';
 
 $store = 'store_receipt';
 make_store($store, 'https://m.example.com');

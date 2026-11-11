@@ -22,9 +22,9 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/store_ln_addresses.php';
+require_once dirname(__DIR__, 2) . '/app/includes/store_ln_addresses.php';
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $runner = $dataDir . '/authorize_runner.php';
 file_put_contents($runner, sprintf(<<<'PHP'
 <?php

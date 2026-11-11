@@ -13,7 +13,7 @@
  * pinned to the exact same outputs.
  */
 
-require_once __DIR__ . '/../../includes/crypto/schnorr.php';
+require_once __DIR__ . '/../../app/includes/crypto/schnorr.php';
 
 $VECTORS = [
     // index, sk, pk, aux, msg, sig, valid

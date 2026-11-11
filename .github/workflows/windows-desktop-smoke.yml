@@ -18,11 +18,11 @@ on:
       - "scripts/build-standalone.sh"
       - "scripts/windows-smoke.ps1"
       - "scripts/desktop-smoke.php"
-      - "setup.php"
-      - "includes/setup_flow.php"
-      - "includes/desktop.php"
-      - "router.php"
-      - "index.php"
+      - "app/setup.php"
+      - "app/includes/setup_flow.php"
+      - "app/includes/desktop.php"
+      - "app/router.php"
+      - "app/index.php"
       - ".github/workflows/windows-desktop-smoke.yml"
   # Manual escape hatch for changes the path filter can't anticipate.
   workflow_dispatch:

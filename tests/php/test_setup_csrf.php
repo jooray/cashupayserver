@@ -18,7 +18,7 @@ $dir = sys_get_temp_dir() . '/cashupay_test_' . bin2hex(random_bytes(6));
 mkdir($dir, 0750, true);
 define('CASHUPAY_DATA_DIR', $dir);
 register_shutdown_function(function () use ($dir) { @cleanup_db($dir); });
-require_once dirname(__DIR__, 2) . '/includes/auth.php';
+require_once dirname(__DIR__, 2) . '/app/includes/auth.php';
 
 $srv = HttpDriver::start($dir);
 

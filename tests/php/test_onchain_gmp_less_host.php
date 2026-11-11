@@ -38,7 +38,7 @@ function run_without_gmp(string $code): array {
     return [$rc, implode("\n", $out)];
 }
 
-$root = dirname(__DIR__, 2);
+$root = dirname(__DIR__, 2) . '/app';
 $prelude = 'require_once ' . var_export($root . '/includes/onchain/wallet.php', true) . ';';
 
 // Sanity: the child really is GMP-less.

@@ -12,7 +12,7 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 require __DIR__ . '/http_driver.php';
 $dir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/auth.php';
+require_once dirname(__DIR__, 2) . '/app/includes/auth.php';
 
 Auth::setAdminPassword('admin-pw-1234');
 Auth::createUser('staff', 'staffpw1234', Auth::ROLE_USER);

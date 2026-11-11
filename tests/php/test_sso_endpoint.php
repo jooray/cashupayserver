@@ -23,7 +23,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 $dataDir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
 
 $ssoKey = bin2hex(random_bytes(32));
 $ssoKeyHash = hash('sha256', $ssoKey);
@@ -66,7 +66,7 @@ function run_sso(
         . "    \$c = http_response_code();\n"
         . "    echo \"\\nHTTP_STATUS:\" . (\$c === false ? 200 : \$c);\n"
         . "});\n";
-    $code .= "require " . var_export(dirname(__DIR__, 2) . '/sso.php', true) . ";\n";
+    $code .= "require " . var_export(dirname(__DIR__, 2) . '/app/sso.php', true) . ";\n";
     file_put_contents($driver, $code);
 
     $out = [];

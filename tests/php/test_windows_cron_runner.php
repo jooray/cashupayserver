@@ -18,7 +18,7 @@ $runner = $repoRoot . '/windows/cron-runner.php';
 
 /** Run cron-runner.php in a subprocess against the given data dir. */
 function run_cron_runner(string $runner, string $repoRoot, string $dataDir): array {
-    putenv('CASHUPAY_DESKTOP_APP_DIR=' . $repoRoot);
+    putenv('CASHUPAY_DESKTOP_APP_DIR=' . $repoRoot . '/app');
     putenv('CASHUPAY_DATA_DIR=' . $dataDir);
     // Mirrors the desktop launcher (and keeps the update-check task from
     // reaching out to GitHub mid-test).

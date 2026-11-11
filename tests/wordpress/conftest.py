@@ -39,7 +39,7 @@ from fixtures.wordpress import (
 )
 
 TESTS_DIR = Path(__file__).resolve().parent.parent
-SESSION_TMP = TESTS_DIR / ".tmp"
+SESSION_TMP = TESTS_DIR.parent / "app" / ".tmp"  # inside the served tree, see tests/conftest.py
 
 
 @pytest.fixture(scope="session")

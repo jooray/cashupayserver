@@ -17,6 +17,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESTS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${TESTS_DIR}/.." && pwd)"
+APP_ROOT="${REPO_ROOT}/app"
 
 BACKEND="all"
 PYTEST_ARGS=()
@@ -31,7 +32,7 @@ case "$BACKEND" in
   *) echo "[run-tests] invalid --backend=${BACKEND} (phps|apache|nginx|all)" >&2; exit 2 ;;
 esac
 
-# Resource preflight: a full pass eats ~4-5G of tests/.tmp workdirs and the
+# Resource preflight: a full pass eats ~4-5G of app/.tmp workdirs and the
 # fixture stack (bitcoind + 2 LND + 2 mints + Chromium) sits at ~2-3G RSS.
 # Refuse to start a doomed multi-hour run on a box that will OOM or fill the
 # disk mid-pass; re-checked between backend passes because a red pass keeps
@@ -46,7 +47,7 @@ preflight_resources() {
   mem_gb=$(awk '/MemAvailable/ {print int($2 / 1024 / 1024)}' /proc/meminfo)
   if [ "$disk_gb" -lt 4 ] || [ "$mem_gb" -lt 2 ]; then
     echo "[run-tests] ABORT (${label}): ${disk_gb}G disk free / ${mem_gb}G RAM available;" \
-         "need >=4G disk and >=2G RAM. Stale workdirs under tests/.tmp/ and orphaned" \
+         "need >=4G disk and >=2G RAM. Stale workdirs under app/.tmp/ and orphaned" \
          "fixture processes from killed runs are the usual culprits" \
          "(CASHUPAY_SKIP_PREFLIGHT=1 overrides)." >&2
     exit 3
@@ -68,7 +69,7 @@ if [ "$BACKEND" != "phps" ]; then
 fi
 
 # 1. Submodules
-if [ ! -f "${REPO_ROOT}/cashu-wallet-php/CashuWallet.php" ]; then
+if [ ! -f "${APP_ROOT}/cashu-wallet-php/CashuWallet.php" ]; then
   echo "[run-tests] initializing cashu-wallet-php submodule"
   (cd "${REPO_ROOT}" && git submodule update --init --recursive)
 fi
@@ -77,8 +78,8 @@ fi
 #     Uses the static PHP binary the fixture manager downloaded, plus a pinned
 #     composer.phar. --ignore-platform-reqs sidesteps a stale PHP 7 pin in a
 #     transitive dep (lastguest/murmurhash) that still runs fine on PHP 8.
-if [ ! -d "${REPO_ROOT}/vendor" ] && [ -f "${REPO_ROOT}/composer.json" ]; then
-  python3 - "${TESTS_DIR}" "${REPO_ROOT}" <<'PYEOF'
+if [ ! -d "${APP_ROOT}/vendor" ] && [ -f "${APP_ROOT}/composer.json" ]; then
+  python3 - "${TESTS_DIR}" "${APP_ROOT}" <<'PYEOF'
 import subprocess, sys
 sys.path.insert(0, sys.argv[1])
 from fixtures import binaries
@@ -140,7 +141,7 @@ for backend in phps apache nginx; do
     # A green pass's workdirs (~4-5G of payserver data dirs + WP trees per
     # pass) have no postmortem value; three passes don't fit most disks.
     # Failed passes keep theirs.
-    rm -rf .tmp/payserver-* .tmp/wp-* .tmp/session-* 2>/dev/null || true
+    rm -rf "${APP_ROOT}"/.tmp/payserver-* "${APP_ROOT}"/.tmp/wp-* "${APP_ROOT}"/.tmp/session-* 2>/dev/null || true
   else
     RESULTS[$backend]="FAIL($?)"
     overall=1

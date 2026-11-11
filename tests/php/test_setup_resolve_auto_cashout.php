@@ -12,10 +12,10 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/config.php';
-require_once dirname(__DIR__, 2) . '/includes/setup_flow.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/config.php';
-require_once dirname(__DIR__, 2) . '/includes/swap/auto_melt.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/setup_flow.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/config.php';
+require_once dirname(__DIR__, 2) . '/app/includes/swap/auto_melt.php';
 
 const XPUB = 'xpub6CUGRUonZSQ4TWtTMmzXdrXDtypWKiKrhko4egpiMZbpiaQL2jkwSB1ic';
 

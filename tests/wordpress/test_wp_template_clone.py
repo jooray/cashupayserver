@@ -32,7 +32,7 @@ from wordpress.conftest import wp_option
 pytestmark = pytest.mark.wordpress
 
 TESTS_DIR = Path(__file__).resolve().parent.parent
-SESSION_TMP = TESTS_DIR / ".tmp"
+SESSION_TMP = TESTS_DIR.parent / "app" / ".tmp"  # inside the served tree, see tests/conftest.py
 
 
 @pytest.fixture

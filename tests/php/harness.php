@@ -93,11 +93,11 @@ function fresh_db(): string {
         putenv('CASHUPAY_USAGE_STATS_ENDPOINT=disabled');
     }
 
-    require_once dirname(__DIR__, 2) . '/includes/database.php';
+    require_once dirname(__DIR__, 2) . '/app/includes/database.php';
     Database::ensureExists();
     Database::initialize();
     // Mark setup_complete so cron-like flows don't bail.
-    require_once dirname(__DIR__, 2) . '/includes/config.php';
+    require_once dirname(__DIR__, 2) . '/app/includes/config.php';
     Config::set('setup_complete', true);
     register_shutdown_function(function() use ($dir) {
         @cleanup_db($dir);

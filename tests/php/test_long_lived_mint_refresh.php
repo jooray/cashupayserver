@@ -18,7 +18,7 @@ require __DIR__ . '/harness.php';
 require __DIR__ . '/mock_mint_stub.php';
 define('CASHUPAY_IN_CRON', true);
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 $now = time();
 $mint = start_mock_mint(['quotes' => [], 'quote_ttl' => 600]);

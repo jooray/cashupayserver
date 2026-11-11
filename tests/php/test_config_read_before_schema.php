@@ -27,8 +27,8 @@ register_shutdown_function(function () use ($dir) {
     @cleanup_db($dir);
 });
 
-require_once dirname(__DIR__, 2) . '/includes/config.php'; // pulls in database.php
-require_once dirname(__DIR__, 2) . '/includes/urls.php';
+require_once dirname(__DIR__, 2) . '/app/includes/config.php'; // pulls in database.php
+require_once dirname(__DIR__, 2) . '/app/includes/urls.php';
 
 // Precondition: schema absent.
 assert_false(Database::isInitialized(), 'db is not initialized on a fresh install');

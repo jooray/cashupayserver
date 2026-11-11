@@ -712,7 +712,7 @@ def _ensure_golden_install(
     if key in _GOLDEN_CACHE:
         return _GOLDEN_CACHE[key]
 
-    workdir = TESTS_DIR / ".tmp" / f"wp-golden-{key}-{uuid.uuid4().hex[:8]}"
+    workdir = TESTS_DIR.parent / "app" / ".tmp" / f"wp-golden-{key}-{uuid.uuid4().hex[:8]}"
     print(f"[wp] building golden '{key}' WordPress template (once per session) ...")
     handle = start_wordpress(
         workdir,

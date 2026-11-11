@@ -8,8 +8,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/notification_sender.php';
-require_once dirname(__DIR__, 2) . '/includes/email_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/notification_sender.php';
+require_once dirname(__DIR__, 2) . '/app/includes/email_sender.php';
 
 // All switches on so the gate doesn't interfere.
 Config::set('notifications_enabled', true);

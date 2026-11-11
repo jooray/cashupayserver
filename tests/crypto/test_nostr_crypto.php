@@ -22,7 +22,7 @@
  * exhaustively by test_bignum + test_secp256k1_backends.
  */
 
-require_once __DIR__ . '/../../includes/crypto/nostr_crypto.php';
+require_once __DIR__ . '/../../app/includes/crypto/nostr_crypto.php';
 
 use swentel\nostr\Event\Event;
 use swentel\nostr\Sign\Sign;

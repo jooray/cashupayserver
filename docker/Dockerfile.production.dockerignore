@@ -1,6 +1,11 @@
 # Keep the build context small and prevent local dev state from leaking into
 # the image. The production Dockerfile uses targeted COPY statements, so this
 # is defense-in-depth rather than the only line of defense.
+#
+# Per-Dockerfile ignore file (BuildKit: <Dockerfile>.dockerignore next to the
+# Dockerfile wins over a root .dockerignore). The build context is the repo
+# root, so paths below are repo-root relative; the application tree is app/.
+# docker/Dockerfile.standalone.dockerignore is a copy — keep them in sync.
 
 # VCS
 .git
@@ -18,25 +23,20 @@
 # Test artifacts and runtime caches
 tests/
 build/
-vendor/
+app/vendor/
 node_modules/
-mint-discovery/node_modules/
+app/mint-discovery/node_modules/
+app/composer.phar
 
 # Local dev state and secrets (must never end up in the image)
-user_config.php
-includes/config.local.php
-data/cashupay.sqlite
-data/cache/
-data/updates/
-data/dbip-country-lite.csv.gz
-data/notification_queue/
+app/user_config.php
+app/includes/config.local.php
+app/data/
+app/BUILD_INFO
 
 # Docs aren't shipped in the runtime image
 docs/
-DOCKER.md
 README.md
 USE_POLICY.md
 LICENSE.md
-
-# Composer phar (re-fetched in stage 1)
-composer.phar
+PRIVACY.md

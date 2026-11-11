@@ -12,7 +12,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
 
 use swentel\nostr\Key\Key;
 
@@ -85,7 +85,7 @@ try {
 }
 
 // ---------- 3: dead NWC connection falls through to the noffer ----------
-require_once dirname(__DIR__, 2) . '/includes/clink/noffer.php';
+require_once dirname(__DIR__, 2) . '/app/includes/clink/noffer.php';
 $mSk = $key->generatePrivateKey();
 $mPk = $key->getPublicKey($mSk);
 [$proc, $port] = start_mock('mock_clink_relay.php', 'MOCK_CLINK_PORT', [

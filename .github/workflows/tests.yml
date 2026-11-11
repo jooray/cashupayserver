@@ -133,11 +133,11 @@ jobs:
         with:
           name: test-logs-shard-${{ matrix.shard }}
           path: |
-            tests/.tmp/**/*.log
-            tests/.tmp/**/*.sqlite
+            app/.tmp/**/*.log
+            app/.tmp/**/*.sqlite
           retention-days: 7
           if-no-files-found: ignore
-          # tests/.tmp is a dot-directory; without this the globs silently
+          # app/.tmp is a dot-directory; without this the globs silently
           # match nothing ("No files were found") and failures ship no logs.
           include-hidden-files: true
 
@@ -235,8 +235,8 @@ jobs:
         with:
           name: test-logs-wp-${{ matrix.backend }}
           path: |
-            tests/.tmp/**/*.log
-            tests/.tmp/**/*.sqlite
+            app/.tmp/**/*.log
+            app/.tmp/**/*.sqlite
           retention-days: 7
           if-no-files-found: ignore
           include-hidden-files: true

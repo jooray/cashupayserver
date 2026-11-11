@@ -12,10 +12,10 @@
  * the regtest e2e suite. This test catches integration bugs in our own code.
  */
 
-require_once __DIR__ . '/../../includes/crypto/secp256k1.php';
-require_once __DIR__ . '/../../includes/crypto/schnorr.php';
-require_once __DIR__ . '/../../includes/crypto/taproot.php';
-require_once __DIR__ . '/../../includes/crypto/tx_builder.php';
+require_once __DIR__ . '/../../app/includes/crypto/secp256k1.php';
+require_once __DIR__ . '/../../app/includes/crypto/schnorr.php';
+require_once __DIR__ . '/../../app/includes/crypto/taproot.php';
+require_once __DIR__ . '/../../app/includes/crypto/tx_builder.php';
 
 $failures = 0;
 

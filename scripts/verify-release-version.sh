@@ -5,7 +5,7 @@
 # git tag (vX.Y[.Z][-suffix]). Two in-tree fields must agree with it, or a
 # release would ship advertising the wrong version:
 #
-#   - CASHUPAY_VERSION in includes/config.php   (standalone app + BUILD_INFO)
+#   - CASHUPAY_VERSION in app/includes/config.php (standalone app + BUILD_INFO)
 #   - the `Version:` header in wordpress/barebits.php (what WordPress displays)
 #
 # Enforcing the match here means the version bump has to be committed BEFORE
@@ -39,14 +39,14 @@ EXPECTED="${EXPECTED%%-testing.*}"
 
 fail=0
 
-config_version="$(grep -oE "define\('CASHUPAY_VERSION',\s*'[^']+'\)" includes/config.php \
+config_version="$(grep -oE "define\('CASHUPAY_VERSION',\s*'[^']+'\)" app/includes/config.php \
     | sed -E "s/.*'([^']+)'\)/\1/" | head -1)"
 if [ -z "$config_version" ]; then
-    echo "ERROR: could not read CASHUPAY_VERSION from includes/config.php" >&2
+    echo "ERROR: could not read CASHUPAY_VERSION from app/includes/config.php" >&2
     fail=1
 elif [ "$config_version" != "$EXPECTED" ]; then
     echo "ERROR: CASHUPAY_VERSION ('$config_version') != tag ('$EXPECTED')" >&2
-    echo "       Bump define('CASHUPAY_VERSION', ...) in includes/config.php and re-tag." >&2
+    echo "       Bump define('CASHUPAY_VERSION', ...) in app/includes/config.php and re-tag." >&2
     fail=1
 fi
 

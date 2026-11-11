@@ -13,8 +13,8 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 require __DIR__ . '/http_driver.php';
 $dir = fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/safe_http.php';
-require_once dirname(__DIR__, 2) . '/includes/onchain/provider.php';
+require_once dirname(__DIR__, 2) . '/app/includes/safe_http.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/provider.php';
 
 // ---- pure split -------------------------------------------------------------
 [$url, $headers] = BitcoindRpcProvider::splitCredentials('http://alice:s3cret%20p%40ss@127.0.0.1:18443/');

@@ -32,7 +32,7 @@ const LIB_STUB_KEYSET = '00aabbccddeeff01';
 
 function lib_mint_stub_router_source(): string
 {
-    $lib = dirname(__DIR__, 2) . '/cashu-wallet-php/CashuWallet.php';
+    $lib = dirname(__DIR__, 2) . '/app/cashu-wallet-php/CashuWallet.php';
     return <<<'PHP'
 <?php
 declare(strict_types=1);
@@ -274,7 +274,7 @@ function lib_mint_stub_start(): array
 {
     $dir = sys_get_temp_dir() . '/lib_mint_stub_' . bin2hex(random_bytes(4));
     mkdir($dir, 0750, true);
-    $lib = dirname(__DIR__, 2) . '/cashu-wallet-php/CashuWallet.php';
+    $lib = dirname(__DIR__, 2) . '/app/cashu-wallet-php/CashuWallet.php';
     file_put_contents($dir . '/router.php', str_replace('__LIB__', var_export($lib, true), lib_mint_stub_router_source()));
     file_put_contents($dir . '/script.json', '{}');
     file_put_contents($dir . '/state.json', '{}');

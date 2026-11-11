@@ -12,11 +12,11 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/updater.php';
+require_once dirname(__DIR__, 2) . '/app/includes/updater.php';
 
 // The footer anchor must build its href from Updater::releasesUrl() — a
 // hardcoded URL could silently disagree with the updater's repo or channel.
-$admin = file_get_contents(dirname(__DIR__, 2) . '/admin.php');
+$admin = file_get_contents(dirname(__DIR__, 2) . '/app/admin.php');
 assert_true($admin !== false, 'admin.php readable');
 assert_true(
     (bool) preg_match(

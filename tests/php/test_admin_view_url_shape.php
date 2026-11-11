@@ -19,7 +19,7 @@ declare(strict_types=1);
 
 require_once __DIR__ . '/harness.php';
 
-require_once dirname(__DIR__, 2) . '/includes/urls.php';
+require_once dirname(__DIR__, 2) . '/app/includes/urls.php';
 
 // Clean mode: the front controller was probe-proven — path URLs regardless
 // of how this particular request arrived.

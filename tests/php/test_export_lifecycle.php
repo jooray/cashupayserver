@@ -20,9 +20,9 @@ declare(strict_types=1);
 require __DIR__ . '/harness.php';
 require __DIR__ . '/mock_mint_stub.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/invoice.php';
-require_once dirname(__DIR__, 2) . '/includes/store_safety.php';
-require_once dirname(__DIR__, 2) . '/includes/transfer.php';
+require_once dirname(__DIR__, 2) . '/app/includes/invoice.php';
+require_once dirname(__DIR__, 2) . '/app/includes/store_safety.php';
+require_once dirname(__DIR__, 2) . '/app/includes/transfer.php';
 
 use Cashu\Proof;
 use Cashu\ProofState;

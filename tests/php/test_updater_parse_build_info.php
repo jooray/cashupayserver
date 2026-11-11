@@ -8,7 +8,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/updater.php';
+require_once dirname(__DIR__, 2) . '/app/includes/updater.php';
 
 $ref = new ReflectionMethod(Updater::class, 'parseBuildInfo');
 $ref->setAccessible(true);

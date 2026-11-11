@@ -13,7 +13,7 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/fee_redirect.php';
+require_once dirname(__DIR__, 2) . '/app/includes/fee_redirect.php';
 
 // ---- candidates(): ordering + field mapping --------------------------------
 $store = [
@@ -40,7 +40,7 @@ assert_eq((string)CASHUPAY_DEV_FEE_LNURL, $cands[0]['lnurl'], 'dev lnurl from co
 // Dev on-chain destination ships baked in: the BareBits mainnet zpub (BIP84).
 // Pin the exact default and its first derived address so a drift in either
 // the constant or the SLIP-32 zpub handling is caught here, not in production.
-require_once dirname(__DIR__, 2) . '/includes/onchain/wallet.php';
+require_once dirname(__DIR__, 2) . '/app/includes/onchain/wallet.php';
 assert_eq(
     'zpub6mg9NbdenqrqfD2BbNqa4EdKS8z2yEBxH2PC4NXmXwnTDfukw3w7JLVMeb81xc9i1N8b7ReB9ia4wLoUyLVrVxaPQbJidU8Yn6Gjd95kQmA',
     (string)CASHUPAY_DEV_FEE_ONCHAIN_XPUB,

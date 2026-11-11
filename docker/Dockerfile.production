@@ -14,13 +14,18 @@
 # Companion files:
 #   docker/entrypoint-production.sh — first-boot seed + cron loop + apache.
 #   docker/production-vhost.conf    — Apache vhost that honours the in-repo .htaccess.
+#   docker/docker-compose.yml       — compose file (build context is the repo root).
 #   docs/docker-production.md       — operator guide.
+#
+# The application tree lives under app/ in the repository; the image flattens
+# it to /usr/src/cashupayserver, the same layout the release zip installs.
+# Build from the repo root: docker build -f docker/Dockerfile.production .
 
 # ---- Stage 1: composer install --------------------------------------------
 FROM composer:2 AS deps
 
 WORKDIR /app
-COPY composer.json composer.lock /app/
+COPY app/composer.json app/composer.lock /app/
 
 # --ignore-platform-reqs: lastguest/murmurhash carries a stale PHP 7 pin that
 # runs fine on PHP 8.3. Mirrors the flag used by scripts/build-standalone.sh.
@@ -59,16 +64,16 @@ COPY docker/production-vhost.conf /etc/apache2/sites-available/000-default.conf
 # pick up auto-updater changes from the volume.
 RUN mkdir -p /usr/src/cashupayserver
 COPY --from=deps /app/vendor                                       /usr/src/cashupayserver/vendor/
-COPY includes/                                                     /usr/src/cashupayserver/includes/
-COPY assets/                                                       /usr/src/cashupayserver/assets/
-COPY api-keys/                                                     /usr/src/cashupayserver/api-keys/
-COPY images/                                                       /usr/src/cashupayserver/images/
-COPY cashu-wallet-php/CashuWallet.php                              /usr/src/cashupayserver/cashu-wallet-php/CashuWallet.php
-COPY cashu-wallet-php/bip39-english.txt                            /usr/src/cashupayserver/cashu-wallet-php/bip39-english.txt
-COPY admin.php setup.php api.php payment.php receive.php cron.php \
-     router.php index.php recover.php health.php pay.php \
-     product-image.php update.php provision.php sso.php            /usr/src/cashupayserver/
-COPY .htaccess favicon.ico                                         /usr/src/cashupayserver/
+COPY app/includes/                                                 /usr/src/cashupayserver/includes/
+COPY app/assets/                                                   /usr/src/cashupayserver/assets/
+COPY app/api-keys/                                                 /usr/src/cashupayserver/api-keys/
+COPY app/images/                                                   /usr/src/cashupayserver/images/
+COPY app/cashu-wallet-php/CashuWallet.php                          /usr/src/cashupayserver/cashu-wallet-php/CashuWallet.php
+COPY app/cashu-wallet-php/bip39-english.txt                        /usr/src/cashupayserver/cashu-wallet-php/bip39-english.txt
+COPY app/admin.php app/setup.php app/api.php app/payment.php app/receive.php app/cron.php \
+     app/router.php app/index.php app/recover.php app/health.php app/pay.php \
+     app/product-image.php app/update.php app/provision.php app/sso.php /usr/src/cashupayserver/
+COPY app/.htaccess app/favicon.ico                                 /usr/src/cashupayserver/
 
 # Fail the build if any entry point router.php dispatches to is missing or any
 # literal require doesn't resolve — the same guard tests.yml applies to the

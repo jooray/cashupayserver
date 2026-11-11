@@ -208,10 +208,10 @@ def test_banner_hidden_when_cached_verdict_names_the_running_build(admin_page):
     this test writes one at the docroot for its duration and restores whatever
     was there before."""
     page, configured = admin_page
-    from fixtures.payserver import REPO_ROOT
+    from fixtures.payserver import APP_ROOT
 
     running_sha = "a1b2c3d4" * 5
-    build_info = REPO_ROOT / "BUILD_INFO"
+    build_info = APP_ROOT / "BUILD_INFO"
     previous = build_info.read_bytes() if build_info.exists() else None
     build_info.write_text(f"COMMIT_SHA={running_sha}\nCHANNEL=main\nVERSION=1.6\n")
     try:
@@ -288,10 +288,10 @@ def test_banner_hidden_when_cached_verdict_came_from_another_build(admin_page):
     checked_at=0 (the dev stack's kill switch keeps the on-demand refetch a
     no-op), and the banner stays hidden."""
     page, configured = admin_page
-    from fixtures.payserver import REPO_ROOT
+    from fixtures.payserver import APP_ROOT
 
     running_sha = "161" + "b" * 37
-    build_info = REPO_ROOT / "BUILD_INFO"
+    build_info = APP_ROOT / "BUILD_INFO"
     previous = build_info.read_bytes() if build_info.exists() else None
     build_info.write_text(f"COMMIT_SHA={running_sha}\nCHANNEL=main\nVERSION=1.6.1\n")
     try:
@@ -363,12 +363,12 @@ def test_update_applied_outcome_retires_once_the_page_runs_the_new_build(admin_p
     The BUILD_INFO at the docroot is what admin.php reads at render time, so
     the test swaps it to model "old page" vs "reloaded page"."""
     page, configured = admin_page
-    from fixtures.payserver import REPO_ROOT
+    from fixtures.payserver import APP_ROOT
 
     base = configured.handle.url
     old_sha = "0161" + "a" * 36
     new_sha = "0162" + "b" * 36
-    build_info = REPO_ROOT / "BUILD_INFO"
+    build_info = APP_ROOT / "BUILD_INFO"
     previous = build_info.read_bytes() if build_info.exists() else None
 
     def seed_outcome(to_sha: str, to_version: str) -> None:

@@ -15,11 +15,11 @@ $tmp = sys_get_temp_dir() . '/cashupay-automelt-test-' . bin2hex(random_bytes(4)
 mkdir($tmp, 0700, true);
 define('CASHUPAY_DATA_DIR', $tmp);
 
-require_once __DIR__ . '/../../includes/database.php';
-require_once __DIR__ . '/../../includes/config.php';
-require_once __DIR__ . '/../../includes/swap/factory.php';
-require_once __DIR__ . '/../../includes/swap/config.php';
-require_once __DIR__ . '/../../includes/swap/auto_melt.php';
+require_once __DIR__ . '/../../app/includes/database.php';
+require_once __DIR__ . '/../../app/includes/config.php';
+require_once __DIR__ . '/../../app/includes/swap/factory.php';
+require_once __DIR__ . '/../../app/includes/swap/config.php';
+require_once __DIR__ . '/../../app/includes/swap/auto_melt.php';
 
 $failures = 0;
 $total = 0;

@@ -15,8 +15,8 @@
 declare(strict_types=1);
 require __DIR__ . '/harness.php';
 fresh_db();
-require_once dirname(__DIR__, 2) . '/includes/dev_fee.php';
-require_once dirname(__DIR__, 2) . '/includes/free_trial.php';
+require_once dirname(__DIR__, 2) . '/app/includes/dev_fee.php';
+require_once dirname(__DIR__, 2) . '/app/includes/free_trial.php';
 
 $store = 'store_trial';
 make_store($store, 'https://m.example.com');
