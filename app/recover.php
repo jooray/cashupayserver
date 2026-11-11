@@ -89,11 +89,21 @@ function recover_apply(string $backupName): bool {
             } else {
                 recover_ensure_dir(dirname($dest));
                 @copy($item->getPathname(), $dest);
+                if (function_exists('opcache_invalidate') && str_ends_with($dest, '.php')) {
+                    @opcache_invalidate($dest, true);
+                }
             }
         }
     } finally {
         flock($lock, LOCK_UN);
         fclose($lock);
+    }
+
+    // The files on disk changed under a running PHP: flush the compiled-code
+    // cache so no request serves a mix of the broken build and the restored
+    // one (mirrors Updater::resetOpcache; best-effort without opcache).
+    if (function_exists('opcache_reset')) {
+        @opcache_reset();
     }
 
     // Consume the token so it can't be replayed.
