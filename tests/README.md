@@ -124,6 +124,51 @@ instead. `CASHUPAY_WP_SQLITE_AST_DRIVER=0` restores the legacy driver and
 only (WAL measured *worse* with the legacy driver). Pinned by
 `wordpress/test_wp_fixture_sqlite_driver.py`.
 
+## Upgrade tier (published-release upgrade matrix)
+
+`upgrade/` installs REAL past releases from GitHub and upgrades each one to the
+build under test, on the active backend, with payments. It is part of the
+local suite only — CI passes `--skip-upgrade-tier` (`tests.yml`), because the
+tier reaches GitHub and runs for several minutes per release.
+
+The window is resolved at collection time from the releases API
+(`fixtures/releases.py`): the five newest stable releases plus the newest
+testing prerelease (older testing prereleases are pruned by the release
+workflow, so only one exists). Zips are cached forever under
+`tests/bin/.cache/releases/<tag>/`; the listing for an hour, with a stale
+fallback when GitHub is unreachable.
+
+| Test | What it proves |
+|------|----------------|
+| `test_upgrade_from_release[tag]` | the OLD release's own updater ("Update now") downloads, backs up, overlays and health-verifies the candidate; the merchant's login, store, products, API key and invoices survive; pre-upgrade unpaid invoices and fresh ones settle on Lightning and on-chain; the webhook fires; rolling back restores the old build, which still boots on the migrated database |
+| `test_testing_to_main_and_back` | from the newest stable, via the cron line (`update.php`, auto-update on): testing → candidate, main → the stable again (older code on a newer database), testing → candidate, each hop healthy and paying on both rails |
+| `test_old_data_dir_boots_on_candidate[tag]` | the Windows upgrade contract on Linux: a data dir written by the old release is carried into the build under test (served by the regular fixture in desktop shape) and keeps serving and settling |
+
+The candidate is the standalone zip of the working tree (`scripts/build-standalone.sh`,
+built once per session; `CASHUPAY_STANDALONE_ZIP` points at a prebuilt one). The
+old install's updater is pointed at a local GitHub-shaped release server
+(`fixtures/release_server.py::start_release_catalog`): releases that know
+`CASHUPAY_RELEASE_API_BASE` take it from the environment, older ones get the one
+default line of their test seam rewritten (`fixtures/installed_payserver.py`).
+Seeding and verification go through `scripts/upgrade-smoke.php`, which answers
+whatever wizard screen the installed release renders next and fails loudly on a
+screen it does not know — add the screen there when the wizard grows one.
+
+```bash
+# one release, php -S
+CASHUPAY_UPGRADE_FROM=v1.8 pytest upgrade/ -v
+# the whole window on Apache
+CASHUPAY_TEST_BACKEND=apache pytest upgrade/ -v
+# window size
+CASHUPAY_UPGRADE_STABLE_COUNT=3 pytest upgrade/
+```
+
+The Windows package half runs on a Windows machine:
+`pwsh scripts/windows-upgrade-smoke.ps1 -Zip build/barebits-windows.zip`
+extracts each old Windows package, seeds it, carries `app\data` into a fresh
+copy of the candidate package and verifies it (no payments: the regtest stack
+has no Windows fixtures).
+
 ## Workdir cleanup
 
 A test that passes deletes its workdir in teardown; failures keep theirs for
@@ -156,6 +201,7 @@ tests/
   e2e/                 # API-level end-to-end tests
   ui/                  # Playwright-driven browser tests
   wordpress/           # WordPress plugin tests (wp-cli + sqlite drop-in)
+  upgrade/             # published-release upgrade matrix (local suite only)
   scripts/             # run-tests.sh, download-binaries.sh
   bin/                 # cached binaries (gitignored)
 ```

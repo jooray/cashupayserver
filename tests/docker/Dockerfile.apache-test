@@ -11,8 +11,10 @@
 # 8.3.x and is a different build with a different extension set. That drift is
 # exactly the production reality the apache backend exists to exercise.
 #
-# No opcache on purpose: php -S has none, and the updater/plugin-install tests
-# overwrite PHP files mid-run.
+# opcache is ON (the php:*-apache default — and the production reality): the
+# updater and plugin-install tests overwrite PHP files mid-run, which is
+# exactly the stale-compiled-code case Updater::resetOpcache / health.php's
+# per-build reset exist for (found by tests/upgrade/ on the nginx backend).
 FROM php:8.3-apache
 
 RUN set -eux; \

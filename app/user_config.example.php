@@ -99,6 +99,19 @@
 //
 // define('CASHUPAY_AUTO_UPDATE_ENABLED', true);
 
+// CASHUPAY_RELEASE_API_BASE — fetch releases from a mirror instead of GitHub.
+// The value stands in for https://api.github.com/repos/BareBits/cashupayserver/releases
+// (no trailing slash): a server that answers GET <base>/latest and
+// GET <base>?per_page=N with GitHub-shaped release JSON whose assets
+// (BUILD_INFO, barebits-<tag>.zip) it also serves. Used by LAN mirrors and by
+// the upgrade test rig. Only honoured while CASHUPAY_ALLOW_PRIVATE_ENDPOINTS
+// (or the allow_private_endpoints setting) is on — the same opt-in that
+// permits plain-http release downloads — so a stray environment variable on a
+// stock deployment can never redirect the update feed. The env var of the
+// same name works too; the constant wins when both are set.
+//
+// define('CASHUPAY_RELEASE_API_BASE', 'http://mirror.lan/barebits/releases');
+
 // -----------------------------------------------------------------------------
 // RECOMMENDED: dedicated auto-update cron line
 // -----------------------------------------------------------------------------

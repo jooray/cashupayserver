@@ -43,6 +43,12 @@ class Updater {
      */
     public static ?string $installRootOverride = null;
 
+    /**
+     * Test hook: observe opcache resets (callable(string $why)). Production
+     * leaves this null; the reset itself is a no-op where opcache is absent.
+     */
+    public static $opcacheResetHook = null;
+
     // Test hook: when non-null, bypasses the CASHUPAY_AUTO_UPDATE_ENABLED
     // opt-in check (which is otherwise needed for the updater to run at all).
     // Production code paths leave this at null; updater unit tests set it to
@@ -310,13 +316,60 @@ class Updater {
         return $info;
     }
 
-    /** Base URL of the releases-collection API (overridable for tests). */
+    /**
+     * Base URL of the releases-collection API. Resolution order: the test
+     * seam ($releaseApiUrlBase), then the operator override
+     * (releaseApiBaseOverride()), then GitHub.
+     */
     private static function releasesApiUrl(): string {
-        return self::$releaseApiUrlBase ?? sprintf(
+        if (self::$releaseApiUrlBase !== null) {
+            return self::$releaseApiUrlBase;
+        }
+        return self::releaseApiBaseOverride() ?? sprintf(
             'https://api.github.com/repos/%s/%s/releases',
             self::GH_OWNER,
             self::GH_REPO
         );
+    }
+
+    /**
+     * Operator override of the releases-collection API base: the
+     * CASHUPAY_RELEASE_API_BASE constant (user_config.php), else the env var
+     * of the same name. The value is the equivalent of
+     * https://api.github.com/repos/<owner>/<repo>/releases (no trailing
+     * slash) on a LAN mirror or a local release fixture; the updater appends
+     * /latest and ?per_page= exactly as it does for GitHub.
+     *
+     * Honoured ONLY while private endpoints are allowed (the same opt-in that
+     * lets the updater fetch over plain http, see SafeHttp), so a stray env
+     * var on a stock deployment can never redirect the update feed: without
+     * that opt-in the override is ignored and GitHub stays authoritative.
+     * Malformed values (not an http(s) URL) are ignored too. Null when unset.
+     */
+    public static function releaseApiBaseOverride(): ?string {
+        $raw = null;
+        if (defined('CASHUPAY_RELEASE_API_BASE') && is_string(CASHUPAY_RELEASE_API_BASE)) {
+            $raw = CASHUPAY_RELEASE_API_BASE;
+        } else {
+            $env = getenv('CASHUPAY_RELEASE_API_BASE');
+            if (is_string($env)) {
+                $raw = $env;
+            }
+        }
+        $raw = trim((string)$raw);
+        if ($raw === '') {
+            return null;
+        }
+        if (!\SafeHttp::privateEndpointsAllowed()) {
+            self::log('CASHUPAY_RELEASE_API_BASE ignored: private endpoints are not allowed');
+            return null;
+        }
+        $scheme = strtolower((string)parse_url($raw, PHP_URL_SCHEME));
+        if (($scheme !== 'http' && $scheme !== 'https') || parse_url($raw, PHP_URL_HOST) === null) {
+            self::log('CASHUPAY_RELEASE_API_BASE ignored: not an http(s) URL');
+            return null;
+        }
+        return rtrim($raw, '/');
     }
 
     /**
@@ -663,6 +716,10 @@ class Updater {
         // observed truncated/half-written even if we crash mid-copy.
         $oldHtaccessSha = self::getLocalBuildInfo()['HTACCESS_SHA256'] ?? '';
         $htaccessUntouched = self::overlayInstall($sourceDir, $root, $oldHtaccessSha, $remote);
+        // The code on disk changed under a running PHP: drop the compiled-code
+        // cache so no request serves a mix of old and new files (see
+        // resetOpcache). Before the health probe, so the probe sees new code.
+        self::resetOpcache('apply ' . substr($sha, 0, 12));
 
         // Cleanup staging.
         self::rmrf($stagingDir);
@@ -796,7 +853,22 @@ class Updater {
             @unlink($tmp);
             return false;
         }
+        self::invalidateCompiled($dest);
         return true;
+    }
+
+    /**
+     * Drop one just-rewritten PHP file from the compiled-code cache. Immediate
+     * and per file, unlike opcache_reset(), which only SCHEDULES a cache
+     * restart that PHP defers while any other script is still executing (the
+     * app's own background self-requests keep a busy server in exactly that
+     * state) — so the next request could still run the stale copy. No-op
+     * without opcache or for non-PHP files.
+     */
+    private static function invalidateCompiled(string $path): void {
+        if (function_exists('opcache_invalidate') && str_ends_with($path, '.php')) {
+            @opcache_invalidate($path, true);
+        }
     }
 
     private static function isPreserved(string $rel): bool {
@@ -867,12 +939,14 @@ class Updater {
                 } else {
                     self::ensureDir(dirname($dest));
                     @copy($item->getPathname(), $dest);
+                    self::invalidateCompiled($dest);
                 }
             }
         } finally {
             flock($lock, LOCK_UN);
             fclose($lock);
         }
+        self::resetOpcache('rollback ' . $backupName);
 
         Config::set('updater_last_rollback', [
             'backup' => $backupName,
@@ -882,6 +956,31 @@ class Updater {
         Config::set('updater_last_check', time());
         self::log("rolled back to $backupName");
         return true;
+    }
+
+    /**
+     * Flush PHP's compiled-code cache after the files on disk changed.
+     *
+     * opcache (on by default under php-fpm and mod_php) keeps compiled scripts
+     * until each one's revalidation timer fires, so right after an overlay or
+     * rollback the server would otherwise run a mix of old and new code —
+     * fatals like "undefined method" or a composer autoloader class not found
+     * — for up to opcache.revalidate_freq seconds. Every rewritten file is
+     * already invalidated individually as it lands (invalidateCompiled); this
+     * whole-cache reset is the belt to those braces. Best-effort: nothing to
+     * do without opcache, and a refusal (opcache.restrict_api) is only logged.
+     * health.php repeats both once per on-disk build for upgrades performed
+     * by releases that predate this call.
+     */
+    public static function resetOpcache(string $why): void {
+        if (self::$opcacheResetHook !== null) {
+            (self::$opcacheResetHook)($why);
+        }
+        if (!function_exists('opcache_reset')) {
+            return;
+        }
+        $ok = (bool)@opcache_reset();
+        self::log("opcache reset ($why): " . ($ok ? 'done' : 'not available'));
     }
 
     private static function pruneBackups(string $dir, int $keep): void {

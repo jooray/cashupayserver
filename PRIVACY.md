@@ -1,6 +1,6 @@
 # BareBits Privacy Policy
 
-_Last updated: October 29, 2026_
+_Last updated: November 11, 2026_
 
 BareBits is **self-hosted** payment processing software published by Zaphaus LLC ("BareBits",
 "we"). You download the software and run it on infrastructure you control. We do not operate a
@@ -244,7 +244,9 @@ address and a `cashupayserver-updater` user agent — your installed version and
 are **not** sent; version comparison happens locally. Release files are downloaded from
 GitHub only when an update is actually applied (automatic updates are opt-in on source
 installs and enabled by default in the official Docker image; the Windows desktop package
-disables the updater entirely). GitHub:
+disables the updater entirely). An operator can point the updater at a release mirror of
+their own instead of GitHub (`CASHUPAY_RELEASE_API_BASE`, see `user_config.example.php`);
+then that mirror, not GitHub, sees the update checks and downloads. GitHub:
 [Terms of Service](https://docs.github.com/en/site-policy/github-terms/github-terms-of-service) ·
 [Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 

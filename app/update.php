@@ -498,6 +498,11 @@ function upd_rollback(string $backupName): bool {
             } else {
                 upd_ensure_dir(dirname($dest));
                 @copy($item->getPathname(), $dest);
+                // Immediate per-file drop from the compiled-code cache (an
+                // opcache_reset() alone may be deferred while other scripts run).
+                if (function_exists('opcache_invalidate') && str_ends_with($dest, '.php')) {
+                    @opcache_invalidate($dest, true);
+                }
             }
         }
     } catch (Throwable $e) {
@@ -510,7 +515,25 @@ function upd_rollback(string $backupName): bool {
 
     // The recovery token was minted for the (now reverted) bad build; drop it.
     @unlink($root . '/data/updates/recovery_token.txt');
+    upd_reset_opcache('rollback ' . $backupName);
     return true;
+}
+
+/**
+ * Flush the compiled-code cache after the files on disk changed, so no
+ * request serves a mix of the broken build and the restored one (mirrors
+ * Updater::resetOpcache; this file must not depend on includes/). Test hook:
+ * $GLOBALS['UPD_OPCACHE_RESET_HOOK'] (callable(string $why)).
+ */
+function upd_reset_opcache(string $why): void {
+    if (isset($GLOBALS['UPD_OPCACHE_RESET_HOOK']) && is_callable($GLOBALS['UPD_OPCACHE_RESET_HOOK'])) {
+        ($GLOBALS['UPD_OPCACHE_RESET_HOOK'])($why);
+    }
+    if (!function_exists('opcache_reset')) {
+        return;
+    }
+    $ok = (bool)@opcache_reset();
+    upd_log("opcache reset ($why): " . ($ok ? 'done' : 'not available'));
 }
 
 // ---------------- Operator alert email ----------------

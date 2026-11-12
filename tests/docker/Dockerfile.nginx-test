@@ -9,7 +9,9 @@
 # tests/fixtures/webserver.py. Containers run as the host uid on the host
 # network; all mutable nginx/FPM state lives on the /tmp tmpfs.
 #
-# Same version-drift and no-opcache rationale as Dockerfile.apache-test.
+# Same version-drift rationale as Dockerfile.apache-test; opcache is ON here
+# too (the php:*-fpm default), so file overwrites mid-run exercise the
+# updater's opcache reset like a real FPM host does.
 FROM php:8.3-fpm
 
 RUN set -eux; \
