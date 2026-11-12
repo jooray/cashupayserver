@@ -82,7 +82,10 @@ require_once dirname(__DIR__) . '/includes/invoice.php';
 
 $db = Database::getInstance();
 
-check((int)$db->query('PRAGMA user_version')->fetchColumn() === 13, 'schema migrates to the current version automatically');
+check((int)$db->query('PRAGMA user_version')->fetchColumn() === 14, 'schema migrates to the current version automatically');
+check(array_key_exists('display_currency', Database::fetchOne("SELECT * FROM stores WHERE id='store_1'"))
+    && Database::fetchOne("SELECT display_currency FROM stores WHERE id='store_1'")['display_currency'] === null,
+    'stores gain display_currency, empty (no fiat shown) for existing stores');
 
 // The operator must not be dropped back into the setup wizard.
 check(Config::isSetupComplete(), 'the installation is still set up');

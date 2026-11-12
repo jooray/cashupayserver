@@ -513,6 +513,55 @@ class ExchangeRates {
         return $rate;
     }
 
+    /**
+     * Fiat currencies the dashboard offers: for entering a payment request amount and
+     * as a store's display currency. CoinGecko quotes BTC in all of them (the ones
+     * Binance or Kraken do not quote are priced through BTC/USD and CoinGecko's FX rate,
+     * see singleSourcePrice()). A whitelist, so nothing else is ever sent to a provider
+     * from the dashboard or written into the store's settings.
+     *
+     * The Greenfield API keeps accepting any 3-10 letter code, as BTCPay does.
+     */
+    public const DASHBOARD_FIAT_CURRENCIES = [
+        'USD', 'EUR', 'GBP', 'CHF', 'CZK', 'PLN', 'HUF', 'SEK', 'NOK', 'DKK', 'RON', 'BGN',
+        'CAD', 'AUD', 'NZD', 'JPY', 'KRW', 'CNY', 'HKD', 'SGD', 'INR', 'BRL', 'MXN', 'ARS',
+        'ZAR', 'TRY', 'ILS', 'AED', 'THB', 'PHP', 'IDR', 'MYR', 'NGN', 'UAH',
+    ];
+
+    /** The upper-case code when $code is one of DASHBOARD_FIAT_CURRENCIES, else null. */
+    public static function dashboardFiat(mixed $code): ?string {
+        if (!is_string($code)) {
+            return null;
+        }
+        $code = strtoupper(trim($code));
+        return in_array($code, self::DASHBOARD_FIAT_CURRENCIES, true) ? $code : null;
+    }
+
+    /**
+     * The BTC price a fiat amount would be priced at right now, with how old it is.
+     *
+     * Same rule as invoice pricing (getBtcPrice(): a cached rate at most CACHE_TTL old, a
+     * fresh one the sources confirm, or, when no source answers, the last rate up to
+     * STALE_TTL old), so a preview shows exactly the rate an invoice would be priced at.
+     * `stale` marks that last case, so the dashboard can say the rate is not current.
+     * Null when no usable rate exists (invoices are refused then too).
+     *
+     * @return array{rate: float, ageSeconds: int, stale: bool, provider: ?string}|null
+     */
+    public static function quote(string $currency, ?string $primary = null, ?string $secondary = null): ?array {
+        $rate = self::getBtcPrice($currency, $primary, $secondary);
+        if ($rate === null || !is_finite($rate) || $rate <= 0) {
+            return null;
+        }
+        $age = max(0, (int)self::getRateAge($currency));
+        return [
+            'rate' => $rate,
+            'ageSeconds' => $age,
+            'stale' => $age > self::CACHE_TTL,
+            'provider' => self::getCachedProvider($currency),
+        ];
+    }
+
     /** What the shop and the API show when no price can be had. */
     public const UNAVAILABLE_MESSAGE = 'We could not confirm the Bitcoin price from two sources, so fiat prices are paused. It resumes by itself when another price source answers.';
 

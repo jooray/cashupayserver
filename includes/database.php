@@ -25,7 +25,7 @@ use Cashu\Wallet;
 use Cashu\WalletStorage;
 
 class Database {
-    private const SCHEMA_VERSION = 13;
+    private const SCHEMA_VERSION = 14;
 
     /** Set when ensureCurrentSchema() failed, so callers can tell "broken" from "new". */
     private static ?string $migrationError = null;
@@ -482,6 +482,9 @@ HTACCESS;
             exchange_fee_percent REAL NOT NULL DEFAULT 0,
             price_provider_primary TEXT NOT NULL DEFAULT 'coingecko',
             price_provider_secondary TEXT DEFAULT 'binance',
+            -- Fiat currency the dashboard shows the balance in (NULL: none). Display
+            -- only: never used for invoices or anything the API returns.
+            display_currency TEXT,
             -- Auto-withdraw settings (per-store)
             auto_melt_enabled INTEGER NOT NULL DEFAULT 0,
             auto_melt_address TEXT,
@@ -822,6 +825,12 @@ HTACCESS;
                     self::addColumnIfMissing($pdo, 'payment_requests', 'swap_plan', 'TEXT');
                 }
                 $pdo->exec('PRAGMA user_version = 13');
+            }
+            if ($version < 14) {
+                // The fiat currency the dashboard shows a store's balance in. Admin
+                // display only; invoice amounts and API responses never read it.
+                self::addColumnIfMissing($pdo, 'stores', 'display_currency', 'TEXT');
+                $pdo->exec('PRAGMA user_version = 14');
             }
             // The transaction was opened with exec('BEGIN IMMEDIATE'), which PDO's
             // internal transaction flag does not track before PHP 8.4 — commit()

@@ -266,6 +266,12 @@ Without credentials it answers only `{"status":"ok"}`, `{"status":"degraded"}` o
 
 The check is read-only: a few indexed database reads, no network requests, no background run started, nothing written. It accepts `GET` and `HEAD` (`405` otherwise) and is sent with `Cache-Control: no-store`. It is not rate-limited by CashuPayServer, because the request limiter itself writes to the database; it costs less than loading the checkout page, and you can limit it at the web server if you need to.
 
+### Fiat Amounts in the Dashboard
+
+The dashboard's **Request** button takes an amount in the store's own unit or in a fiat currency (EUR, USD, CZK and about 30 others). For fiat it shows what the customer will pay in the store's unit, the exchange rate and how old it is, and your conversion fee, before you continue. The server prices the request itself, with the same rules as invoices from your shop (two price sources must agree; if none answers, a rate up to an hour old is used and marked as such; older than that, fiat requests pause). If the rate moved more than 2% between the preview and the click, you are shown the new amount and asked again.
+
+**Settings → Exchange Rate Settings → "Also show the balance in"** picks a currency for an approximate value under the balance of a store that holds sats, and the currency the Request button starts with. It is a dashboard setting only: the Greenfield API, invoice amounts and currencies, webhooks and the checkout page are not affected by it.
+
 ## Security
 
 ### Database Protection

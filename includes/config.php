@@ -303,6 +303,30 @@ class Config {
     }
 
     /**
+     * A store's display currency as stored: one of the dashboard's fiat currencies, or
+     * null for none. Anything else is refused, so the column can only ever hold a code
+     * from the whitelist (it is rendered in the dashboard and sent to price providers).
+     */
+    public static function validDisplayCurrency(mixed $value): ?string {
+        if ($value === null || $value === '' || (is_string($value) && strtolower(trim($value)) === 'none')) {
+            return null;
+        }
+        require_once __DIR__ . '/rates.php';
+        $code = ExchangeRates::dashboardFiat($value);
+        if ($code === null) {
+            throw new Exception('Unsupported display currency.');
+        }
+        return $code;
+    }
+
+    /** The store's display currency, or null (also for a value that is no longer offered). */
+    public static function getStoreDisplayCurrency(string $storeId): ?string {
+        $store = self::getStore($storeId);
+        require_once __DIR__ . '/rates.php';
+        return ExchangeRates::dashboardFiat($store['display_currency'] ?? null);
+    }
+
+    /**
      * Update store settings
      */
     public static function updateStore(string $storeId, array $data, bool $allowMintChange = false): void {
@@ -349,9 +373,13 @@ class Config {
                 throw new Exception("This seed phrase is already used by store: {$clash['name']}. Using the same seed for multiple stores can result in lost funds.");
             }
         }
+        if (array_key_exists('display_currency', $data)) {
+            $data['display_currency'] = self::validDisplayCurrency($data['display_currency']);
+        }
         $allowed = [
             'name', 'mint_url', 'mint_unit', 'seed_phrase',
-            'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary'
+            'exchange_fee_percent', 'price_provider_primary', 'price_provider_secondary',
+            'display_currency',
         ];
         $updateData = array_intersect_key($data, array_flip($allowed));
 

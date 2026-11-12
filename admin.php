@@ -59,6 +59,91 @@ function cashupay_display_unit(?string $unit): string {
 }
 
 /**
+ * Price an amount typed into the dashboard's "Request" modal in the store's mint unit.
+ *
+ * The one place that decides what a request costs, used by both the live preview and
+ * invoice creation, so the browser never supplies a converted amount: it sends what
+ * the operator typed and the currency, and the server converts with the same function
+ * and the same rate rules invoice pricing uses (ExchangeRates::convertToMintUnit(),
+ * rounded up, the store's conversion fee and price providers).
+ *
+ * Accepted currencies: the store's mint unit, sat, and the dashboard's fiat whitelist.
+ *
+ * @throws InvalidArgumentException Input the operator should correct
+ * @throws Exception No usable exchange rate (ExchangeRates::UNAVAILABLE_MESSAGE)
+ * @return array{amount: string, currency: string, mintUnit: string, amountInMintUnit: int,
+ *               converted: bool, feePercent: float, rates: list<array>}
+ */
+function cashupay_price_request(array $store, mixed $amountRaw, mixed $currencyRaw): array {
+    require_once __DIR__ . '/includes/rates.php';
+    if (!is_string($amountRaw) || !is_string($currencyRaw)) {
+        throw new InvalidArgumentException('Invalid amount');
+    }
+    $mintUnit = strtolower((string)($store['mint_unit'] ?? 'sat'));
+    $code = strtolower(trim($currencyRaw));
+    if ($code === 'sats') {
+        $code = 'sat';
+    }
+    if ($code === '') {
+        $code = $mintUnit;
+    }
+    if ($code === $mintUnit || $code === 'sat') {
+        $currency = strtoupper($code);
+    } elseif (($fiat = ExchangeRates::dashboardFiat($code)) !== null) {
+        $currency = $fiat;
+    } else {
+        throw new InvalidArgumentException('Payment requests cannot be made in that currency.');
+    }
+
+    $amountRaw = trim($amountRaw);
+    if (!preg_match('/^\d{1,15}(\.\d{1,8})?$/', $amountRaw)) {
+        throw new InvalidArgumentException('Enter the amount as a plain number, like 12.50.');
+    }
+    $amount = ExchangeRates::normalizeDecimal($amountRaw);
+    if ($amount === '0') {
+        throw new InvalidArgumentException('Enter an amount above zero.');
+    }
+    // More decimals than the currency has would be rounded up silently; say so instead.
+    $decimals = Config::unitDecimals($currency);
+    $point = strpos($amount, '.');
+    if ($point !== false && strlen($amount) - $point - 1 > $decimals) {
+        throw new InvalidArgumentException($decimals === 0
+            ? "{$currency} amounts are whole numbers."
+            : "{$currency} amounts have at most {$decimals} decimals.");
+    }
+
+    $fee = (float)($store['exchange_fee_percent'] ?? 0);
+    $primary = $store['price_provider_primary'] ?? 'coingecko';
+    $secondary = $store['price_provider_secondary'] ?? 'binance';
+    // Throws when no rate two sources agree on is at hand: no preview, no invoice.
+    $inMintUnit = ExchangeRates::convertToMintUnit($amount, $currency, $mintUnit, $fee, $primary, $secondary);
+    if ($inMintUnit < 1) {
+        throw new InvalidArgumentException('That amount is too small.');
+    }
+
+    $rates = [];
+    foreach (array_unique([$currency, strtoupper($mintUnit)]) as $cur) {
+        if (in_array($cur, ['SAT', 'SATS', 'MSAT', 'BTC'], true)) {
+            continue;
+        }
+        $quote = ExchangeRates::quote($cur, $primary, $secondary);
+        if ($quote !== null) {
+            $rates[] = ['currency' => $cur] + $quote;
+        }
+    }
+    $converted = $currency !== strtoupper($mintUnit);
+    return [
+        'amount' => $amount,
+        'currency' => $currency,
+        'mintUnit' => cashupay_display_unit($mintUnit),
+        'amountInMintUnit' => $inMintUnit,
+        'converted' => $converted,
+        'feePercent' => $converted ? max(0.0, min(100.0, $fee)) : 0.0,
+        'rates' => $rates,
+    ];
+}
+
+/**
  * Reasons a store is not safe to delete, in plain language.
  *
  * @return string[] Empty when nothing is outstanding
@@ -698,6 +783,57 @@ if (isset($_GET['api'])) {
 
         case 'diagnostics':
             echo json_encode(cashupay_diagnostics($_GET['store_id'] ?? null));
+            break;
+
+        case 'price_preview':
+            // What a payment request would cost, for the "Request" modal. Read-only; the
+            // invoice itself is priced again on the server when it is created.
+            $store = is_string($_GET['store_id'] ?? null) ? Config::getStore($_GET['store_id']) : null;
+            if (!$store) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Store not found']);
+                break;
+            }
+            try {
+                echo json_encode(cashupay_price_request($store, $_GET['amount'] ?? '', $_GET['currency'] ?? ''));
+            } catch (InvalidArgumentException $e) {
+                http_response_code(400);
+                echo json_encode(['error' => $e->getMessage()]);
+            } catch (Throwable $e) {
+                error_log('CashuPayServer: price preview failed: ' . $e->getMessage());
+                http_response_code(503);
+                echo json_encode(['error' => ExchangeRates::UNAVAILABLE_MESSAGE, 'code' => 'rate_unavailable']);
+            }
+            break;
+
+        case 'display_rate':
+            // The BTC price in the store's display currency, for the fiat line under the
+            // balance. Dashboard display only.
+            $storeId = is_string($_GET['store_id'] ?? null) ? $_GET['store_id'] : '';
+            $store = $storeId !== '' ? Config::getStore($storeId) : null;
+            if (!$store) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Store not found']);
+                break;
+            }
+            $displayCurrency = Config::getStoreDisplayCurrency($storeId);
+            if ($displayCurrency === null) {
+                echo json_encode(['currency' => null]);
+                break;
+            }
+            require_once __DIR__ . '/includes/rates.php';
+            $quote = null;
+            try {
+                $quote = ExchangeRates::quote($displayCurrency, $store['price_provider_primary'] ?? 'coingecko',
+                    $store['price_provider_secondary'] ?? 'binance');
+            } catch (Throwable $e) {
+                error_log('CashuPayServer: display rate failed: ' . $e->getMessage());
+            }
+            echo json_encode([
+                'currency' => $displayCurrency,
+                'rate' => $quote['rate'] ?? null,
+                'ageSeconds' => $quote['ageSeconds'] ?? null,
+            ]);
             break;
 
         case 'get_backup_mints':
@@ -1359,20 +1495,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Server-side invoice creation for the admin "Request" feature.
             // Runs under the admin session, so no API key is exposed to the browser.
             try {
-                $storeId = $_POST['store_id'] ?? '';
-                $amount = $_POST['amount'] ?? '';
-                $currency = $_POST['currency'] ?? 'sat';
-                $memo = trim((string)($_POST['memo'] ?? ''));
-                $redirect = $_POST['redirect'] ?? '';
+                $storeId = is_string($_POST['store_id'] ?? null) ? $_POST['store_id'] : '';
+                $memo = trim(is_string($_POST['memo'] ?? null) ? $_POST['memo'] : '');
+                $redirect = is_string($_POST['redirect'] ?? null) ? $_POST['redirect'] : '';
 
-                if (empty($storeId) || !Config::isStoreConfigured($storeId)) {
+                if ($storeId === '' || !Config::isStoreConfigured($storeId)) {
                     throw new Exception('Store not configured');
                 }
-                if (!is_numeric($amount) || (float)$amount <= 0) {
-                    throw new Exception('Invalid amount');
+                // The amount and currency as the operator typed them, priced here. The
+                // browser's preview figure is only used to notice that the rate moved
+                // since the operator saw it; it never becomes the invoice amount.
+                $priced = cashupay_price_request(Config::getStore($storeId), $_POST['amount'] ?? '',
+                    $_POST['currency'] ?? '');
+                $expected = $_POST['expected_amount'] ?? '';
+                if ($priced['converted'] && is_string($expected) && $expected !== '') {
+                    if (!ctype_digit($expected)) {
+                        throw new InvalidArgumentException('Invalid amount');
+                    }
+                    $seen = (int)$expected;
+                    if (abs($priced['amountInMintUnit'] - $seen) > max(1, intdiv($seen * 2, 100))) {
+                        http_response_code(409);
+                        echo json_encode([
+                            'error' => 'The exchange rate changed since the amount was shown. Check the new amount and press the button again.',
+                            'code' => 'rate_changed',
+                            'preview' => $priced,
+                        ]);
+                        break;
+                    }
                 }
-                // "5e-5" passes is_numeric() but is not a decimal BCMath can price.
-                $amount = ExchangeRates::normalizeDecimal((string)$amount);
                 // Only allow same-origin http(s) redirect targets (no javascript:/data:).
                 $checkout = null;
                 if ($redirect !== '' && Security::isSafePublicHttpUrl($redirect, true)) {
@@ -1380,8 +1530,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
 
                 $options = [
-                    'amount' => $amount,
-                    'currency' => strtoupper($currency),
+                    'amount' => $priced['amount'],
+                    'currency' => $priced['currency'],
                 ];
                 if ($memo !== '') {
                     $options['metadata'] = ['itemDesc' => $memo];
@@ -1582,6 +1732,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 if (isset($_POST['price_provider_secondary'])) {
                     $updates['price_provider_secondary'] = $_POST['price_provider_secondary'];
+                }
+                if (array_key_exists('display_currency', $_POST)) {
+                    // Whitelisted in Config::updateStore(); anything else is a 400.
+                    $updates['display_currency'] = $_POST['display_currency'];
                 }
 
                 // Changing the mint URL or unit points the store at a new wallet
@@ -3861,6 +4015,7 @@ $isWp = Urls::isWordPress();
                     <div class="balance-label">Total Balance</div>
                     <div class="balance-amount" id="balance-amount">---</div>
                     <div class="balance-unit" id="balance-unit">sats</div>
+                    <div class="balance-unit" id="balance-fiat" style="display: none; margin-top: 0.15rem;"></div>
                     <div class="balance-actions">
                         <button class="balance-btn" id="btn-withdraw">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -4051,6 +4206,18 @@ $isWp = Urls::isWordPress();
                                 <input type="number" class="form-input" id="exchange-fee-percent"
                                        value="0" min="0" max="10" step="0.1">
                                 <p class="form-help">Fee added to currency conversions (0-10%)</p>
+                            </div>
+                            <div class="form-group" id="display-currency-group">
+                                <label class="form-label" for="display-currency">Also show the balance in</label>
+                                <select class="form-input" id="display-currency">
+                                    <option value="">Nothing (sats only)</option>
+                                    <?php foreach (ExchangeRates::DASHBOARD_FIAT_CURRENCIES as $cpsFiat): ?>
+                                    <option value="<?php echo $cpsFiat; ?>"><?php echo $cpsFiat; ?></option>
+                                    <?php endforeach; ?>
+                                </select>
+                                <p class="form-help">An approximate value under your balance, and the currency the
+                                    Request button starts with. Only this dashboard uses it: prices in your shop and
+                                    what customers pay do not change.</p>
                             </div>
                             <button class="btn btn-full" id="btn-save-exchange-settings">Save Settings</button>
                         </div>
@@ -4569,9 +4736,14 @@ $isWp = Urls::isWordPress();
 
             <div id="request-form">
                 <div class="form-group">
-                    <label class="form-label" id="request-amount-label">Amount</label>
-                    <input type="number" class="form-input" id="request-amount"
-                           placeholder="100" min="1" step="1">
+                    <label class="form-label" id="request-amount-label" for="request-amount">Amount</label>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="number" class="form-input" id="request-amount"
+                               placeholder="100" min="1" step="1" style="flex: 1; min-width: 0;">
+                        <select class="form-input" id="request-currency" aria-label="Currency"
+                                style="width: auto; flex: 0 0 auto;"></select>
+                    </div>
+                    <p class="form-help" id="request-conversion" aria-live="polite" style="display: none; margin-top: 0.4rem;"></p>
                 </div>
 
                 <div class="form-group">
@@ -5044,6 +5216,8 @@ $isWp = Urls::isWordPress();
 
             // Request modal
             document.getElementById('btn-generate-request').addEventListener('click', handleGenerateRequest);
+            document.getElementById('request-currency').addEventListener('change', updateRequestCurrency);
+            document.getElementById('request-amount').addEventListener('input', scheduleRequestPreview);
 
             // Settings
             document.getElementById('btn-save-auto-melt').addEventListener('click', saveAutoMelt);
@@ -5396,6 +5570,7 @@ $isWp = Urls::isWordPress();
                 document.getElementById('balance-amount').textContent =
                     formatAmount(dashboardData.balance ?? 0, mintUnit);
                 document.getElementById('balance-unit').textContent = unitLabel;
+                renderBalanceFiat();
 
                 // Money handed out as tokens is not spendable, but it is not lost either.
                 // Say so on the balance card: an operator upgrading from a version that
@@ -5575,6 +5750,10 @@ $isWp = Urls::isWordPress();
                 document.getElementById('price-provider-primary').value = store.price_provider_primary || 'coingecko';
                 document.getElementById('price-provider-secondary').value = store.price_provider_secondary || 'binance';
                 document.getElementById('exchange-fee-percent').value = store.exchange_fee_percent || 0;
+                document.getElementById('display-currency').value =
+                    DASHBOARD_FIAT.includes(store.display_currency) ? store.display_currency : '';
+                // A store holding a fiat unit already shows its balance in that unit.
+                document.getElementById('display-currency-group').style.display = isFiatUnit(store.mint_unit) ? 'none' : '';
 
                 // Load API keys
                 loadStoreApiKeys();
@@ -6836,23 +7015,123 @@ $isWp = Urls::isWordPress();
             });
         }
 
-        // Update amount input based on selected store's mint unit
-        function updateAmountInputForStore(mintUnit) {
-            const amountLabel = document.getElementById('request-amount-label');
+        // Fiat currencies the server accepts for a request (ExchangeRates::DASHBOARD_FIAT_CURRENCIES).
+        const DASHBOARD_FIAT = <?php echo json_encode(ExchangeRates::DASHBOARD_FIAT_CURRENCIES); ?>;
+
+        // Set up the Request modal for a store: its own unit first, then sats (for a
+        // fiat-unit store), then the fiat currencies. Starts with the display currency.
+        function updateAmountInputForStore(mintUnit, displayCurrency) {
+            const unit = (mintUnit || 'sat').toLowerCase();
+            const select = document.getElementById('request-currency');
+            select.innerHTML = '';
+            const codes = [unit];
+            if (unit !== 'sat' && unit !== 'msat') codes.push('sat');
+            DASHBOARD_FIAT.forEach(c => { if (c.toLowerCase() !== unit) codes.push(c); });
+            codes.forEach(code => {
+                const opt = document.createElement('option');
+                opt.value = code;
+                opt.textContent = code.toUpperCase();
+                select.appendChild(opt);
+            });
+            select.value = displayCurrency && codes.includes(displayCurrency) ? displayCurrency : unit;
+            updateRequestCurrency();
+        }
+
+        function requestStoreUnit() {
+            const store = dashboardData?.stores?.find(s => s.id === currentStoreId);
+            return (store?.mint_unit || 'sat').toLowerCase();
+        }
+
+        // Input step and placeholder for the selected currency, then a fresh preview.
+        function updateRequestCurrency() {
+            const currency = document.getElementById('request-currency').value || requestStoreUnit();
             const amountInput = document.getElementById('request-amount');
-            const unit = (mintUnit || 'sat').toUpperCase();
-
-            amountLabel.textContent = `Amount (${unit})`;
-
-            const step = inputStep(mintUnit);
-            amountInput.placeholder = step === '1' ? '100' : (unitDecimals(mintUnit) > 2 ? '0.0001' : '1.00');
+            const step = inputStep(currency);
+            amountInput.placeholder = step === '1' ? '100' : (unitDecimals(currency) > 2 ? '0.0001' : '1.00');
             amountInput.min = step;
             amountInput.step = step;
+            document.getElementById('request-amount-label').textContent = 'Amount';
+            scheduleRequestPreview();
+        }
+
+        // The server's price for what is typed: { key, data } once it answers.
+        let requestPreview = null;
+        let requestPreviewTimer = null;
+        let requestPreviewSeq = 0;
+
+        function requestPreviewKey() {
+            return [currentStoreId, document.getElementById('request-amount').value.trim(),
+                document.getElementById('request-currency').value].join('|');
+        }
+
+        function scheduleRequestPreview() {
+            clearTimeout(requestPreviewTimer);
+            requestPreviewTimer = setTimeout(() => { loadRequestPreview(); }, 350);
+        }
+
+        function renderRequestConversion(text, isError) {
+            const el = document.getElementById('request-conversion');
+            el.textContent = text || '';
+            el.style.display = text ? '' : 'none';
+            el.style.color = isError ? '#e53e3e' : '';
+            document.getElementById('btn-generate-request').disabled = !!isError;
+        }
+
+        function describePreview(p) {
+            const unit = p.mintUnit.toUpperCase();
+            let text = `Customer pays ${formatAmount(p.amountInMintUnit, p.mintUnit)} ${unit}`;
+            const parts = [];
+            (p.rates || []).forEach(r => {
+                const price = Number(r.rate).toLocaleString(undefined, { maximumFractionDigits: 2 });
+                const age = r.ageSeconds < 60 ? 'just now' : `${Math.round(r.ageSeconds / 60)} min ago`;
+                parts.push(`1 BTC = ${price} ${r.currency} (rate from ${age}`
+                    + (r.stale ? ', price sources are not answering right now' : '') + ')');
+            });
+            if (p.feePercent > 0) parts.push(`includes your ${p.feePercent}% conversion fee`);
+            if (parts.length) text += ` · ${parts.join(' · ')}`;
+            return text + '. The rate is checked again when you continue.';
+        }
+
+        // Ask the server what the request would cost. Only for a currency other than the
+        // store's own: that needs an exchange rate, and the operator should see the
+        // result before the customer does.
+        async function loadRequestPreview() {
+            const amount = document.getElementById('request-amount').value.trim();
+            const currency = document.getElementById('request-currency').value;
+            const key = requestPreviewKey();
+            requestPreview = null;
+            if (!currentStoreId || currency.toLowerCase() === requestStoreUnit()) {
+                renderRequestConversion('', false);
+                return null;
+            }
+            if (!amount || !(parseFloat(amount) > 0)) {
+                renderRequestConversion(`Enter an amount in ${currency.toUpperCase()}; it is converted at the current rate.`, false);
+                return null;
+            }
+            const seq = ++requestPreviewSeq;
+            renderRequestConversion('Checking the exchange rate…', false);
+            try {
+                const response = await fetch(`${adminUrl}?api=price_preview&store_id=${encodeURIComponent(currentStoreId)}`
+                    + `&amount=${encodeURIComponent(amount)}&currency=${encodeURIComponent(currency)}`);
+                const data = await response.json().catch(() => ({}));
+                if (seq !== requestPreviewSeq) return null; // a newer request is on its way
+                if (!response.ok) {
+                    renderRequestConversion(data.error || 'Could not convert this amount.', true);
+                    return null;
+                }
+                requestPreview = { key, data };
+                renderRequestConversion(describePreview(data), false);
+                return requestPreview;
+            } catch (e) {
+                if (seq === requestPreviewSeq) renderRequestConversion('Could not reach the server to convert this amount.', true);
+                return null;
+            }
         }
 
         async function handleGenerateRequest() {
             const storeId = currentStoreId;
-            const amount = parseFloat(document.getElementById('request-amount').value);
+            const amountText = document.getElementById('request-amount').value.trim();
+            const amount = parseFloat(amountText);
             const memo = document.getElementById('request-memo').value;
 
             if (!storeId) {
@@ -6860,28 +7139,47 @@ $isWp = Urls::isWordPress();
                 return;
             }
 
-            // Get store info from dashboardData
-            const store = dashboardData?.stores?.find(s => s.id === storeId);
-            const mintUnit = store?.mint_unit || 'sat';
-            const minAmount = parseFloat(inputStep(mintUnit));
+            const mintUnit = requestStoreUnit();
+            const currency = document.getElementById('request-currency').value || mintUnit;
+            const minAmount = parseFloat(inputStep(currency));
 
             if (!amount || amount < minAmount) {
                 showToast('Please enter an amount', 'error');
                 return;
             }
 
+            // A converted amount is shown before it is requested. The server prices it
+            // again; what it gets from here is only the figure the operator saw.
+            let expected = '';
+            if (currency.toLowerCase() !== mintUnit) {
+                clearTimeout(requestPreviewTimer);
+                const preview = (requestPreview && requestPreview.key === requestPreviewKey())
+                    ? requestPreview : await loadRequestPreview();
+                if (!preview) return; // the error is shown under the amount
+                expected = String(preview.data.amountInMintUnit);
+            }
+
+            const button = document.getElementById('btn-generate-request');
+            button.disabled = true;
             try {
                 // Create the invoice server-side (admin session + CSRF). The internal
                 // API key stays on the server and is never exposed to the browser.
                 const params = `action=create_invoice`
                     + `&store_id=${encodeURIComponent(storeId)}`
-                    + `&amount=${encodeURIComponent(amount)}`
-                    + `&currency=${encodeURIComponent(mintUnit)}`
+                    + `&amount=${encodeURIComponent(amountText)}`
+                    + `&currency=${encodeURIComponent(currency)}`
+                    + `&expected_amount=${encodeURIComponent(expected)}`
                     + `&memo=${encodeURIComponent(memo || '')}`
                     + `&redirect=${encodeURIComponent(window.location.href.split('?')[0])}`;
                 const response = await postWithCsrf(adminUrl, params);
                 const result = await response.json();
 
+                if (response.status === 409 && result.code === 'rate_changed' && result.preview) {
+                    requestPreview = { key: requestPreviewKey(), data: result.preview };
+                    renderRequestConversion(describePreview(result.preview), false);
+                    showToast(result.error, 'error');
+                    return;
+                }
                 if (response.ok && result.checkoutLink) {
                     window.location.href = result.checkoutLink;
                 } else {
@@ -6890,6 +7188,44 @@ $isWp = Urls::isWordPress();
             } catch (e) {
                 console.error('Invoice creation failed:', e);
                 showToast('Failed to create invoice', 'error');
+            } finally {
+                button.disabled = false;
+            }
+        }
+
+        // "≈ 12.34 EUR" under the balance of a store that holds sats, in its display
+        // currency. Approximate and for this dashboard only.
+        let balanceFiatSeq = 0;
+        async function renderBalanceFiat() {
+            const el = document.getElementById('balance-fiat');
+            const seq = ++balanceFiatSeq;
+            const store = dashboardData?.stores?.find(s => s.id === currentStoreId);
+            const currency = store?.display_currency;
+            const sats = dashboardData?.balanceInSats;
+            if (!store || !DASHBOARD_FIAT.includes(currency) || isFiatUnit(store.mint_unit) || typeof sats !== 'number') {
+                el.style.display = 'none';
+                return;
+            }
+            try {
+                const response = await fetch(`${adminUrl}?api=display_rate&store_id=${encodeURIComponent(store.id)}`);
+                const data = await response.json().catch(() => ({}));
+                if (seq !== balanceFiatSeq) return;
+                if (!response.ok || !data.rate || data.currency !== currency) {
+                    el.style.display = 'none';
+                    return;
+                }
+                const value = sats * data.rate / 1e8;
+                let text;
+                try {
+                    text = new Intl.NumberFormat(undefined, { style: 'currency', currency }).format(value);
+                } catch (e) {
+                    text = `${value.toFixed(2)} ${currency}`;
+                }
+                el.textContent = `≈ ${text}`;
+                el.title = `At 1 BTC = ${Number(data.rate).toLocaleString()} ${currency}`;
+                el.style.display = '';
+            } catch (e) {
+                if (seq === balanceFiatSeq) el.style.display = 'none';
             }
         }
 
@@ -6930,16 +7266,21 @@ $isWp = Urls::isWordPress();
             const primaryProvider = document.getElementById('price-provider-primary').value;
             const secondaryProvider = document.getElementById('price-provider-secondary').value;
             const exchangeFee = document.getElementById('exchange-fee-percent').value;
+            const displayCurrency = document.getElementById('display-currency').value;
 
             try {
                 const response = await postWithCsrf(adminUrl,
                     `action=update_store&store_id=${encodeURIComponent(currentStoreId)}&price_provider_primary=${encodeURIComponent(primaryProvider)}&price_provider_secondary=${encodeURIComponent(secondaryProvider)}&exchange_fee_percent=${encodeURIComponent(exchangeFee)}`
+                    + `&display_currency=${encodeURIComponent(displayCurrency)}`
                 );
 
                 const result = await response.json();
 
                 if (response.ok) {
                     showToast('Exchange settings saved!', 'success');
+                    const saved = dashboardData?.stores?.find(s => s.id === currentStoreId);
+                    if (saved) saved.display_currency = displayCurrency || null;
+                    renderBalanceFiat();
                 } else {
                     showToast(result.error || 'Failed to save', 'error');
                 }
@@ -8039,10 +8380,10 @@ $isWp = Urls::isWordPress();
                 document.getElementById('request-amount').value = '';
                 document.getElementById('request-memo').value = '';
 
-                // Get current store's mint unit and update amount input
+                // The store's unit, or its display currency when it has one.
                 const store = dashboardData?.stores?.find(s => s.id === currentStoreId);
                 const mintUnit = store?.mint_unit || 'sat';
-                updateAmountInputForStore(mintUnit);
+                updateAmountInputForStore(mintUnit, store?.display_currency || null);
             }
 
             document.getElementById(id).classList.add('visible');
