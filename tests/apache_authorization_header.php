@@ -111,7 +111,7 @@ foreach (['htaccess', 'plain'] as $site) {
     mkdir("$dir/cashu-wallet-php", 0755, true);
     exec('cp -R ' . escapeshellarg("$root/includes") . ' ' . escapeshellarg("$root/api-keys") . ' '
         . implode(' ', array_map(fn($f) => escapeshellarg("$root/$f"),
-            ['.htaccess', 'api.php', 'router.php', 'admin.php', 'setup.php', 'payment.php', 'receive.php', 'cron.php', 'index.php']))
+            ['.htaccess', 'api.php', 'router.php', 'admin.php', 'setup.php', 'payment.php', 'receive.php', 'cron.php', 'health.php', 'index.php']))
         . ' ' . escapeshellarg($dir) . '/', $o, $rc);
     check($rc === 0, "copy the application to $site/");
     copy("$root/cashu-wallet-php/CashuWallet.php", "$dir/cashu-wallet-php/CashuWallet.php");
@@ -133,6 +133,7 @@ Database::insert("stores", [
     "seed_phrase" => "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
     "created_at" => Database::timestamp(),
 ]);
+Config::set("health_key", "health-key-for-the-apache-test");
 echo Auth::createApiKey("store_1", "test")["key"];
 ');
 exec('chmod -R a+rX ' . escapeshellarg($src));
@@ -165,9 +166,9 @@ for ($i = 0; $i < 100 && @file_get_contents("$base/htaccess/probe.php") === fals
 check($code === 0 && preg_match('/^[0-9a-f]{64}$/', $apacheKey) === 1, 'a store and its key in the container: ' . substr($apacheKey, 0, 300));
 
 /** @return array{0:int,1:string} */
-function get(string $url, ?string $authorization = null): array {
+function get(string $url, ?string $authorization = null, string $extraHeaders = ''): array {
     $ctx = stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 20,
-        'header' => $authorization === null ? '' : "Authorization: $authorization\r\n"]]);
+        'header' => ($authorization === null ? '' : "Authorization: $authorization\r\n") . $extraHeaders]]);
     $body = @file_get_contents($url, false, $ctx);
     $code = 0;
     foreach ($http_response_header ?? [] as $h) {
@@ -207,5 +208,22 @@ check($code === 401, "and is refused like any wrong key (HTTP $code)");
 check($body === 'withheld', "without .htaccess Apache withholds it, which is the bug ($body)");
 [$code] = get("$base/plain$current", "token $apacheKey");
 check($code === 404, "and /plain/ really ignores .htaccess (clean URL: HTTP $code)");
+
+echo "Health check under Apache\n";
+// No background run has happened in the container, so "degraded" (still HTTP 200).
+foreach ([
+    'htaccess/health' => 'clean URL, with .htaccess',
+    'htaccess/health.php' => 'health.php, with .htaccess',
+    'htaccess/router.php/health' => 'router.php, with .htaccess',
+    'plain/health.php' => 'health.php, without .htaccess',
+    'plain/router.php/health' => 'router.php, without .htaccess',
+] as $path => $what) {
+    [$code, $body] = get("$base/$path");
+    check($code === 200 && $body === '{"status":"degraded"}', "$what: public answer (HTTP $code $body)");
+    [$code, $body] = get("$base/$path", null, "X-Health-Key: health-key-for-the-apache-test\r\n");
+    check($code === 200 && isset(json_decode($body, true)['checks']), "$what: X-Health-Key gets details (HTTP $code)");
+    [$code] = get("$base/$path", null, "X-Health-Key: wrong\r\n");
+    check($code === 403, "$what: a wrong key is refused (HTTP $code)");
+}
 
 echo "done\n";

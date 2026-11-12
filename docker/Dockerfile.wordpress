@@ -38,7 +38,7 @@ COPY assets/ /usr/src/cashupay-plugin/assets/
 COPY api-keys/ /usr/src/cashupay-plugin/api-keys/
 COPY cashu-wallet-php/CashuWallet.php /usr/src/cashupay-plugin/cashu-wallet-php/CashuWallet.php
 COPY cashu-wallet-php/bip39-english.txt /usr/src/cashupay-plugin/cashu-wallet-php/bip39-english.txt
-COPY admin.php setup.php api.php payment.php receive.php cron.php /usr/src/cashupay-plugin/
+COPY admin.php setup.php api.php payment.php receive.php cron.php health.php /usr/src/cashupay-plugin/
 
 # Copy entrypoint
 COPY docker/entrypoint-wordpress.sh /usr/local/bin/cashupay-entrypoint.sh

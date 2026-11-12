@@ -90,7 +90,7 @@ class BackgroundRunner {
      * the signed emergency notice: left in the rotation it could be starved for as long
      * as payment work filled the budget, however urgent the notice.
      */
-    private const ALWAYS_RUN = ['update_check', 'recover_wallet_operations', 'ready_store_wallets', 'poll_quotes', 'webhook_outbox'];
+    public const ALWAYS_RUN = ['update_check', 'recover_wallet_operations', 'ready_store_wallets', 'poll_quotes', 'webhook_outbox'];
 
     /**
      * Tasks in a fixed order. Recovery of ambiguous outgoing operations always runs

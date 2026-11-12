@@ -18,6 +18,9 @@
     # when a customer retries payment on an order)
     RewriteRule ^i/([^/]+)/?$ payment.php?id=$1 [L,QSA]
 
+    # Health check for uptime monitors - /health -> health.php
+    RewriteRule ^health/?$ health.php [L,QSA]
+
     # API routing - route /api/v1/* to api.php (preserve full path)
     RewriteCond %{REQUEST_FILENAME} !-f
     RewriteCond %{REQUEST_FILENAME} !-d

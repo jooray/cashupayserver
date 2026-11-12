@@ -104,6 +104,17 @@ class Urls {
     }
 
     /**
+     * The health check for uptime monitors (health.php). Reached as a plain file in
+     * standalone mode, so it works with and without rewrite rules.
+     */
+    public static function health(): string {
+        if (self::isWordPress()) {
+            return site_url('/cashupay/health');
+        }
+        return rtrim(Config::getBaseUrl(), '/') . '/health.php';
+    }
+
+    /**
      * Get the API base URL (same as server URL for API calls)
      */
     public static function api(): string {

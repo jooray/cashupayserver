@@ -168,6 +168,11 @@ location /cashupayserver/ {
         try_files $uri /cashupayserver/payment.php?id=$1;
     }
 
+    # Health check for uptime monitors (health.php works without this, too)
+    location = /cashupayserver/health {
+        try_files $uri /cashupayserver/health.php$is_args$args;
+    }
+
     # Block sensitive directories (the same list the included .htaccess blocks).
     # data/ holds your wallet: the database, its -wal/-shm files, sessions and the setup code.
     location ~ ^/cashupayserver/(data|includes|cashu-wallet-php|mint-discovery|btcpayserver-api-docs|scripts|docker|docs|tests|wordpress)(/|$) {
@@ -237,6 +242,29 @@ Open the admin dashboard — it should load normally and show your existing bala
 A few times a day the server fetches `https://cashupayserver.org/version.json` (one plain GET; nothing about your server is sent, though like any web request the site sees your server's address). The dashboard then tells you when a new version exists, and loudly when it is a security release. Nothing is ever downloaded or installed for you.
 
 The same file can carry a **signed emergency notice**, a last resort for a security hole that lets strangers take your money. It must be signed by a key built into CashuPayServer (anything else is ignored) and names the affected versions. An install on one of them shuts itself down completely: every page shows that payments are temporarily unavailable and tells you, the operator, what happened and which version to upload. **Your funds stay where they are** (nothing is sent or deleted; keep your `data` folder), and payments customers made meanwhile are credited after the upgrade. Uploading the fixed version is all it takes to start again; if no fix is out yet, the page says so and the server stays safely off until one is. Turning off the update check in Settings also turns this off. Details: [docs/EMERGENCY-SHUTDOWN.md](docs/EMERGENCY-SHUTDOWN.md).
+
+### Uptime Monitoring
+
+Point an uptime service (UptimeRobot, Uptime Kuma, Better Stack, ...) at the health check. Settings → Uptime monitoring shows the exact address:
+
+| Setup | Address |
+|---|---|
+| Any standalone install | `https://yoursite.com/cashupayserver/health.php` |
+| With `.htaccess` / nginx rules above | `https://yoursite.com/cashupayserver/health` |
+| Front controller | `https://yoursite.com/cashupayserver/router.php/health` |
+| WordPress plugin | `https://yoursite.com/cashupay/health` |
+
+Without credentials it answers only `{"status":"ok"}`, `{"status":"degraded"}` or `{"status":"unavailable"}`: no version, store, mint or path.
+
+| Status | HTTP | Meaning |
+|---|---|---|
+| `ok` | 200 | Everything checked is fine. |
+| `degraded` | 200 | Payments still work, something needs a look: background tasks have not run for 15 minutes (normal on a quiet shop that relies on visitor traffic), a maintenance task or a single payment check failed, the disk is getting full, or no store is set up yet. |
+| `unavailable` | 503 | Payments do not work or soon will not: the database cannot be opened, setup is not finished, the data folder is not writable, the disk is full, checking for customer payments has failed 3 times in a row for over 10 minutes, or the server is under an emergency shutdown (then the body is the shutdown notice, not this JSON). |
+
+**Details** (each check, the background heartbeat from `cron_last_run`/`cron_task_health`, the failing tasks and the number of open invoices, plus the version) are returned to the logged-in operator and to anyone presenting a key: the monitoring key from Settings → Uptime monitoring → "Create private link", or the cron key. Send it as an `X-Health-Key` header; `?key=` works too, for monitors that only take a URL (the key then ends up in web server logs, so prefer the header where you can). A wrong key gets `403`, so a typo in the monitor shows up instead of looking healthy. Replacing or removing the private link in Settings retires the old key at once. The monitoring key can only read the health check.
+
+The check is read-only: a few indexed database reads, no network requests, no background run started, nothing written. It accepts `GET` and `HEAD` (`405` otherwise) and is sent with `Cache-Control: no-store`. It is not rate-limited by CashuPayServer, because the request limiter itself writes to the database; it costs less than loading the checkout page, and you can limit it at the web server if you need to.
 
 ## Security
 

@@ -36,7 +36,7 @@ COPY assets/ /opt/cashupayserver/assets/
 COPY api-keys/ /opt/cashupayserver/api-keys/
 COPY cashu-wallet-php/CashuWallet.php /opt/cashupayserver/cashu-wallet-php/CashuWallet.php
 COPY cashu-wallet-php/bip39-english.txt /opt/cashupayserver/cashu-wallet-php/bip39-english.txt
-COPY admin.php setup.php api.php payment.php receive.php cron.php router.php index.php /opt/cashupayserver/
+COPY admin.php setup.php api.php payment.php receive.php cron.php health.php router.php index.php /opt/cashupayserver/
 COPY .htaccess manifest.json /opt/cashupayserver/
 
 # Create data directory with the same Apache 2.2 + 2.4 protection files

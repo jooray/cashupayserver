@@ -149,6 +149,14 @@ if (preg_match('#^/receive$#', $uri)) {
 }
 
 // -----------------------------------------------------------------------------
+// Health check for uptime monitors: /health
+// -----------------------------------------------------------------------------
+if (preg_match('#^/health$#', $uri)) {
+    require __DIR__ . '/health.php';
+    exit;
+}
+
+// -----------------------------------------------------------------------------
 // Static assets: /assets/*
 // -----------------------------------------------------------------------------
 if (preg_match('#^/assets/#', $uri)) {
@@ -198,7 +206,7 @@ if ($uri === '/' || $uri === '') {
 // Direct .php file access (for backwards compatibility)
 // Only allow specific public files
 // -----------------------------------------------------------------------------
-$allowedFiles = ['index.php', 'admin.php', 'setup.php', 'payment.php', 'api.php', 'cron.php', 'receive.php'];
+$allowedFiles = ['index.php', 'admin.php', 'setup.php', 'payment.php', 'api.php', 'cron.php', 'receive.php', 'health.php'];
 $requestedFile = basename($uri);
 
 if (in_array($requestedFile, $allowedFiles)) {

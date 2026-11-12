@@ -22,6 +22,7 @@ require_once __DIR__ . '/includes/mint_helpers.php';
 require_once __DIR__ . '/includes/background.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/urls.php';
+require_once __DIR__ . '/includes/health.php';
 
 /** Shown while a mint account is still being checked for this seed's earlier payments. */
 const RECOVERY_IN_PROGRESS_MESSAGE = 'Saved. This server is now checking the mint for payments this '
@@ -752,6 +753,15 @@ if (isset($_GET['api'])) {
             ]);
             break;
 
+        case 'monitoring':
+            // Loaded after login, like the alert settings: the private link carries a key.
+            $healthKey = Health::getKey();
+            echo json_encode([
+                'publicUrl' => Urls::health(),
+                'privateUrl' => $healthKey !== null ? Urls::health() . '?key=' . rawurlencode($healthKey) : null,
+            ]);
+            break;
+
         case 'data_folder':
             // Not printed into the page itself: the shell is served before login, and
             // the absolute path tells a stranger where the wallet lives on disk.
@@ -994,6 +1004,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 http_response_code(400);
                 echo json_encode(['error' => $e->getMessage()]);
             }
+            break;
+
+        case 'rotate_health_key':
+            // Creates the private monitoring link, or replaces it (the old one stops working).
+            $healthKey = Health::rotateKey();
+            echo json_encode(['success' => true, 'privateUrl' => Urls::health() . '?key=' . rawurlencode($healthKey)]);
+            break;
+
+        case 'delete_health_key':
+            Health::deleteKey();
+            echo json_encode(['success' => true]);
             break;
 
         case 'save_alerts':
@@ -4270,6 +4291,70 @@ $isWp = Urls::isWordPress();
                 }
                 </script>
 
+                <div class="card" id="monitoring-card">
+                    <div class="card-header">
+                        <div class="card-title">Uptime monitoring</div>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-help" style="margin-bottom: 0.75rem;">
+                            If you use an uptime service (UptimeRobot, Uptime Kuma, Better Stack and the like),
+                            give it this address. It answers &ldquo;ok&rdquo; while this server can take payments
+                            and an error (HTTP 503) when it cannot, so the service can warn you before a customer does.
+                        </p>
+                        <div class="form-group">
+                            <label class="form-label">Address to check</label>
+                            <code id="monitoring-public-url" style="display: block; background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; font-size: 0.9rem; word-break: break-all; user-select: all;">&hellip;</code>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Private link with details</label>
+                            <p class="form-help" style="margin-bottom: 0.5rem;">
+                                Shows which check is failing and when background tasks last ran. It does not show
+                                your balance or your recovery phrase, but keep it to yourself and your monitoring service.
+                            </p>
+                            <code id="monitoring-private-url" style="display: none; background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; font-size: 0.9rem; word-break: break-all; user-select: all; margin-bottom: 0.5rem;"></code>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                <button class="btn btn-secondary" type="button" id="btn-monitoring-create" onclick="rotateHealthKey()">Create private link</button>
+                                <button class="btn btn-secondary" type="button" id="btn-monitoring-remove" onclick="deleteHealthKey()" style="display: none;">Remove private link</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <script>
+                function renderMonitoring(data) {
+                    document.getElementById('monitoring-public-url').textContent = data.publicUrl || '';
+                    const priv = document.getElementById('monitoring-private-url');
+                    priv.textContent = data.privateUrl || '';
+                    priv.style.display = data.privateUrl ? 'block' : 'none';
+                    document.getElementById('btn-monitoring-create').textContent =
+                        data.privateUrl ? 'Replace private link' : 'Create private link';
+                    document.getElementById('btn-monitoring-remove').style.display = data.privateUrl ? '' : 'none';
+                }
+                async function loadMonitoring() {
+                    try {
+                        const response = await fetch(`${adminUrl}?api=monitoring`);
+                        if (response.ok) renderMonitoring(await response.json());
+                    } catch (e) {
+                        // The card stays as it is.
+                    }
+                }
+                async function rotateHealthKey() {
+                    const replacing = document.getElementById('monitoring-private-url').textContent !== '';
+                    if (replacing && !confirm('The current private link will stop working. Continue?')) return;
+                    const response = await postWithCsrf(adminUrl, 'action=rotate_health_key');
+                    const result = await response.json().catch(() => ({}));
+                    if (!response.ok) { showToast(result.error || 'Could not create the link', 'error'); return; }
+                    renderMonitoring({ publicUrl: document.getElementById('monitoring-public-url').textContent, privateUrl: result.privateUrl });
+                    showToast(replacing ? 'New private link created' : 'Private link created', 'success');
+                }
+                async function deleteHealthKey() {
+                    if (!confirm('Remove the private link? Services using it will get an error.')) return;
+                    const response = await postWithCsrf(adminUrl, 'action=delete_health_key');
+                    if (!response.ok) { showToast('Could not remove the link', 'error'); return; }
+                    renderMonitoring({ publicUrl: document.getElementById('monitoring-public-url').textContent, privateUrl: null });
+                    showToast('Private link removed', 'success');
+                }
+                </script>
+
                 <?php $cpsUpdate = UpdateCheck::status(); ?>
                 <div style="text-align: center; padding: 1.5rem 0; color: var(--text-muted); font-size: 0.8rem;">
                     <?php if ($cpsUpdate['outdated']): ?>
@@ -5063,6 +5148,7 @@ $isWp = Urls::isWordPress();
                 if (document.getElementById('proxy-card')) loadProxySettings();
                 loadDataFolder();
                 loadAlertSettings();
+                loadMonitoring();
             } else {
                 storeSelector.style.display = 'flex';
             }

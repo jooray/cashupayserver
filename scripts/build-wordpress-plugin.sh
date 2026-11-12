@@ -90,7 +90,7 @@ cp wordpress/*.php "$BUILD_DIR/"
 cp -r includes/ "$BUILD_DIR/includes/"
 rm -f "$BUILD_DIR/includes/config.local.php" "$BUILD_DIR/includes/data-location.txt"
 find "$BUILD_DIR/includes" -name '*.local.php' -delete
-cp admin.php setup.php api.php payment.php receive.php cron.php "$BUILD_DIR/"
+cp admin.php setup.php api.php payment.php receive.php cron.php health.php "$BUILD_DIR/"
 cp -r api-keys/ "$BUILD_DIR/api-keys/"
 
 # Copy assets

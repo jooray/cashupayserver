@@ -17,7 +17,7 @@ add_filter('redirect_canonical', 'cashupay_disable_trailing_slash_redirect', 10,
 
 // WordPress only rebuilds its rule table on activation, and an upgrade by replacing
 // the plugin folder does not activate anything. Bump this when the rules change.
-const CASHUPAY_REWRITE_RULES_VERSION = '3';
+const CASHUPAY_REWRITE_RULES_VERSION = '4';
 
 /**
  * Disable WordPress canonical redirect (trailing slash) for CashuPay API paths.
@@ -42,6 +42,7 @@ function cashupay_add_rewrite_rules(): void {
     add_rewrite_rule('^cashupay-setup/?$', 'index.php?cashupay_setup=1', 'top');
     add_rewrite_rule('^cashupay/cron/?$', 'index.php?cashupay_cron=1', 'top');
     add_rewrite_rule('^cashupay/receive/?$', 'index.php?cashupay_receive=1', 'top');
+    add_rewrite_rule('^cashupay/health/?$', 'index.php?cashupay_health=1', 'top');
     add_rewrite_rule('^cashupay/api-keys/authorize/?$', 'index.php?cashupay_authorize=1', 'top');
 
     if (get_option('cashupay_rewrite_rules_version') !== CASHUPAY_REWRITE_RULES_VERSION
@@ -61,7 +62,7 @@ function cashupay_add_rewrite_rules(): void {
 function cashupay_mark_rewrite_rules_flushed(): void {
     $rules = get_option('rewrite_rules');
     // Plain permalinks store no rule table at all, so there is nothing to wait for.
-    if ((is_array($rules) && isset($rules['^cashupay/v1/(.*)$'])) || get_option('permalink_structure') === '') {
+    if ((is_array($rules) && isset($rules['^cashupay/health/?$'])) || get_option('permalink_structure') === '') {
         update_option('cashupay_rewrite_rules_version', CASHUPAY_REWRITE_RULES_VERSION);
         return;
     }
@@ -78,6 +79,7 @@ function cashupay_query_vars(array $vars): array {
     $vars[] = 'cashupay_setup';
     $vars[] = 'cashupay_cron';
     $vars[] = 'cashupay_receive';
+    $vars[] = 'cashupay_health';
     $vars[] = 'cashupay_authorize';
     return $vars;
 }
@@ -91,8 +93,9 @@ function cashupay_handle_request(): void {
     $cron = get_query_var('cashupay_cron');
     $authorize = get_query_var('cashupay_authorize');
     $receive = get_query_var('cashupay_receive');
+    $health = get_query_var('cashupay_health');
 
-    if (!empty($GLOBALS['cashupay_refuse_site']) && ($api || $payment || $admin || $setup || $cron || $receive || $authorize)) {
+    if (!empty($GLOBALS['cashupay_refuse_site']) && ($api || $payment || $admin || $setup || $cron || $receive || $authorize || $health)) {
         // bootstrap.php found no wallet folder of this site's own; see the admin notice.
         wp_die(esc_html__('CashuPay is not available on this site.', 'cashupay'), '', ['response' => 503]);
     }
@@ -134,6 +137,11 @@ function cashupay_handle_request(): void {
 
     if ($receive) {
         require CASHUPAY_PLUGIN_DIR . '/receive.php';
+        exit;
+    }
+
+    if ($health) {
+        require CASHUPAY_PLUGIN_DIR . '/health.php';
         exit;
     }
 

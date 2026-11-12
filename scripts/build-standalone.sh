@@ -92,7 +92,7 @@ find "$BUILD_DIR/includes" -name '*.local.php' -delete
 cp -r assets/ "$BUILD_DIR/assets/"
 build_mint_discovery "$BUILD_DIR/assets/js/"
 cp -r api-keys/ "$BUILD_DIR/api-keys/"
-cp admin.php setup.php api.php payment.php receive.php cron.php router.php index.php "$BUILD_DIR/"
+cp admin.php setup.php api.php payment.php receive.php cron.php health.php router.php index.php "$BUILD_DIR/"
 # MIT licence text; the vendored JS libraries carry their own headers (assets/js/vendor/).
 cp LICENSE "$BUILD_DIR/"
 cp .htaccess manifest.json favicon.ico "$BUILD_DIR/"
