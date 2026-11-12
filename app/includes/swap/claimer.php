@@ -147,17 +147,25 @@ final class SwapClaimer {
         // address strings from the store's xpub at allocation time, so we can
         // safely re-derive the scriptPubKey from the address string.
         $store = Database::fetchOne(
-            "SELECT onchain_xpub, onchain_address_type, onchain_network FROM stores WHERE id = ?",
+            "SELECT onchain_xpub, onchain_address_type, onchain_network,
+                    onchain_provider, onchain_provider_url, onchain_provider_fallback
+               FROM stores WHERE id = ?",
             [$row['store_id']]
         );
         if (!$store) {
             throw new RuntimeException('store row missing for swap_attempts.store_id');
         }
+        $network = $row['network'] ?? ($store['onchain_network'] ?: 'mainnet');
         $outScript = self::scriptForMerchantAddress(
             $row['merchant_address'],
             $store['onchain_address_type'] ?: 'P2WPKH',
-            $row['network'] ?? ($store['onchain_network'] ?: 'mainnet')
+            $network
         );
+        // Every Esplora request this claim causes (fee estimate, broadcast
+        // fallback) follows the store's chain-watcher host chain: the
+        // operator's own explorer, exclusively unless they opted in to the
+        // public fallback — never the public explorers behind their back.
+        $esploraChain = EsploraProvider::chainForStore($store, $network);
 
         // 4. Compute the claim amount: lockup_amount minus a current claim-fee
         // estimate (re-fetched, since on-chain feerate may have moved since
@@ -181,7 +189,7 @@ final class SwapClaimer {
             // then a conservative default — all clamped to a sane band. Replaces
             // the old flat 200-sat guess that could strand the claim in any
             // non-trivial fee environment.
-            $claimFeeEstimate = self::estimateClaimFeeSats($row['network'] ?? 'mainnet', self::CLAIM_TX_VSIZE);
+            $claimFeeEstimate = self::estimateClaimFeeSats($network, self::CLAIM_TX_VSIZE, $esploraChain);
         }
         if ($claimFeeEstimate >= $lockupAmount) {
             throw new RuntimeException('Claim fee estimate exceeds lockup amount');
@@ -273,7 +281,7 @@ final class SwapClaimer {
         }
 
         try {
-            self::broadcastWithFallback($row, $finalHex, $claimTxid);
+            self::broadcastWithFallback($row, $finalHex, $claimTxid, $esploraChain);
         } catch (Throwable $e) {
             // A genuine broadcast failure (not an "already known" race): release
             // the claim gate so the next poll retries. The tx is deterministic,
@@ -289,10 +297,13 @@ final class SwapClaimer {
     }
 
     /**
-     * Try the provider's broadcast endpoint first; fall back to Esplora if
-     * the provider call fails. Last resort raises.
+     * Try the provider's broadcast endpoint first; fall back to the store's
+     * Esplora host chain if the provider call fails. Last resort raises.
+     *
+     * @param ?string[] $esploraUrls the store's chain (EsploraProvider::
+     *   chainForStore); null = the network's public defaults.
      */
-    private static function broadcastWithFallback(array $row, string $rawTxHex, string $expectedTxid): string {
+    private static function broadcastWithFallback(array $row, string $rawTxHex, string $expectedTxid, ?array $esploraUrls = null): string {
         $provider = SwapProviderFactory::byName($row['provider']);
         $network = $row['network'] ?? 'mainnet';
         if ($provider) {
@@ -308,10 +319,23 @@ final class SwapClaimer {
                 error_log("swap broadcast via {$row['provider']} failed: " . $e->getMessage());
             }
         }
-        // Esplora fallback (does not exist on regtest). Broadcasting is rare
-        // and critical, so every default host is tried — no cooldown skipping.
+        $urls = $esploraUrls ?? (EsploraProvider::defaultUrlsForNetwork($network) ?? []);
+        return self::broadcastViaEsplora($urls, $rawTxHex, $expectedTxid);
+    }
+
+    /**
+     * POST the raw tx to each Esplora host in order until one accepts it.
+     * Broadcasting is rare and critical, so every host is tried — no
+     * EndpointHealth cooldown skipping. An "already known" answer counts as
+     * success (deterministic tx, see broadcastWithFallback). Throws when
+     * every host refused (or the chain is empty, e.g. regtest without a
+     * configured explorer).
+     *
+     * @param string[] $esploraUrls
+     */
+    public static function broadcastViaEsplora(array $esploraUrls, string $rawTxHex, string $expectedTxid): string {
         require_once __DIR__ . '/../onchain/provider.php';
-        foreach (EsploraProvider::defaultUrlsForNetwork($network) ?? [] as $esploraUrl) {
+        foreach ($esploraUrls as $esploraUrl) {
             $url = rtrim($esploraUrl, '/') . '/tx';
             $result = \SafeHttp::request($url, [
                 'method' => 'POST',
@@ -365,10 +389,15 @@ final class SwapClaimer {
      *   3. a conservative default.
      * The feerate is clamped to a sane band before being applied so a bad value
      * can neither strand the tx (too low) nor burn the output (too high).
+     *
+     * @param ?string[] $esploraUrls the store's Esplora host chain, tried in
+     *   order (EsploraProvider::chainForStore); null = the network's public
+     *   defaults.
      */
-    public static function estimateClaimFeeSats(string $network, int $vsize): int {
+    public static function estimateClaimFeeSats(string $network, int $vsize, ?array $esploraUrls = null): int {
         $rate = null;
-        foreach (EsploraProvider::defaultUrlsForNetwork($network) ?? [] as $esploraUrl) {
+        $urls = $esploraUrls ?? (EsploraProvider::defaultUrlsForNetwork($network) ?? []);
+        foreach ($urls as $esploraUrl) {
             $rate = self::fetchFeerateSatPerVb($esploraUrl);
             if ($rate !== null) {
                 self::cacheFeerate($network, $rate); // remember last good

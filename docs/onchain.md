@@ -181,8 +181,33 @@ and mempool (zero-conf) transactions through a single endpoint.
 
 You can run your own mempool.space / Esplora instance for full sovereignty
 and privacy (the public API otherwise sees every address your store
-generates). Set **Provider URL** in the store settings to the base URL of
-your instance, e.g. `https://my-mempool.example.com/api`.
+generates). Set **Provider URL** in the store settings (on-chain card,
+Advanced) to the API base of your instance, e.g.
+`https://my-mempool.example.com/api` or `http://umbrel.local:3006/api`.
+
+The URL is validated when you save:
+
+- it must be a plain `http://` or `https://` address with no username or
+  password (a Bitcoin Core `user:pass@host` RPC URL is refused with a hint
+  — this field takes an Esplora-style HTTP API);
+- whenever the URL changes, the server fetches `{url}/blocks/tip/height`
+  and the save is rejected unless it answers with a block height. The error
+  names the cause (unreachable, HTTP status, non-API page, DNS failure). If
+  you pasted the explorer's web root instead of its API base and `{url}/api`
+  works, the message suggests that URL.
+- a LAN or localhost host is refused unless private endpoints are enabled
+  on the server (`allow_private_endpoints` setting or
+  `CASHUPAY_ALLOW_PRIVATE_ENDPOINTS=1`); the error says so.
+
+**Public fallback (opt-in).** By default a custom URL is used *exclusively*:
+if your instance is down, payments are simply not detected until it is back,
+and the addresses your store watches never reach a public explorer. Tick
+**"If my explorer is unreachable, fall back to the public explorers"** to
+instead continue through mempool.space, then blockstream.info, while your
+instance is unavailable (the custom URL stays first and is retried after a
+short cooldown). The same chain — custom first, public hosts only if you
+opted in — is used for submarine-swap claim fee estimates and as the
+broadcast fallback for swap-claim transactions.
 
 ### Bitcoin Core RPC (advanced)
 

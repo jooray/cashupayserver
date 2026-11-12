@@ -279,7 +279,7 @@ class Database {
                 // on existing installs that haven't yet picked it up. All migrations
                 // are idempotent, so a fire is safe.
                 $hasLatestMigration = $hasConfig
-                    && self::columnExists($pdo, 'stores', 'wallet_tabs');
+                    && self::columnExists($pdo, 'stores', 'onchain_provider_fallback');
                 // The auto-withdraw → auto-cashout rename is a data-only migration
                 // (config key + notification event labels) with no schema artifact
                 // to mark it done, so probe for the legacy config key directly. The
@@ -2013,17 +2013,28 @@ HTACCESS;
         // invoice page shows first when an invoice offers both on-chain and
         // Lightning. NULL keeps the historical on-chain-first behaviour.
         // (stores.invoice_first_method was the migration marker before the
-        // 2026-10 security port; stores.wallet_tabs is now, see getInstance.)
+        // 2026-10 security port; see getInstance for the current one.)
         if (!self::columnExists($pdo, 'stores', 'invoice_first_method')) {
             $pdo->exec("ALTER TABLE stores ADD COLUMN invoice_first_method TEXT DEFAULT NULL");
         }
 
         // Per-store "Popular wallet tabs" (Cash App / Venmo / PayPal tabs on
         // the customer invoice page, see WalletTabs). NULL keeps existing
-        // stores exactly as they were: no wallet tabs. stores.wallet_tabs is
+        // stores exactly as they were: no wallet tabs. stores.wallet_tabs was
         // the getInstance() migration marker for this set.
         if (!self::columnExists($pdo, 'stores', 'wallet_tabs')) {
             $pdo->exec("ALTER TABLE stores ADD COLUMN wallet_tabs TEXT DEFAULT NULL");
+        }
+
+        // Custom Esplora URL public fallback (per store, 0 off / 1 on). Only
+        // meaningful alongside onchain_provider_url: when the operator's own
+        // explorer is unreachable the chain watcher (and swap-claim fee /
+        // broadcast) may fall back to the built-in public explorers. Off by
+        // default so a self-hosted setup never leaks watched addresses to a
+        // public explorer without an explicit opt-in. stores.
+        // onchain_provider_fallback is the getInstance() migration marker.
+        if (!self::columnExists($pdo, 'stores', 'onchain_provider_fallback')) {
+            $pdo->exec("ALTER TABLE stores ADD COLUMN onchain_provider_fallback INTEGER NOT NULL DEFAULT 0");
         }
 
         // Money-safety port (security/upstream-audit-port). All additive and

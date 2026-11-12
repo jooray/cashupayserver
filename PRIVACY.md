@@ -192,7 +192,10 @@ address and transaction IDs of their payment. Your SMTP provider's privacy polic
   day. Nothing is sent beyond the request itself.
 - **Custom block explorer / Bitcoin Core:** the on-chain rail's default explorer (section 3)
   can be replaced with your own Esplora instance or your own Bitcoin Core node, in which case
-  no third party is involved in chain watching.
+  no third party is involved in chain watching. When you save a custom explorer URL the
+  server makes one request to it (`/blocks/tip/height`) to verify it answers. An optional,
+  off-by-default per-store switch lets the public explorers take over while your instance
+  is unreachable.
 
 ## 3. Built-in services (default configuration)
 
@@ -223,7 +226,10 @@ queried repeatedly while an invoice is pending; blockstream.info sees nothing wh
 mempool.space is healthy. Both are also used, in the same order, for fee estimates and as a
 fallback for broadcasting swap-claim transactions. Configuring your own explorer or node
 (section 2) disables both built-in explorers entirely — a custom endpoint is used
-exclusively, and its outage never diverts queries to a public explorer.
+exclusively, and its outage never diverts queries to a public explorer — unless you tick the
+per-store **public fallback** opt-in, in which case mempool.space and blockstream.info are
+queried (in that order, for chain watching, fee estimates and swap-claim broadcasts) only
+while your own endpoint is unreachable.
 
 ### Submarine swap providers — Zeus, Boltz
 

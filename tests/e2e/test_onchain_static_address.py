@@ -18,16 +18,28 @@ from __future__ import annotations
 import json
 import sqlite3
 import time
+from typing import Iterator
 
 import pytest
 import requests
 
 from conftest import ConfiguredPayserver
 from fixtures.bitcoind import BitcoindHandle
+from fixtures.esplora_mock import MockEsplora
 from fixtures.onchain import OnchainContext, configure_store_for_static_onchain
 
 
 INVOICE_AMOUNT_SAT = 50_000
+
+
+@pytest.fixture(scope="module")
+def mock_esplora() -> Iterator[MockEsplora]:
+    """A reachable Esplora API for the admin form's save-time URL probe (the
+    bitcoind RPC URL the polling tests use is refused there: credentials in
+    the URL, and it is not an Esplora API)."""
+    s = MockEsplora()
+    yield s
+    s.stop()
 
 
 # ---------- helpers ----------
@@ -55,7 +67,7 @@ def _wire_static(
         tweak_range=tweak_range,
         min_confs=min_confs,
         confirm_timeout_sec=86400,
-        provider_url=onchain.watch_wallet_url,
+        provider_url=onchain.watch_wallet_url,  # direct DB write: bitcoind-rpc provider
     )
     return addr
 
@@ -123,7 +135,7 @@ def test_save_onchain_static_persists_address_and_clears_xpub(
         address_type="P2WPKH",
         min_confs="0",
         confirm_timeout_sec="86400",
-        provider_url=onchain.watch_wallet_url,
+        provider_url="",
     )
     assert xpub_resp.ok, xpub_resp.text
 
@@ -137,7 +149,7 @@ def test_save_onchain_static_persists_address_and_clears_xpub(
         network="regtest",
         min_confs="0",
         confirm_timeout_sec="86400",
-        provider_url=onchain.watch_wallet_url,
+        provider_url="",
     )
     assert r.ok, r.text
     body = r.json()
@@ -164,7 +176,7 @@ def test_save_onchain_static_persists_address_and_clears_xpub(
 
 
 def test_save_onchain_with_empty_address_still_persists_confirmation_policy(
-    shared_configured: ConfiguredPayserver, onchain: OnchainContext
+    shared_configured: ConfiguredPayserver, onchain: OnchainContext, mock_esplora: MockEsplora
 ) -> None:
     """Saving with no xpub/static address clears the address source but must
     still persist the shared confirmation-policy settings (min confs,
@@ -181,7 +193,7 @@ def test_save_onchain_with_empty_address_still_persists_confirmation_policy(
         address_type="P2WPKH",
         min_confs="3",
         confirm_timeout_sec="86400",
-        provider_url=onchain.watch_wallet_url,
+        provider_url=mock_esplora.url,
     )
     assert seed.ok, seed.text
 
@@ -194,7 +206,7 @@ def test_save_onchain_with_empty_address_still_persists_confirmation_policy(
         address_type="P2WPKH",
         min_confs="0",
         confirm_timeout_sec="3600",
-        provider_url=onchain.watch_wallet_url,
+        provider_url=mock_esplora.url,
     )
     assert r.ok, r.text
     body = r.json()
@@ -216,7 +228,7 @@ def test_save_onchain_with_empty_address_still_persists_confirmation_policy(
     assert row["onchain_static_address"] is None
     assert row["onchain_min_confs"] == 0, "zero-conf answer persisted without an address"
     assert row["onchain_confirm_timeout_sec"] == 3600
-    assert row["onchain_provider_url"] == onchain.watch_wallet_url
+    assert row["onchain_provider_url"] == mock_esplora.url
 
 
 def test_save_onchain_static_rejects_invalid_address(
@@ -233,7 +245,7 @@ def test_save_onchain_static_rejects_invalid_address(
         network="regtest",
         min_confs="0",
         confirm_timeout_sec="86400",
-        provider_url=onchain.watch_wallet_url,
+        provider_url="",
     )
     assert r.status_code == 400
     assert "regtest" in (r.json().get("error") or "").lower()
@@ -253,7 +265,7 @@ def test_save_onchain_static_rejects_mainnet_address_on_regtest(
         network="regtest",
         min_confs="0",
         confirm_timeout_sec="86400",
-        provider_url=onchain.watch_wallet_url,
+        provider_url="",
     )
     assert r.status_code == 400
 
@@ -285,7 +297,7 @@ def test_switching_static_to_xpub_clears_static_address(
         address_type="P2WPKH",
         min_confs="0",
         confirm_timeout_sec="86400",
-        provider_url=onchain.watch_wallet_url,
+        provider_url="",
     )
     assert r.ok, r.text
 
