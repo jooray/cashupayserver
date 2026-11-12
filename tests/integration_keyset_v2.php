@@ -18,6 +18,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 // Tests create disposable databases and spawn helper processes; they must never be
 // reachable over HTTP, even on a deployment that serves this directory.
 if (PHP_SAPI !== 'cli') {
@@ -47,7 +49,7 @@ function check(bool $cond, string $what): void
 }
 
 // --- Start the mock mint -------------------------------------------------
-$port = random_int(18100, 18999);
+$port = testFreePort();
 $mintUrl = "http://127.0.0.1:$port";
 $statePath = $dataDir . '/mock-mint-state.json';
 $server = proc_open(
@@ -59,7 +61,7 @@ $server = proc_open(
 );
 check(is_resource($server), 'mock mint process started');
 register_shutdown_function(function () use ($server, $dataDir) {
-    proc_terminate($server);
+    testStopProcess($server);
     exec('rm -rf ' . escapeshellarg($dataDir));
 });
 

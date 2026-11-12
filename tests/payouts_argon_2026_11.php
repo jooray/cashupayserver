@@ -19,6 +19,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -38,12 +40,12 @@ $procs = [];
 $named = [];
 register_shutdown_function(function () use ($dataDir) {
     global $procs;
-    foreach ($procs as $p) { @proc_terminate($p); }
+    foreach ($procs as $p) { testStopProcess($p); }
     exec('rm -rf ' . escapeshellarg($dataDir));
 });
 function serve(string $name, string $script, array $env = []): string {
     global $procs, $named, $root;
-    $port = random_int(20100, 20999);
+    $port = testFreePort();
     $p = proc_open([PHP_BINARY, '-d', 'opcache.enable=0', '-S', "127.0.0.1:$port", $script],
         [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, $root, $env + getenv());
     for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) { usleep(100000); }
@@ -170,7 +172,7 @@ $big = 'lnbc20u1lnbcmockmelt2000';
 $priced = LightningAddress::quotePayingAccount('s1', $big);
 check($priced['account']['mint_url'] === $B && $priced['quote']->amount === 2000, 'the backup pays what the primary cannot cover');
 
-proc_terminate($named['A']);
+testStopProcess($named['A']);
 usleep(300000);
 fresh();
 $priced = LightningAddress::quotePayingAccount('s1', $bolt11);

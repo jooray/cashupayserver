@@ -15,6 +15,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -42,7 +44,7 @@ use Cashu\BigInt;
 
 $server = null;
 register_shutdown_function(function () use ($dataDir, &$server) {
-    if ($server) { proc_terminate($server); }
+    if ($server) { testStopProcess($server); }
     exec('rm -rf ' . escapeshellarg($dataDir));
 });
 
@@ -117,7 +119,7 @@ mkdir($docroot);
 file_put_contents($docroot . '/entry.php', '<?php define("CASHUPAY_DATA_DIR", ' . var_export($dataDir, true) . ');'
     . ' define("CASHUPAY_SAFE_MODE_PUBKEYS", [' . var_export(TEST_PUBKEY, true) . ']);'
     . ' require ' . var_export($root . '/includes/entrypoint_guard.php', true) . '; echo "SERVED";');
-$port = random_int(18100, 18999);
+$port = testFreePort();
 $server = proc_open(['php', '-S', "127.0.0.1:$port", '-t', $docroot],
     [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes);
 for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) { usleep(100000); }

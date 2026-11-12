@@ -16,6 +16,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -39,13 +41,13 @@ function check(bool $cond, string $what): void {
 $procs = [];
 register_shutdown_function(function () use ($dataDir) {
     global $procs;
-    foreach ($procs as $p) { proc_terminate($p); }
+    foreach ($procs as $p) { testStopProcess($p); }
     exec('rm -rf ' . escapeshellarg($dataDir));
 });
 
 function startServer(array $cmd, array $env) {
     global $procs, $root;
-    $port = random_int(19100, 19999);
+    $port = testFreePort();
     $cmd = str_replace('{port}', (string)$port, $cmd);
     $proc = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, $root, $env + getenv());
     $procs[] = $proc;
@@ -110,7 +112,7 @@ check((json_decode($json, true)['status'] ?? null) === 'Settled', 'its status ch
 
 echo "The first render does not wait for the mint (C5)\n";
 $inv3 = Invoice::create('s1', ['amount' => 8, 'currency' => 'sat']);
-proc_terminate($mintProc);
+testStopProcess($mintProc);
 usleep(300000);
 [$html, $took] = $get("$page?id={$inv3['id']}");
 check(str_contains($html, 'Waiting for payment') && $took < 3.0, sprintf('the page renders with the mint down (%.2f s)', $took));

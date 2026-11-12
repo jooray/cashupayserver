@@ -12,6 +12,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -38,7 +40,7 @@ function check(bool $cond, string $what): void {
 $procs = [];
 function startMint(string $name): string {
     global $procs, $dataDir, $root;
-    $port = random_int(18100, 18999);
+    $port = testFreePort();
     $p = proc_open([PHP_BINARY, '-d', 'opcache.enable=0', '-S', "127.0.0.1:$port", "$root/tests/mock_mint_router.php"],
         [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, $root,
         ['MOCK_MINT_STATE' => "$dataDir/$name.json"] + getenv());
@@ -46,7 +48,7 @@ function startMint(string $name): string {
     $procs[] = $p;
     return "http://127.0.0.1:$port";
 }
-register_shutdown_function(function () use ($dataDir) { global $procs; foreach ($procs as $p) proc_terminate($p); exec('rm -rf ' . escapeshellarg($dataDir)); });
+register_shutdown_function(function () use ($dataDir) { global $procs; foreach ($procs as $p) testStopProcess($p); exec('rm -rf ' . escapeshellarg($dataDir)); });
 function post(string $url, array $body) {
     return @file_get_contents($url, false, stream_context_create(['http' => ['method' => 'POST',
         'header' => 'Content-Type: application/json', 'content' => json_encode($body)]]));

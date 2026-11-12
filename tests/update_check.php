@@ -14,6 +14,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -42,7 +44,7 @@ class Config {
 // reaches the real internet.
 $dir = sys_get_temp_dir() . '/cps-update-' . bin2hex(random_bytes(4));
 mkdir($dir);
-$port = random_int(18100, 18999);
+$port = testFreePort();
 $base = "http://127.0.0.1:$port/";
 define('CASHUPAY_UPDATE_URL', $base . 'newer.json');
 require_once dirname(__DIR__) . '/includes/update_check.php';
@@ -75,7 +77,7 @@ $server = proc_open(
 );
 check(is_resource($server), 'manifest server started');
 register_shutdown_function(function () use ($server, $dir) {
-    proc_terminate($server);
+    testStopProcess($server);
     array_map('unlink', glob("$dir/*.json") ?: []);
     @rmdir($dir);
 });

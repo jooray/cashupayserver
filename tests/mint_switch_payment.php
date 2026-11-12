@@ -14,6 +14,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -37,7 +39,7 @@ function check(bool $cond, string $what): void {
 $mints = [];
 function startMint(string $name): string {
     global $mints, $dataDir, $root;
-    $port = random_int(18100, 18999);
+    $port = testFreePort();
     $proc = proc_open(
         ['php', '-S', "127.0.0.1:$port", "$root/tests/mock_mint_router.php"],
         [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
@@ -51,7 +53,7 @@ function startMint(string $name): string {
 }
 register_shutdown_function(function () use ($dataDir) {
     global $mints;
-    foreach ($mints as $p) { proc_terminate($p); }
+    foreach ($mints as $p) { testStopProcess($p); }
     exec('rm -rf ' . escapeshellarg($dataDir));
 });
 

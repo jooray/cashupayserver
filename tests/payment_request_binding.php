@@ -11,6 +11,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -35,13 +37,13 @@ function check(bool $cond, string $what): void {
 $procs = [];
 register_shutdown_function(function () use ($dataDir) {
     global $procs;
-    foreach ($procs as $p) { proc_terminate($p); }
+    foreach ($procs as $p) { testStopProcess($p); }
     exec('rm -rf ' . escapeshellarg($dataDir));
 });
 
 function startServer(array $cmd, array $env): int {
     global $procs, $root;
-    $port = random_int(18100, 18999);
+    $port = testFreePort();
     $cmd = str_replace('{port}', (string)$port, $cmd);
     $procs[] = proc_open($cmd, [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
         $pipes, $root, $env + getenv());

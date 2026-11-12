@@ -11,6 +11,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -34,11 +36,11 @@ function check(bool $cond, string $what): void {
 
 $proc = null;
 register_shutdown_function(function () use (&$proc, $app) {
-    if ($proc) { proc_terminate($proc); }
+    if ($proc) { testStopProcess($proc); }
     @chmod("$app/data", 0700);
     exec('rm -rf ' . escapeshellarg($app));
 });
-$port = random_int(19100, 19999);
+$port = testFreePort();
 $proc = proc_open(['php', '-S', "127.0.0.1:$port", "$app/router.php"],
     [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, $app);
 for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) {
@@ -84,7 +86,7 @@ foreach (['setup.php', 'admin.php', 'index.php', 'router.php'] as $file) {
     copy("$app/$file", "$inner/$file");
 }
 mkdir("$inner/data", 0700);
-$innerPort = random_int(19100, 19999);
+$innerPort = testFreePort();
 $innerProc = proc_open(['php', '-S', "127.0.0.1:$innerPort", "$inner/router.php"],
     [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']], $pipes, $inner);
 for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $innerPort); $i++) {
@@ -92,7 +94,7 @@ for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $innerPort); $i++) {
 }
 $body = (string)@file_get_contents("http://127.0.0.1:$innerPort/setup.php", false,
     stream_context_create(['http' => ['ignore_errors' => true, 'timeout' => 30]]));
-proc_terminate($innerProc);
+testStopProcess($innerProc);
 check(str_contains($body, 'This is a second copy of CashuPayServer'), 'the nested copy says what happened');
 check(!is_file("$inner/data/cashupay.sqlite"), 'and creates no database of its own');
 

@@ -13,6 +13,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/support/processes.php';
+
 if (PHP_SAPI !== 'cli') {
     http_response_code(403);
     exit('This script runs from the command line only.');
@@ -34,7 +36,7 @@ function check(bool $cond, string $what): void {
 
 $proc = null;
 register_shutdown_function(function () use ($dataDir, &$proc) {
-    if ($proc) { proc_terminate($proc); }
+    if ($proc) { testStopProcess($proc); }
     exec('rm -rf ' . escapeshellarg($dataDir));
 });
 
@@ -49,7 +51,7 @@ $router = "$dataDir/router.php";
 file_put_contents($router, '<?php define("CASHUPAY_DATA_DIR", ' . var_export($dataDir, true) . ');'
     . ' chdir(' . var_export($root, true) . ');'
     . ' require ' . var_export("$root/admin.php", true) . ';');
-$port = random_int(18100, 18999);
+$port = testFreePort();
 $proc = proc_open(['php', '-S', "127.0.0.1:$port", $router], [1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
     $pipes, $root, ['PHP_CLI_SERVER_WORKERS' => '4'] + getenv());
 for ($i = 0; $i < 50 && !@fsockopen('127.0.0.1', $port); $i++) { usleep(100000); }
