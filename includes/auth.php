@@ -350,7 +350,7 @@ class Auth {
      * Validate API request and return store ID
      */
     public static function validateApiRequest(): ?array {
-        $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? '';
+        $authHeader = self::getAuthorizationHeader();
 
         // BTCPay format: "token API_KEY"
         if (preg_match('/^token\s+(.+)$/i', $authHeader, $matches)) {
@@ -365,6 +365,36 @@ class Auth {
         }
 
         return null;
+    }
+
+    /**
+     * The request's Authorization header, or '' when it has none.
+     *
+     * Apache keeps this header out of the variables it hands to scripts, so on Apache
+     * $_SERVER['HTTP_AUTHORIZATION'] was empty and every API key was refused as
+     * "unauthenticated". The shipped .htaccess copies it back into HTTP_AUTHORIZATION
+     * (which some hosts expose only as REDIRECT_HTTP_AUTHORIZATION after the internal
+     * /api/v1 rewrite); without .htaccess, mod_php still has it in getallheaders().
+     * PHP-FPM and CGI behind Apache do not, and there only the .htaccess rule or the
+     * server's own CGIPassAuth On brings it back.
+     */
+    public static function getAuthorizationHeader(): string {
+        foreach (['HTTP_AUTHORIZATION', 'REDIRECT_HTTP_AUTHORIZATION'] as $name) {
+            $value = $_SERVER[$name] ?? null;
+            if (is_string($value) && $value !== '') {
+                return $value;
+            }
+        }
+
+        if (function_exists('getallheaders')) {
+            foreach (getallheaders() ?: [] as $name => $value) {
+                if (is_string($name) && strcasecmp($name, 'Authorization') === 0 && is_string($value)) {
+                    return $value;
+                }
+            }
+        }
+
+        return '';
     }
 
     /**

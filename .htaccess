@@ -4,6 +4,13 @@
 <IfModule mod_rewrite.c>
     RewriteEngine On
 
+    # Hand the Authorization header (the API key) to PHP. Apache keeps it from scripts
+    # unless told otherwise, so every API request was refused as "unauthenticated".
+    # An environment variable rather than CGIPassAuth: that directive needs Apache
+    # 2.4.13 and is a 500 error for the whole site before it.
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
     # API Key Authorization - /api-keys/authorize -> api-keys/authorize.php
     RewriteRule ^api-keys/authorize$ api-keys/authorize.php [L,QSA]
 
