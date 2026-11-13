@@ -632,7 +632,7 @@ def test_long_lived_fee_invoice_live_refresh_in_page(
         shown = page.evaluate("document.querySelector('[data-method-block=\"lightning\"] .invoice-input').dataset.copy")
         row = _read_invoice_row(configured.handle, inv["id"])
         assert shown == row["bolt11"] != first
-        assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] a.btn').href") == "lightning:" + row["bolt11"]
+        assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] a.btn').href") == "lightning:" + row["bolt11"].upper()
         assert row["fee_redirect_note"] == "DEV_FEE" and row["ln_destination"] == row0["ln_destination"]
         assert row["amount_sats"] == row0["amount_sats"] == INVOICE_AMOUNT_SAT
         _assert_fee_payee_saw_amount_only(lnurlp_server.requests[before:], row["ln_destination"], "live refresh")

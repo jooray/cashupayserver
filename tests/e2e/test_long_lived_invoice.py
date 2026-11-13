@@ -245,7 +245,9 @@ def test_live_refresh_in_page_and_refreshed_invoice_is_payable(
         shown = page.evaluate("document.querySelector('[data-method-block=\"lightning\"] .invoice-input').dataset.copy")
         row = _row(shared_configured, inv["id"])
         assert shown == row["bolt11"] != first
-        assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] a.btn').href") == "lightning:" + row["bolt11"]
+        assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] a.btn').href") == "lightning:" + row["bolt11"].upper()
+        # The refreshed QR and the button carry the same string.
+        assert page.get_attribute("#qr-lightning", "data-qr-value") == "lightning:" + row["bolt11"].upper()
         assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] button[data-copy]').dataset.copy") == row["bolt11"]
         page.wait_for_function("window.__flashes >= 1", timeout=5000)
         page.wait_for_function(
@@ -668,7 +670,7 @@ def test_other_tab_adopts_refreshed_bolt11(shared_configured: ConfiguredPayserve
             arg=second, timeout=15000,
         )
         page.wait_for_function("window.__flashes >= 1", timeout=5000)
-        assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] a.btn').href") == "lightning:" + second
+        assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] a.btn').href") == "lightning:" + second.upper()
         assert page.evaluate("lnExpiresAt") == _row(cfg, inv["id"])["ln_expires_at"]
     finally:
         ctx.close()
