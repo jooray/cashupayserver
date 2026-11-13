@@ -1,8 +1,8 @@
 {
-  "version": "0.5.10-alpha",
-  "released": "2026-11-08",
-  "url": "https://github.com/jooray/cashupayserver/releases/tag/v0.5.10-alpha",
+  "version": "0.5.11-alpha",
+  "released": "2026-11-13",
+  "url": "https://github.com/jooray/cashupayserver/releases/tag/v0.5.11-alpha",
   "severity": "security",
   "min_supported": "0.5.0-alpha",
-  "notes": "Security and payment fixes: payment requests can no longer be marked paid without the money arriving, money on a backup mint can be withdrawn while the main mint is down, and a reinstalled WordPress plugin marks orders paid again. Upgrade now, keeping your data folder."
+  "notes": "Security and payment fixes: a stranger who started setup before you is now logged out when you take it over, deleting a WordPress staging copy can no longer disconnect your live shop, and the server warns you when shop notifications or background checks stop. Upgrade now, keeping your data folder."
 }

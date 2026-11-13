@@ -1,0 +1,81 @@
+# Verification of AUDIT-KIMIK31.md
+
+> **Status:** every confirmed and partially confirmed item below, both new bugs and the three feature gaps (redelivery UI, restore from backup, moving a funded data folder) were fixed in v0.5.11-alpha. The two unconfirmed claims needed no product change; the misleading test fixture was corrected.
+
+**Verified:** 2026-11-13 against `60c6897` (cashu-wallet-php `7d9f262`, mint-discovery `0c50a6b`).
+**Method:** each of the 42 claims was traced in current source; line numbers below are current HEAD
+(the audit's are often a few lines off). Reproduced locally where cheap: WP uninstall cross-site
+revocation, v6→v14 upgrade with webhooks (from a real v0.4.1-alpha tree), SQLite sidecar modes,
+display_errors leaks. The highest-impact items (setup session, webhook OOM, cancelled-delivery alert,
+cross-unit delete) were re-read by hand.
+
+## Scoreboard
+
+| Result | Count |
+|---|---|
+| Confirmed | 23 |
+| Partially confirmed (real code gap, impact/likelihood overstated or framing wrong) | 17 |
+| Not confirmed | 2 (UX-A1 webhook columns, SQLite sidecar permissions) |
+| **New bugs the audit missed** | 2 (cancelled webhook rows → permanent alert; delete ignores other-unit backup balance) |
+
+The audit's P1/A labels are unreliable: UX-A1 (P1) is false, UX-F1 (P1) is near-zero impact, while the
+two most dangerous real issues (setup session survival, webhook OOM wedge) are ranked alongside DoS nits.
+
+## Recommended fix order
+
+### Tier 1 — real, reachable, small effort (do now)
+
+| # | Issue | Fix | Effort |
+|---|---|---|---|
+| 1 | **Setup recovery leaves stranger's admin session valid** (`setup.php:332`, `includes/auth.php:222`, `:79-99`). `setAdminPassword()` doesn't bump `password_version`; the stranger's session (empty version) passes `isLoggedIn()` after setup completes → full admin. | In setup step 2 call `bumpPasswordVersion()` (make it public or add `Auth::setInitialAdminPassword()`) before `startAdminSession()`. Also bump on successful ownership-token recovery. Re-check `tests/setup_wizard_2026_10.php:183-193` which asserts the version is unchanged. Test: session A claims+sets password, B recovers+completes; A's cookie on `admin.php?api=dashboard` → 401. | S |
+| 2 | **Webhook response buffered unbounded → permanent background wedge** (`includes/webhook_sender.php:303-327`, `:356-379`). A body > memory_limit is a fatal; `attempts` is only bumped after `curl_exec`, so the same row is claimed first on every run and every rotating task after it never runs. | `CURLOPT_WRITEFUNCTION` capping at 64 KiB (count only, discard). Increment `attempts` in `claimNextDelivery()` (at lease time) so any crash still counts. Cross-cutting: persist `cron_task_cursor` / a "running X" marker *before* each task and skip a task that died last run. | S (+M cross-cutting) |
+| 3 | **NEW: cancelled webhook rows trigger a permanent alert** (`webhook_sender.php:467-477` sets `attempts=80`, `delivered_at NULL`; counted by `admin.php:306-309` and `includes/alerts.php:79-85`; `cleanupWebhooks` only deletes delivered rows). Reconnecting the shop while deliveries are pending → "Your shop has not been told about N payment(s)" forever. Also counted by `StoreSafety` undelivered blocker. | Add `AND signing_secret IS NOT NULL` (or a `cancelled_at` column) to both counters and the StoreSafety blocker; let cleanup prune cancelled rows. | S |
+| 4 | **NEW: store deletion ignores spendable ecash at a backup mint in another unit** (`Invoice::getBalance()` sums only `same_unit` accounts, `invoice.php:1261`; `deletionBlockers` per-account loop checks journals + EXPORTED only, `store_safety.php:117-134`). Used by `admin.php:1900` and `api/stores.php:137`. EUR backup balance → deleted without warning. | In `deletionBlockers` add per-account UNSPENT (and UNKNOWN, `ready=0`) blockers, labelled with unit. Test: EUR backup with balance blocks delete. | S |
+| 5 | **WordPress uninstall revokes credentials in a foreign wallet** — reproduced (`wordpress/uninstall.php:34-50`, `:74-106`). Staging clone + legacy `dirname(ABSPATH)/cashupay-data` or copied `CASHUPAY_DATA_DIR` → deleting plugin on staging deletes production's API key and disables its webhook. | Only touch a candidate dir whose `.owner` first line equals `ABSPATH` (and blog id), or, without marker, whose `config.base_url` normalises to `site_url('/cashupay')`. Move `cashupay_data_dir_marker` / `cashupay_same_site_url` from bootstrap into a side-effect-free include and reuse. | S–M |
+| 6 | **UX-A2 setup says "configured" when webhook registration failed** (`setup.php:2154-2155`; `btcpay-integration.php:86-97`; dependency notice stops once `btcpay_gf_url` set, `btcpay-dependency.php:175-196`). Orders silently stay Pending; no failed deliveries exist to alert on. | `$wooConfigured = success && webhook.success`; show the same host-support text as `btcpay-dependency.php:326`. Make `cashupay_btcpay_next_step()` also require an enabled webhook row for the store with the `?wc-api=btcpaygf_default` URL. | S–M |
+| 7 | **UX-A5 stale/never-run background not in wp-admin notices** (`includes/alerts.php:31-89`). Common on cheap hosts with WP-Cron disabled / loopback blocked; email/Nostr alerts can't fire from a stopped runner. | Add a `stale:<day>` problem in `Alerts::problems()` when `cron_last_run` is 0 >15 min after setup or older than `Health::HEARTBEAT_STALE_SECONDS`; business wording ("paid orders aren't being marked paid, withdrawals paused"). | S |
+| 8 | **Payment health green while every poll fails** (`invoice.php:438-499` swallows per-invoice errors; `background_runner.php:111-114` returns `'success'`). Health reports "Payments are processed" during a mint outage. | `pollPendingQuotes` returns `['polled'=>n,'errors'=>k]` (only still-open invoices); wrapper returns it so `failureOf` sees errors. Same for `ensurePrimaryWalletsReady`. Test: stub `checkMintQuote` throwing → `Health::report()` payments FAIL. | M |
+| 9 | **Withdrawal reconcile head-of-line blocking** (`background_runner.php:546-561`: cursor reset every run; deadline checked only after each row; 30 s mint timeout vs 15 s budget). Happens without any attacker during a mint outage; later withdrawals and the whole token pass are never visited. | Persist `reconcile_withdrawal_cursor` (share helper with the token cursor); shorter per-call timeout (~8 s); skip remaining rows at a mint that just timed out; reserve ~5 s for the token pass. | S–M |
+| 10 | **Plain-HTTP public mints accepted** (`CashuWallet.php:3792`, `includes/mint_helpers.php:26-55`, `security.php:360`). Operator-entered only (receive refuses foreign mints), but proofs travel in cleartext. | In `MintHelpers::assertSafeMintUrl` refuse `http` unless all resolved IPs are private/loopback and `privateMintsAllowed()`. Same rule in the ConnectGuard policy; dashboard alert for stored http mints ("change it to https://…"). | S |
+
+### Tier 2 — real but narrow; cheap hardening
+
+| Issue | Verdict | Fix | Effort |
+|---|---|---|---|
+| UX-F7 delete / mint change without `funds_<store>` lock (`admin.php:1692-1830`, `1892-1937`, `api/stores.php:122-162`) | Confirmed, narrow window (realistic: mint change with `confirm_stranding` while auto-withdraw melts) | Copy `remove_backup_mint` pattern: acquire lock → 409 if busy → re-read blockers → mutate → release in `finally`. | S |
+| UX-F3 UNKNOWN invisible to guards (`store_safety.php:117-134`, `179-191`, `268-321`) | Partial: enabled backups *are* reconciled by `ensurePrimaryWalletsReady`; gaps are disabled backups, guards, stranded scanner | Add UNKNOWN + `ready=0` blockers (with #4), add UNKNOWN to `strandedForStore` holdings SQL. | S |
+| UX-F5 recovery kit omits `payment_requests` mints; settled invoices pruned after 90 d | Partial (only matters after mint change + site loss) | Add `SELECT DISTINCT mint_url, unit FROM payment_requests WHERE store_id=?` to `RecoveryKit::mints`; append-only `mint_history_<storeId>` written on mint/unit change and backup add. | S |
+| UX-F6 `markTaken` before payload generation (`admin.php:1209`) | Confirmed, cosmetic | Build payload, then `markTaken`, then echo; optionally an "I saved/printed it" ack for HTML. | S |
+| UX-F4 journal-only former namespaces absent from stranded scan (`invoice.php:1784-1789`) | Confirmed, hard to reach (needs F7 race or forced delete) | Seed scan from `cashu_pending_operations` too; list as non-exportable with "add this mint as a backup to finish it" (re-adding already triggers recovery). | S–M |
+| QR crash on oversized invoice stops status polling (`payment.php:565-583`, also `receive.php:983`, `admin.php:6346/6972`) | Confirmed (hostile/odd mint, or very long legit invoice) | try/catch around QR with "copy invoice instead"; start `pollStatus()` before drawing; cap `strlen($quote->request) > 4096` + bech32 charset in `assertQuoteMatchesRequest`. | S |
+| Expired-quote melt release during in-flight POST (`CashuWallet.php:6366-6384`) | Partial: needs non-standard mint (Nutshell/CDK set PENDING on accept); `funds_` lock contains damage | Require `expiry < now` **and** journal age > `MELT_RELEASE_AFTER`; same age rule in `reconcileWithdrawal` failure check. | S |
+| IPv6 rotation on receive POST / payment-request creation (`receive.php:149`, `:827`; `security.php:29-56`) | Partial: true, but no worse than multi-IP attacker; real gap is no global/per-store cap and 7-day retention of expired pending rows | `/64` bucketing in `checkRateLimit` (reuse `lockoutKey` logic); per-store buckets; shorten 25 s store-lock wait; purge pending requests at TTL+1 day; insert row after `loadMint()` succeeds. | S |
+| Display-errors leaks: cron array key (`cron.php:37-40`), DB exception on `/` and `admin.php` (reproduced: v99 DB → HTTP 200 with stack trace), preflight path in WP plugin direct access | Confirmed / confirmed / partial | One startup policy in `entrypoint_guard.php`: `ini_set('display_errors','0')` for non-CLI + `set_exception_handler` rendering a plain-language 503 via `cashupay_preflight_page` (also fixes Marta's white screen after a downgrade or locked DB). `is_string()` check on cron key. Move WP-plugin direct-access 403 to the top of `cashupay_preflight()`. | S–M |
+| UX-A6 stale-runner message says "add the cron job shown during setup" — never shown again, never shown in WP | Confirmed (wrong instructions) | Mode-aware message; Settings → "Background checks" card with `Urls::cron()` + key (standalone); label button "Run once now". | S–M |
+| UX-A7 readable-link check treats WP_Error (`null`) as success (`wordpress/admin-menu.php:68-101`) | Partial (JSON-error part wrong: any JSON proves routing) | Third outcome "couldn't check automatically — open <url>, if you see Page not found do X"; optionally require `isCashuPayServer===true`. | S |
+| UX-A8 WP exposure probe is content-blind (`admin-menu.php:282-335`) | Confirmed, rare false positives | `Range: bytes=0-15`, require `SQLite format 3` / match local header bytes; reject HTML; else "inconclusive". | S |
+| UX-A11 gateway URL prefix match (`btcpay-integration.php:16-29`) | Confirmed edge case; **more realistic inverse**: scheme/case-sensitive, so http→https move makes our own URL look like "a real BTCPay" and Connect refuses | Single `cashupay_gateway_url_is_ours()` normaliser (host+port lowercase, scheme ignored, exact path or path+`/`) used by connect and uninstall. | S |
+| UX-A12 zero ready stores → 200 DEGRADED, contradicting Settings copy (`health.php:119-127`) | Partial (`wallet_account_id` mismatch is unreachable) | 0 ready stores after setup → FAIL/503; add `wallet_account_id IS NOT NULL`; update `tests/health_endpoint.php:66`. | S |
+| UX-A9 polling `updateUI(undefined)` on JSON error body (`payment.php:665-697`) | Partial (most error paths are HTML → caught) | Check `response.ok`, accept only known statuses; after N failures show "We can't check right now. If you already paid, do not pay again." | S |
+| Mint-info timeout cleared before body read (`mint-discovery/mint-info-fetcher.js:42-53`) | Confirmed (any Nostr publisher can hang admin discovery UI) | Keep timer armed through `response.json()`, clear in `finally`; byte cap via reader; batch deadline; rebuild bundle. | S |
+| Nostr `u`-tag cardinality (`nostr-client.js:249-277`, `storage.js`) | Partial (reviews keyed by eventId; relays cap events) | Cap `u` tags/event (~5) and URLs/discovery (~300); reject non-https / IP-literal hosts; evict stale httpInfo. | S–M |
+| Never-polled invoices first in queue (`invoice.php:455-465`) | Partial ("cross-store attack" framing is wrong — single operator; invoices need auth) | `ORDER BY (status='Processing') DESC, COALESCE(last_polled_at, created_at) ASC`; same COALESCE in recovery queries. | S |
+| Direct PAID melt with short/empty change (`CashuWallet.php:8119-8133`) | Partial (only a broken/hostile mint; ≤ fee reserve) | If expected change but response short/empty → `recoverMeltChange()` NUT-09 path, `changeRecoveryPending=true` on failure. | S |
+| Restore ignores persisted keysets missing from latest listing (`CashuWallet.php:9846-9893`, `10022`, `10103`) | Confirmed, low impact (vanished keysets usually unredeemable) | Union persisted not-done rows into plan; `/keys/{id}`; definite unknown-keyset → abandoned with dashboard warning, not a permanent block. | S–M |
+| UX-F1 transfer open + proof reservation on two connections | Partial: needs crash in ~1 ms gap; worst effect is a wrong ledger until sync. **Not P1.** Don't reorder (worse). | In `reconcileTokenTransfer`, before re-POSTing a donation, if any proof is still locally UNSPENT and row > 10 min old → `Transfer::fail` without POST. | S |
+| UX-F2 stranded write-off without mint check (`admin.php:3045-3068`) | Partial (rebuilt-token concern theoretical; write-off is operator-confirmed and scoped to export_id) | NUT-07 check on ack; refuse if UNSPENT; unverified write-off only behind a second confirmation when mint unreachable. | S |
+| WP self-cron key over http when `site_url` is http (`includes/background.php:128-152`) | Partial (fallback path only; key only triggers runs visitors trigger anyway) | Use https when pinned `base_url` is https; invert test at `tests/network_guard_2026_10.php:183`. | S |
+| Failed revocation drops the only key copy (`uninstall.php:102-113`) | Partial (Connect already revokes old woocommerce keys) | On DB error keep the hash in `cashupay_pending_key_revocations`, revoke on activation. | S |
+| Alerts relay `fgets` without length (`includes/alerts.php:386-401`) | Confirmed, negligible (hardcoded major relays) | `fgets($sock, 8193 - strlen($head))`; overall 15 s handshake deadline. | S |
+| Fiat price re-converted in `Invoice::create` (`admin.php:1494-1546`) | Partial, negligible (`Config` static cache returns the same rate within the request) | Optional: trusted-only `_priced` option passing the guarded amount. | S |
+
+### Feature gaps (not bugs) — roadmap
+
+- **UX-A3 redelivery UI**: list undelivered rows (order id, event, attempts, last response, next retry / gave up) + CSRF-protected "Tell the shop again" calling existing `WebhookSender::requeueDelivery()`. M. (Fix #3 first.)
+- **UX-A4 browser DB restore**: if built, must force a seed restore scan (stale NUT-13 counters / proof states in an old snapshot) before taking payments — the audit's proposed fix omits this. Simplest: "Start from a backup file" in fresh setup only. L (docs-only: S).
+- **UX-A10 relocating a funded wallet**: locked, password-confirmed move using `VACUUM INTO` + verification + existing marker machinery. L. Matters when a host change exposes the data dir.
+
+### Not confirmed
+
+- **UX-A1 v6 databases lack `webhook_deliveries.invoice_id` / `event_type`** — false. Both columns exist since the initial commit (`49f21d0`), including v0.4.1-alpha (schema v6). A real v0.4.1 DB upgraded to v14 and `WebhookSender::fireEvent` inserted fine. The hand-trimmed fixture at `tests/upgrade_path.php:44` misled the auditor. *Fix the fixture* to the real v6 DDL and add a `fireEvent` call after upgrade.
+- **SQLite sidecars weakly permissioned** — false. SQLite's unix VFS creates `-wal`/`-shm` with the main file's mode regardless of umask (tested 0600→0600, 0640→0640). Only defence-in-depth remains: optionally `chmod 0700` an existing data dir owned by the euid.
