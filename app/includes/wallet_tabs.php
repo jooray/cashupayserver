@@ -30,9 +30,10 @@ final class WalletTabs {
      * the tab shows. `file` names the logo under images/payment-methods/
      * (the same artwork as the "Pay with" brand row); `class` is the extra
      * pm-logo class that row applies to it; `button` labels the tab's
-     * open-in-wallet button (Cash App handles lightning: links itself, so
-     * its button names the app; the card apps have no such handler and keep
-     * the generic label, which opens whatever wallet the phone has).
+     * open-in-wallet button (Cash App has a universal link that opens the
+     * app on a Lightning invoice — Urls::cashAppLightningUri — so its button
+     * names the app; the card apps have no such hand-off and keep the
+     * generic label, which opens whatever wallet the phone has).
      */
     public const BRANDS = [
         self::CASHAPP => [

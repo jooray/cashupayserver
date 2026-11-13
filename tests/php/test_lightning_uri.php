@@ -29,4 +29,18 @@ assert_eq('lightning:', Urls::lightningUri(''), 'empty input yields a bare schem
 $mixed = Urls::lightningUri('LnBc210U1pExAmPlE');
 assert_eq('lightning:LNBC210U1PEXAMPLE', $mixed, 'mixed-case input is normalised to one case');
 
+// Urls::cashAppLightningUri — Cash App's universal link, the href the
+// "Pay with Cash App" button and the brand-row Cash App logo carry. The
+// tapped lightning: link never reliably reached Cash App (the OS routes the
+// scheme); the QR keeps lightning: because Cash App's scanner takes it.
+$cashApp = 'https://cash.app/launch/lightning/' . $upper;
+assert_eq('https://cash.app/launch/lightning/', Urls::CASHAPP_LIGHTNING_BASE, 'documented universal-link base');
+assert_eq($cashApp, Urls::cashAppLightningUri($bolt11), 'universal link carries the upper-case invoice');
+assert_eq($cashApp, Urls::cashAppLightningUri($upper), 'an already upper-case invoice is unchanged');
+assert_eq($cashApp, Urls::cashAppLightningUri('lightning:' . $bolt11), 'a lightning:-prefixed input loses the scheme');
+assert_eq($cashApp, Urls::cashAppLightningUri("  $bolt11\n"), 'surrounding whitespace is dropped');
+assert_eq('https://cash.app/launch/lightning/LNBC210U1PEXAMPLE', Urls::cashAppLightningUri('LnBc210U1pExAmPlE'), 'mixed case is normalised');
+assert_eq('https://cash.app/launch/lightning/', Urls::cashAppLightningUri(''), 'empty input yields the bare base (callers gate on the bolt11 first)');
+assert_eq(substr(Urls::lightningUri($bolt11), 10), substr(Urls::cashAppLightningUri($bolt11), strlen(Urls::CASHAPP_LIGHTNING_BASE)), 'both links carry the identical invoice string');
+
 echo "test_lightning_uri: all assertions passed\n";
