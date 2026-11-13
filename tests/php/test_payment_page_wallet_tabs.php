@@ -129,8 +129,9 @@ $caBlock = block($html, 'cashapp');
 assert_true(str_contains($caBlock, 'class="method-block hidden" data-method-block="cashapp" data-source="lightning"'), 'Cash App block starts hidden, lightning-sourced');
 assert_true(str_contains($caBlock, 'id="qr-cashapp"'), 'Cash App QR container');
 assert_true(str_contains($caBlock, 'Go to the QR code icon in Cash App or tap &quot;Pay with Cash App&quot;.'), 'Cash App note');
-assert_true(str_contains($caBlock, 'href="lightning:' . strtoupper($bolt11) . '"'), 'Cash App Pay button opens the lightning: URI (upper-case, as the QR encodes it)');
-assert_false(str_contains($caBlock, 'href="lightning:' . $bolt11 . '"'), 'no lower-case lightning: href survives');
+assert_true(str_contains($caBlock, 'href="https://cash.app/launch/lightning/' . strtoupper($bolt11) . '" class="btn" data-ln-link="cashapp"'), 'Cash App Pay button opens the universal link (upper-case invoice, as the QR encodes it)');
+assert_false(str_contains($caBlock, 'href="lightning:'), 'the Cash App tab has no lightning: href — the OS need not route that scheme to Cash App');
+assert_false(str_contains($caBlock, $bolt11 . '"' . ' class="btn"'), 'no lower-case invoice in the open link');
 assert_true(str_contains($caBlock, 'data-copy="' . $bolt11 . '"'), 'Cash App copies the bolt11');
 assert_true(str_contains($caBlock, 'Copy Invoice'), 'Cash App copy button wording');
 assert_true(str_contains($caBlock, 'Pay with Cash App'), 'the Cash App tab names its open button after the app');
@@ -172,6 +173,8 @@ assert_true(str_contains($caBlock, 'data-source="onchain"'), 'Cash App block on-
 assert_true(str_contains($caBlock, 'Go to the QR code icon in Cash App or tap &quot;Pay with Cash App&quot;.'), 'Cash App note shows on the on-chain fallback too');
 assert_true(str_contains($caBlock, 'Pay with Cash App'), 'Cash App button label on the on-chain fallback too');
 assert_true(str_contains($caBlock, 'href="bitcoin:' . $addr), 'Cash App Pay button opens the BIP-21 URI');
+assert_false(str_contains($caBlock, 'data-ln-link='), 'the on-chain-sourced Cash App button is not a Lightning link (nothing to refresh)');
+assert_false(str_contains($caBlock, 'cash.app/launch'), 'no universal link without a bolt11');
 assert_true(str_contains($caBlock, 'Copy Address'), 'Cash App copy wording follows the source');
 
 // --- only Venmo enabled ------------------------------------------------------
@@ -179,7 +182,11 @@ $html = run_payment_page('venmo_both');
 assert_eq(['onchain', 'lightning', 'venmo'], tab_order($html), 'only the enabled wallet gets a tab');
 assert_false(str_contains($html, 'class="method-tabs method-tabs-wallets"'), 'three tabs share one strip');
 assert_false(str_contains($html, 'data-tab="cashapp"'), 'Cash App logo (no tab) stays a wallet link');
-assert_true(str_contains($html, 'aria-label="Pay with BTC wallet (Cash App)"'), 'Cash App logo stays a wallet link');
+// The on-chain view opens first here, so the logo starts on the BIP-21 URI;
+// applyPaymentMethodLinks swaps it to the universal link on the Lightning view.
+assert_true(str_contains($html, '<a class="pm-item" data-wallet="cashapp" href="bitcoin:' . $addr), 'Cash App logo stays a wallet link (BIP-21 on the initial on-chain view)');
+assert_true(str_contains($html, 'aria-label="Pay with Cash App"'), 'Cash App logo is labelled after the app');
+assert_true(str_contains($html, 'data-href-cashapp="https://cash.app/launch/lightning/' . strtoupper($bolt11) . '"'), 'brand row carries the universal link for the Lightning view');
 assert_true(str_contains($html, 'data-tab="venmo"'), 'Venmo logo switches to its tab');
 assert_false(str_contains($html, 'data-tab="paypal"'), 'PayPal logo stays a plain link');
 

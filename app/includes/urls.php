@@ -145,6 +145,27 @@ class Urls {
         return 'lightning:' . strtoupper($bolt11);
     }
 
+    /** Cash App's universal link for paying a Lightning invoice. */
+    public const CASHAPP_LIGHTNING_BASE = 'https://cash.app/launch/lightning/';
+
+    /**
+     * The link that opens Cash App on a Lightning invoice:
+     * https://cash.app/launch/lightning/<BOLT11>.
+     *
+     * Cash App's camera accepts a lightning: QR, but a tapped lightning:
+     * link is routed by the phone's OS to whichever app claims that scheme,
+     * and Cash App does not document claiming it — merchants reported the
+     * tapped button failing while a scan of the identical invoice paid.
+     * Cash App's documented hand-off from another app is this universal
+     * link (the Breez SDK, Conduit and OpenRampKit all use it): with the
+     * app installed it opens straight onto the pay screen, otherwise it
+     * lands on cash.app's website. The invoice is upper-cased like the QR;
+     * bech32 is URL-safe so it needs no encoding.
+     */
+    public static function cashAppLightningUri(string $bolt11): string {
+        return self::CASHAPP_LIGHTNING_BASE . substr(self::lightningUri($bolt11), strlen('lightning:'));
+    }
+
     /**
      * Should the payment page offer a "Share" button for the invoice URL?
      *

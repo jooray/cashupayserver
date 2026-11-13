@@ -284,8 +284,8 @@ remaining browser-side connections are:
   browser opens a read-only connection to the Nostr relay from your noffer string to learn of
   settlement quickly. That relay sees the customer's IP address. Other rails do not do this.
 - **Plain links:** pages link to external sites (for example, transaction views on
-  mempool.space, wallet vendors on the payment page, documentation). These transmit nothing
-  unless clicked.
+  mempool.space, wallet vendors on the payment page, Cash App's open-in-app link for a
+  Lightning invoice, documentation). These transmit nothing unless clicked.
 
 ## 5. What the software does *not* do
 

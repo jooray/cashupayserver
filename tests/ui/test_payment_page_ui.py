@@ -130,8 +130,21 @@ def test_payment_page_displays_invoice_amount(
 
 
 # Each "Pay with" brand shows a name caption and acts as the "Pay with BTC
-# wallet" button of the active method.
+# wallet" button of the active method. Cash App is the exception on the
+# Lightning and Cashu views: its logo opens the app's universal link.
 EXPECTED_BRANDS = ["Cash App", "Strike", "Coinbase", "Kraken", "Venmo", "PayPal"]
+CASHAPP_BASE = "https://cash.app/launch/lightning/"
+
+
+def _expected_logo_hrefs(page, generic: str) -> list:
+    """What each logo should carry when the generic wallet URI is `generic`:
+    Cash App gets the universal link whenever the generic one is a lightning:
+    URI, every other brand the generic one."""
+    names = page.eval_on_selector_all(
+        "#payment-methods a.pm-item .pm-name", "els => els.map(e => e.textContent.trim())"
+    )
+    cashapp = CASHAPP_BASE + generic[len("lightning:"):] if generic.startswith("lightning:") else generic
+    return [cashapp if n == "Cash App" else generic for n in names]
 
 
 def _logo_hrefs(page) -> list:
@@ -161,11 +174,16 @@ def test_payment_page_provider_logos_open_wallet_and_label(
         assert link.count() == 1, f"expected one logo for {name}"
         # Same target as the "Pay with BTC wallet" button: the invoice's
         # lightning: URI (upper-case, exactly what the QR encodes), opened in
-        # this tab (no provider-site new-tab link).
-        assert link.get_attribute("href") == f"lightning:{bolt11.upper()}"
+        # this tab (no provider-site new-tab link). Cash App's logo opens the
+        # app's universal link with that same upper-case invoice instead.
+        if name == "Cash App":
+            assert link.get_attribute("href") == f"{CASHAPP_BASE}{bolt11.upper()}"
+            assert link.get_attribute("aria-label") == "Pay with Cash App"
+        else:
+            assert link.get_attribute("href") == f"lightning:{bolt11.upper()}"
+            assert "Pay with BTC wallet" in (link.get_attribute("aria-label") or "")
         assert link.get_attribute("target") is None
         assert link.locator("img.pm-logo").get_attribute("alt") == name
-        assert "Pay with BTC wallet" in (link.get_attribute("aria-label") or "")
 
     # "or any Bitcoin wallet" sits on its own line beneath the logos, larger
     # than the brand captions.
@@ -216,11 +234,10 @@ def test_payment_page_provider_logos_follow_active_method(
             page.click(f'.method-tab[data-method="{method}"]')
             assert page.get_attribute("#payment-methods", "data-method") == method
             hrefs = _logo_hrefs(page)
-            assert hrefs and all(h == expected[method] for h in hrefs), (method, hrefs)
-            # The logos match the method's own "Pay with BTC wallet" button,
-            # and the button carries exactly the string the QR encodes (Cash
-            # App declined the button's lower-case bolt11 while paying the
-            # same invoice from the QR).
+            assert hrefs and hrefs == _expected_logo_hrefs(page, expected[method]), (method, hrefs)
+            # The logos match the method's own "Pay with BTC wallet" button
+            # (Cash App's via its universal link on the Lightning view), and
+            # the button carries exactly the string the QR encodes.
             btn = page.get_attribute(f'[data-method-block="{method}"] a.btn', "href")
             assert btn == expected[method]
             assert page.get_attribute(f"#qr-{method}", "data-qr-value") == btn
@@ -250,7 +267,8 @@ def test_payment_page_provider_logos_on_cashu_view(
         page.click('.method-tab[data-method="cashu"]')
         assert page.get_attribute("#payment-methods", "data-method") == "cashu"
         hrefs = _logo_hrefs(page)
-        assert hrefs and all(h == f"lightning:{bolt11.upper()}" for h in hrefs), hrefs
+        assert hrefs and hrefs == _expected_logo_hrefs(page, f"lightning:{bolt11.upper()}"), hrefs
+        assert f"{CASHAPP_BASE}{bolt11.upper()}" in hrefs, "Cash App logo opens the app on the Cashu view too"
 
         # Strip the Lightning leg: Cashu is the only method, nothing to open.
         with configured.handle.db() as conn:

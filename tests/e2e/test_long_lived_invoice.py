@@ -674,3 +674,51 @@ def test_other_tab_adopts_refreshed_bolt11(shared_configured: ConfiguredPayserve
         assert page.evaluate("lnExpiresAt") == _row(cfg, inv["id"])["ln_expires_at"]
     finally:
         ctx.close()
+
+
+def test_refresh_rewrites_cash_app_links(shared_configured: ConfiguredPayserver, browser) -> None:
+    """The Cash App wallet tab's button and the brand-row logo open the app's
+    universal link (https://cash.app/launch/lightning/<BOLT11>), not the
+    lightning: scheme; a refreshed bolt11 must land in those too, while the
+    tab's QR keeps the lightning: URI the scanner reads."""
+    cfg = shared_configured
+    base = "https://cash.app/launch/lightning/"
+    with cfg.handle.db() as db:
+        prev = db.execute("SELECT wallet_tabs FROM stores WHERE id = ?", (cfg.store_id,)).fetchone()[0]
+        db.execute("UPDATE stores SET wallet_tabs = 'cashapp' WHERE id = ?", (cfg.store_id,))
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    try:
+        inv = _create_long_lived(cfg)
+        first = _bolt11(inv)
+        url = _payment_url(cfg, inv["id"])
+        page.goto(url, wait_until="domcontentloaded")
+        page.wait_for_selector("#ln-refreshed", timeout=10000)
+        page.click('.method-tab[data-method="cashapp"]')
+        page.wait_for_function("() => document.querySelector('#qr-cashapp canvas') !== null")
+        btn = '[data-method-block="cashapp"] a.btn'
+        assert page.get_attribute(btn, "href") == base + first.upper()
+        assert page.get_attribute("#qr-cashapp", "data-qr-value") == "lightning:" + first.upper()
+        # The Cash App tab keys the brand row off Lightning; with its own tab
+        # shown the logo switches tabs rather than linking, so check the
+        # data-href the row would hand a tab-less logo.
+        assert page.get_attribute("#payment-methods", "data-href-cashapp") == base + first.upper()
+
+        _set(cfg, inv["id"], ln_expires_at=int(time.time()) - 1)
+        r = requests.post(url, data={"action": "refresh_lightning"}, timeout=30)
+        assert r.json()["ok"] is True, r.text
+        second = r.json()["bolt11"]
+        assert second != first
+        page.wait_for_function(
+            "(second) => document.querySelector('[data-method-block=\"cashapp\"] .invoice-input').dataset.copy === second",
+            arg=second, timeout=15000,
+        )
+        assert page.get_attribute(btn, "href") == base + second.upper()
+        assert page.get_attribute("#qr-cashapp", "data-qr-value") == "lightning:" + second.upper()
+        assert page.get_attribute("#payment-methods", "data-href-cashapp") == base + second.upper()
+        assert page.evaluate("document.querySelector('[data-method-block=\"lightning\"] a.btn').href") == "lightning:" + second.upper()
+        assert base + first.upper() not in page.content()
+    finally:
+        ctx.close()
+        with cfg.handle.db() as db:
+            db.execute("UPDATE stores SET wallet_tabs = ? WHERE id = ?", (prev, cfg.store_id))

@@ -1472,7 +1472,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                         <?= htmlspecialchars(substr($invoice['bolt11'], 0, 40) . '...' . substr($invoice['bolt11'], -10)) ?>
                     </div>
                     <div class="btn-row">
-                        <a href="<?= htmlspecialchars(Urls::lightningUri($invoice['bolt11'])) ?>" class="btn">
+                        <a href="<?= htmlspecialchars(Urls::lightningUri($invoice['bolt11'])) ?>" class="btn" data-ln-link="lightning">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                             </svg>
@@ -1603,7 +1603,18 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     $wb = WalletTabs::BRANDS[$walletKey];
                     $wIsLn = $walletSource === 'lightning';
                     $wPayload = $wIsLn ? (string)$invoice['bolt11'] : $bip21;
-                    $wUri = $wIsLn ? Urls::lightningUri($invoice['bolt11']) : $bip21;
+                    // Cash App is opened through its universal link, not the
+                    // lightning: scheme (see Urls::cashAppLightningUri); the
+                    // QR keeps the lightning: URI its scanner is known to take.
+                    $wIsCashApp = $walletKey === WalletTabs::CASHAPP;
+                    if (!$wIsLn) {
+                        $wUri = $bip21;
+                    } elseif ($wIsCashApp) {
+                        $wUri = Urls::cashAppLightningUri($invoice['bolt11']);
+                    } else {
+                        $wUri = Urls::lightningUri($invoice['bolt11']);
+                    }
+                    $wLinkKind = !$wIsLn ? '' : ($wIsCashApp ? 'cashapp' : 'lightning');
                     $wLogoClass = 'wallet-note-logo' . ($wb['class'] !== '' ? ' ' . $wb['class'] : '');
                 ?>
                 <div class="method-block hidden" data-method-block="<?= htmlspecialchars($walletKey) ?>" data-source="<?= htmlspecialchars($walletSource) ?>">
@@ -1623,7 +1634,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                         <?php endif; ?>
                     </div>
                     <div class="btn-row">
-                        <a href="<?= htmlspecialchars($wUri) ?>" class="btn">
+                        <a href="<?= htmlspecialchars($wUri) ?>" class="btn"<?= $wLinkKind !== '' ? ' data-ln-link="' . $wLinkKind . '"' : '' ?>>
                             <?php if ($wIsLn): ?>
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
@@ -1682,8 +1693,10 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 // (`tab`, see WalletTabs) instead switches to that tab when
                 // clicked (data-tab, pm-has-tab) and stays visible on every
                 // view — its tab is the right place for it.
+                // Cash App (`wallet`) opens through its universal link on the
+                // Lightning and Cashu views instead of the lightning: scheme.
                 $paymentBrands = [
-                    ['name' => 'Cash App', 'file' => 'cashapp.svg', 'tab' => WalletTabs::CASHAPP],
+                    ['name' => 'Cash App', 'file' => 'cashapp.svg', 'tab' => WalletTabs::CASHAPP, 'wallet' => WalletTabs::CASHAPP],
                     ['name' => 'Strike',   'file' => 'strike.png',   'class' => 'pm-strike'],
                     ['name' => 'Coinbase', 'file' => 'coinbase.svg'],
                     ['name' => 'Kraken',   'file' => 'kraken.svg'],
@@ -1691,17 +1704,22 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     ['name' => 'PayPal',   'file' => 'paypal.svg',   'class' => 'pm-card', 'noLightning' => true, 'tab' => WalletTabs::PAYPAL],
                 ];
                 $lightningUri = $hasLightning ? Urls::lightningUri($invoice['bolt11']) : '';
+                $cashAppUri = $hasLightning ? Urls::cashAppLightningUri($invoice['bolt11']) : '';
                 $pmLinks = [
                     'lightning' => $lightningUri,
                     'onchain'   => $hasOnchain ? $bip21 : '',
                     'cashu'     => $lightningUri,
                 ];
                 $pmInitialHref = $pmLinks[$initialMethod] ?? '';
+                // The Cash App logo's href on the views whose payload is the bolt11.
+                $pmInitialCashAppHref = in_array($initialMethod, ['lightning', 'cashu'], true) && $cashAppUri !== ''
+                    ? $cashAppUri : $pmInitialHref;
                 ?>
                 <div class="payment-methods" id="payment-methods" data-method="<?= $initialMethod ?>"
                      data-href-lightning="<?= htmlspecialchars($pmLinks['lightning']) ?>"
                      data-href-onchain="<?= htmlspecialchars($pmLinks['onchain']) ?>"
-                     data-href-cashu="<?= htmlspecialchars($pmLinks['cashu']) ?>">
+                     data-href-cashu="<?= htmlspecialchars($pmLinks['cashu']) ?>"
+                     data-href-cashapp="<?= htmlspecialchars($cashAppUri) ?>">
                     <span class="pm-label">Pay with</span>
                     <span class="pm-logos">
                         <?php foreach ($paymentBrands as $brand): ?>
@@ -1712,6 +1730,8 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                             ?>
                             <?php if ($brandTab !== ''): ?>
                             <a class="<?= $itemClass ?>" data-tab="<?= htmlspecialchars($brandTab) ?>" role="button" tabindex="0" aria-label="Show the <?= htmlspecialchars($brand['name']) ?> tab">
+                            <?php elseif (!empty($brand['wallet'])): ?>
+                            <a class="<?= $itemClass ?>" data-wallet="<?= htmlspecialchars($brand['wallet']) ?>"<?= $pmInitialCashAppHref !== '' ? ' href="' . htmlspecialchars($pmInitialCashAppHref) . '"' : '' ?> aria-label="Pay with <?= htmlspecialchars($brand['name']) ?>">
                             <?php else: ?>
                             <a class="<?= $itemClass ?>"<?= $pmInitialHref !== '' ? ' href="' . htmlspecialchars($pmInitialHref) . '"' : '' ?> aria-label="Pay with BTC wallet (<?= htmlspecialchars($brand['name']) ?>)">
                             <?php endif; ?>
@@ -1885,6 +1905,17 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         function lightningUri(bolt11) {
             return 'lightning:' + String(bolt11).toUpperCase();
         }
+        // Cash App's universal link for a bolt11 — the PHP side's
+        // Urls::cashAppLightningUri. A tapped lightning: link is routed by the
+        // OS and need not reach Cash App at all; this opens the app itself
+        // (or cash.app's site when it isn't installed). QRs keep lightning:.
+        function cashAppLightningUri(bolt11) {
+            return <?= json_encode(Urls::CASHAPP_LIGHTNING_BASE) ?> + String(bolt11).toUpperCase();
+        }
+        // The href an open-in-wallet link tagged data-ln-link carries.
+        function lnLinkHref(kind, bolt11) {
+            return kind === 'cashapp' ? cashAppLightningUri(bolt11) : lightningUri(bolt11);
+        }
 
         function renderQR(targetId, data) {
             const target = document.getElementById(targetId);
@@ -1981,13 +2012,19 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         // inert rather than a dead link.
         // Brands with their own wallet tab (a.pm-item[data-tab]) switch tabs
         // instead and are left alone here.
+        // The Cash App logo (data-wallet="cashapp") opens the app's universal
+        // link (data-href-cashapp) wherever the method's payload is the
+        // bolt11, i.e. the Lightning and Cashu views; elsewhere it follows
+        // the method like every other brand.
         function applyPaymentMethodLinks(method) {
             const pm = document.getElementById('payment-methods');
             if (!pm) return;
             const key = 'href' + String(method || '').charAt(0).toUpperCase() + String(method || '').slice(1);
             const href = pm.dataset[key] || '';
+            const cashAppHref = (method === 'lightning' || method === 'cashu') ? (pm.dataset.hrefCashapp || '') : '';
             pm.querySelectorAll('a.pm-item:not([data-tab])').forEach(a => {
-                if (href) a.setAttribute('href', href);
+                const target = (a.dataset.wallet === 'cashapp' && cashAppHref) ? cashAppHref : href;
+                if (target) a.setAttribute('href', target);
                 else a.removeAttribute('href');
             });
         }
@@ -2178,14 +2215,16 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                         input.dataset.copy = invoice;
                         input.textContent = invoice.slice(0, 40) + '...' + invoice.slice(-10);
                     }
-                    const open = block.querySelector('a.btn[href^="lightning:"]');
-                    if (open) open.href = lightningUri(invoice);
+                    block.querySelectorAll('a.btn[data-ln-link]').forEach(open => {
+                        open.href = lnLinkHref(open.dataset.lnLink, invoice);
+                    });
                     block.querySelectorAll('button[data-copy]').forEach(b => { b.dataset.copy = invoice; });
                 });
                 const pm = document.getElementById('payment-methods');
                 if (pm) {
                     pm.dataset.hrefLightning = lightningUri(invoice);
                     pm.dataset.hrefCashu = lightningUri(invoice);
+                    pm.dataset.hrefCashapp = cashAppLightningUri(invoice);
                     applyPaymentMethodLinks(pm.dataset.method);
                 }
                 nofferSub = data.nofferSub || null;
