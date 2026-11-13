@@ -25,6 +25,7 @@ require_once __DIR__ . '/includes/auth.php';
 require_once __DIR__ . '/includes/urls.php';
 require_once __DIR__ . '/includes/security.php';
 require_once __DIR__ . '/includes/setup_ownership.php';
+require_once __DIR__ . '/includes/data_folder.php';
 
 /**
  * The configured CashuPayServer installation this folder sits inside, if any: a parent
@@ -120,6 +121,14 @@ if (!Database::isInitialized()) {
 $setupTokenRequired = !$setupComplete && !$isWordPressSetup && !Setup::ownershipVerified();
 $recoveryError = null;
 $isPost = $_SERVER['REQUEST_METHOD'] === 'POST';
+// Set when "Start from a backup file" could not be done: shown in its box (UX-A4).
+$restoreProblem = null;
+if ($isPost && DataFolder::postTooLarge()) {
+    // PHP dropped the whole request (the backup is larger than post_max_size), CSRF
+    // token included: explain the limit instead of "your session expired".
+    $restoreProblem = DataFolder::uploadProblem(['error' => UPLOAD_ERR_INI_SIZE, 'size' => (int)($_SERVER['CONTENT_LENGTH'] ?? 0)]);
+    $isPost = false;
+}
 $postCsrfValid = $isPost && Auth::validateCsrfToken(is_string($_POST['csrf_token'] ?? null) ? $_POST['csrf_token'] : '');
 if ($setupTokenRequired && $postCsrfValid && is_string($_POST['setup_token'] ?? null)
     && trim($_POST['setup_token']) !== '') {
@@ -208,6 +217,44 @@ if ($isPost && $postCsrfValid && !$claimedElsewhere && setupField('action') === 
 }
 $relocateError = $_SESSION['setup_relocate_error'] ?? null;
 unset($_SESSION['setup_relocate_error']);
+
+// "Start from a backup file" (UX-A4): only on a fresh installation (no wallet yet), only
+// for the browser holding setup (or a WordPress admin), never in add_store.
+$restoreOffered = !$setupComplete && $mode !== 'add_store' && !$setupTokenRequired && DataFolder::isFreshForRestore();
+if ($isPost && $postCsrfValid && setupField('action') === 'restore_backup') {
+    if (!$restoreOffered) {
+        http_response_code(403);
+        $restoreProblem = ['error' => $setupTokenRequired
+            ? 'Only the browser that started this setup can start it from a backup.'
+            : 'This installation already has a wallet, so it cannot be started from a backup.', 'hostHelp' => null];
+    } elseif (!Security::checkRateLimit('setup_restore', Security::getClientIp(), 5)) {
+        http_response_code(429);
+        $restoreProblem = ['error' => 'Too many attempts in a row. Wait a minute and try again.', 'hostHelp' => null];
+    } elseif (setupProbeDataExposure()['status'] === 'exposed') {
+        // The backup holds the money: never put it where the web server hands it out.
+        $restoreProblem = ['error' => 'Your data folder can be downloaded from the internet, so the backup is not put there. '
+            . 'Fix that first (see the first step of this setup), then try again.', 'hostHelp' => null];
+    } elseif (($restoreProblem = DataFolder::uploadProblem(is_array($_FILES['backup'] ?? null) ? $_FILES['backup'] : null)) === null) {
+        $restored = DataFolder::restoreBackup((string)$_FILES['backup']['tmp_name']);
+        if ($restored['ok']) {
+            // The backup brings its own admin password, and every session it knew of is
+            // retired. This browser starts over as a visitor: it must prove that password.
+            Setup::clearOwnershipToken();
+            $_SESSION = [];
+            if (session_status() === PHP_SESSION_ACTIVE && !headers_sent()) {
+                session_regenerate_id(true);
+            }
+            setupRenderRestored($restored, $isWordPressSetup);
+            exit;
+        }
+        $restoreProblem = ['error' => $restored['error'], 'hostHelp' => $restored['hostHelp'] ?? null];
+    }
+    // Show the same step again with the reason; its own handler must not run.
+    $isPost = false;
+    if (!$restoreOffered) {
+        $error = $restoreProblem['error']; // the box is not on this page
+    }
+}
 
 if ($isPost) {
     if (!$postCsrfValid) {
@@ -624,6 +671,76 @@ $mintUrlTemp = $_SESSION['mint_url_temp'] ?? null;
 $mintUnits = $_SESSION['mint_units'] ?? [];
 $tempSeed = $_SESSION['temp_seed'] ?? null;
 
+
+/** "Moving from another server? Start from a backup file" (UX-A4), under the first form. */
+function setupRenderRestoreBox(string $csrfToken, int $step, ?array $problem, bool $wordpress): void {
+    $limit = DataFolder::uploadLimit();
+    ?>
+    <details id="restore-backup" style="margin-top: 1.5rem;"<?php echo $problem !== null ? ' open' : ''; ?>>
+        <summary style="cursor: pointer; color: #a0aec0;">Moving from another server? Start from a backup file</summary>
+        <div style="margin-top: 1rem;">
+            <p style="font-size: 0.9rem; margin-bottom: 0.75rem;">
+                If you have a database backup from your old CashuPayServer (in its dashboard: Settings,
+                &ldquo;Download database backup&rdquo;), upload it here instead of setting up a new store.
+                Your stores, wallets, invoices, shop connections and settings come back.
+            </p>
+            <?php if ($problem !== null): ?>
+                <div class="error"><?php echo htmlspecialchars($problem['error']); ?></div>
+                <?php if (!empty($problem['hostHelp'])): ?>
+                    <textarea readonly rows="4" style="width: 100%; font-size: 0.8rem; margin-bottom: 0.75rem;"><?php echo htmlspecialchars($problem['hostHelp']); ?></textarea>
+                <?php endif; ?>
+            <?php endif; ?>
+            <form method="post" enctype="multipart/form-data">
+                <input type="hidden" name="step" value="<?php echo (int)$step; ?>">
+                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
+                <input type="hidden" name="action" value="restore_backup">
+                <div class="form-group">
+                    <label for="backup_file">Backup file (cashupay-backup-&hellip;.sqlite)</label>
+                    <input type="file" id="backup_file" name="backup" accept=".sqlite,application/octet-stream" required>
+                    <?php if ($limit > 0): ?>
+                        <p class="help-text">This hosting accepts files up to <?php echo htmlspecialchars(DataFolder::formatBytes($limit)); ?>.</p>
+                    <?php endif; ?>
+                </div>
+                <button type="submit" class="btn btn-secondary" style="width: 100%;">Start from this backup</button>
+            </form>
+            <p class="help-text" style="margin-top: 0.75rem;">
+                <?php if ($wordpress): ?>
+                    Use the newest backup you have. Before taking payments, the server re-checks every wallet's balance by itself.
+                <?php else: ?>
+                    Use the newest backup you have. Afterwards you log in with the admin password of the old installation,
+                    and the server re-checks every wallet's balance by itself before taking payments.
+                <?php endif; ?>
+            </p>
+        </div>
+    </details>
+    <?php
+}
+
+/** The page after a successful "Start from a backup file" (UX-A4). */
+function setupRenderRestored(array $restored, bool $wordpress): void {
+    $plural = fn(int $n, string $one, string $many) => $n . ' ' . ($n === 1 ? $one : $many);
+    header('Content-Type: text/html; charset=utf-8');
+    echo '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">'
+        . '<title>Started from your backup</title><style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;'
+        . 'background:#0f1117;color:#e2e8f0;padding:2rem 1rem;line-height:1.5}.card{max-width:640px;margin:0 auto;background:#1a1d27;'
+        . 'border:1px solid #2d3343;border-radius:12px;padding:1.5rem}h1{font-size:1.3rem;color:#68d391}p{margin:0.75rem 0}'
+        . '.btn{display:inline-block;background:#f7931a;color:#fff;padding:0.7rem 1.2rem;border-radius:8px;text-decoration:none;font-weight:600}'
+        . '</style></head><body><div class="card" id="restore-done">'
+        . '<h1>Your backup is in place</h1>'
+        . '<p>This server now runs with what the backup holds: <strong>'
+        . htmlspecialchars($plural((int)$restored['stores'], 'store', 'stores')) . '</strong> and <strong>'
+        . htmlspecialchars($plural((int)$restored['invoices'], 'invoice', 'invoices')) . '</strong>, with the shop connections and settings.</p>'
+        . '<p><strong>Before it takes payments again</strong>, this server checks the balance of each wallet with its payment service, '
+        . 'because money may have come in or gone out after the backup was made. That happens by itself in the next minutes; '
+        . 'the dashboard shows the progress. Until it is done, customers are asked to try again shortly.</p>';
+    if ($wordpress) {
+        echo '<p>You are logged in to WordPress, so you can open the dashboard right away.</p>';
+    } else {
+        echo '<p><strong>Log in with the admin password of the old installation</strong>, the one that was in use when the backup was made. '
+            . 'A password you may have chosen a moment ago in this setup is not kept.</p>';
+    }
+    echo '<p><a class="btn" href="' . htmlspecialchars(Urls::admin()) . '">Open the dashboard</a></p></div></body></html>';
+}
 
 /**
  * Get the scheme://host[:port] part of the current URL (no path)
@@ -1805,6 +1922,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
 
                     <button type="submit" class="btn" style="width: 100%;">Continue</button>
                 </form>
+                <?php if ($restoreOffered) { setupRenderRestoreBox($csrfToken, 2, $restoreProblem, false); } ?>
 
             <?php elseif ($step === 4): ?>
                 <!-- Step 4: Create Store (name only) -->
@@ -1830,6 +1948,7 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                 <?php if ($mode === 'add_store'): ?>
                     <a href="<?php echo htmlspecialchars(Urls::admin()); ?>" class="btn btn-secondary" style="width: 100%; margin-top: 0.5rem; text-align: center;">Cancel</a>
                 <?php endif; ?>
+                <?php if ($restoreOffered && $isWordPressSetup) { setupRenderRestoreBox($csrfToken, 4, $restoreProblem, true); } ?>
 
             <?php elseif ($step === 5): ?>
                 <!-- Step 5: Mint Configuration (with dynamic unit selection) -->

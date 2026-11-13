@@ -303,6 +303,14 @@ function cashupay_diagnostics(?string $storeId): array {
         }
     }
 
+    // Old records a mint dropped while this store's history was being checked there:
+    // whatever was left on them is gone. Stays until the operator dismisses it.
+    try {
+        $abandonedKeysets = Invoice::abandonedKeysetNotices($storeId);
+    } catch (Throwable $e) {
+        $abandonedKeysets = [];
+    }
+
     $failedDeliveries = (int)(Database::fetchOne(
         "SELECT COUNT(*) AS cnt FROM webhook_deliveries
          WHERE delivered_at IS NULL AND attempts > 0 AND signing_secret IS NOT NULL"
@@ -443,6 +451,7 @@ function cashupay_diagnostics(?string $storeId): array {
         'pendingWalletOperations' => $pendingJournals,
         'unreachableAccounts' => $unreachableAccounts,
         'recoveringAccounts' => $recoveringAccounts,
+        'abandonedKeysets' => $abandonedKeysets,
         'insecureMints' => $insecureMints,
         // Shop notifications the shop never confirmed, for "Tell the shop again" (UX-A3).
         'undeliveredWebhooks' => (function () use ($storeId) {
@@ -461,6 +470,7 @@ function cashupay_diagnostics(?string $storeId): array {
         'needsAttention' => $stale
             || $exposureWarning !== null
             || !empty($insecureMints)
+            || !empty($abandonedKeysets)
             || !empty(array_filter($checkoutFailures, fn($f) => $f['recent']))
             || ($updatePrompt !== null && $updatePrompt['severity'] === 'security')
             || !empty(array_filter($background['failing'] ?? [], fn($t) => !empty($t['paymentPath'])))
@@ -962,7 +972,9 @@ if (isset($_GET['api'])) {
         case 'data_folder':
             // Not printed into the page itself: the shell is served before login, and
             // the absolute path tells a stranger where the wallet lives on disk.
-            echo json_encode(['path' => (string)(realpath(Database::getDataDir()) ?: Database::getDataDir())]);
+            // With what the dashboard can do about a folder inside the website (UX-A10).
+            require_once __DIR__ . '/includes/data_folder.php';
+            echo json_encode(DataFolder::status() + ['exposed' => cashupay_data_exposure_warning() !== null]);
             break;
 
         case 'proxy_settings':
@@ -1352,6 +1364,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             break;
 
+        case 'move_data_folder':
+            // Move the wallet's data folder out of the website (UX-A10): password-confirmed,
+            // and refused while a payment or withdrawal is under way (includes/data_folder.php).
+            require_once __DIR__ . '/includes/data_folder.php';
+            if (!Security::checkRateLimit('move_data_folder', Security::getClientIp(), 3)) {
+                http_response_code(429);
+                echo json_encode(['error' => 'Too many attempts. Please wait a minute.']);
+                break;
+            }
+            if (!Auth::verifyAdminPassword((string)($_POST['password'] ?? ''))) {
+                usleep(500000);
+                http_response_code(403);
+                echo json_encode(['error' => 'Incorrect password']);
+                break;
+            }
+            $moveResult = DataFolder::move();
+            if ($moveResult['ok']) {
+                echo json_encode(['success' => true, 'path' => $moveResult['path']]);
+            } else {
+                http_response_code(!empty($moveResult['busy']) ? 409 : 400);
+                echo json_encode(['error' => $moveResult['error'], 'busy' => !empty($moveResult['busy']),
+                    'hostHelp' => $moveResult['hostHelp'] ?? null]);
+            }
+            break;
+
         case 'save_proxy_settings':
             // Which hops may tell us the visitor's real address (login limits and rate
             // limits are per address). "auto" works on typical hosting with no setup.
@@ -1586,6 +1623,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             $after = Database::fetchOne('SELECT delivered_at FROM webhook_deliveries WHERE id = ?', [$deliveryId]);
             echo json_encode(['success' => true, 'delivered' => !empty($after['delivered_at'])]);
+            break;
+
+        case 'dismiss_abandoned_keysets':
+            // "Got it" on the notice that a mint dropped old records during recovery.
+            $storeId = is_string($_POST['store_id'] ?? null) ? $_POST['store_id'] : '';
+            if ($storeId === '' || !Invoice::dismissAbandonedKeysets($storeId)) {
+                http_response_code(404);
+                echo json_encode(['error' => 'Nothing to dismiss for this store.']);
+                break;
+            }
+            echo json_encode(['success' => true]);
             break;
 
         case 'run_background':
@@ -2086,7 +2134,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         . (empty($blockers) ? '' : '; ' . implode('; ', $blockers)));
                 }
 
-                Database::delete('stores', 'id = ?', [$storeId]);
+                Config::deleteStore($storeId);
                 echo json_encode(['success' => true]);
             } finally {
                 cashupay_release_lock($fundsLock);
@@ -4222,6 +4270,10 @@ $isWp = Urls::isWordPress();
                         <div class="card-title" style="color: #e53e3e;">Your money is at risk</div>
                     </div>
                     <div id="exposure-banner-body"></div>
+                    <div style="margin-top: 0.75rem;">
+                        <button class="btn" type="button" id="exposure-move-btn">Move the data out of the website for me</button>
+                        <div id="exposure-move-result" style="margin-top: 0.5rem;"></div>
+                    </div>
                 </div>
 
                 <div class="card" id="diagnostics-card" style="display: none;">
@@ -4474,6 +4526,22 @@ $isWp = Urls::isWordPress();
                         <p class="form-help" style="margin-top: 0.75rem;">
                             Data folder on the server (keep it when you upgrade, copy it for a full backup):
                             <code style="word-break: break-all;" id="data-folder-path">&hellip;</code>
+                        </p>
+                        <div id="data-folder-move" style="display: none; margin-top: 0.75rem; padding: 0.75rem; border: 1px solid var(--border); border-radius: 8px;">
+                            <p class="form-help" id="data-folder-move-text" style="margin-bottom: 0.5rem;"></p>
+                            <button class="btn btn-secondary" type="button" id="data-folder-move-btn" style="display: none;">Move it out of the website</button>
+                            <div id="data-folder-move-result" style="margin-top: 0.5rem;"></div>
+                        </div>
+                        <p class="form-help" style="margin-top: 0.75rem;">
+                            <strong>To restore</strong> the database backup, for example on a new server: install
+                            CashuPayServer there and open its setup. At the
+                            <?php echo Urls::isWordPress() ? '&ldquo;Create Store&rdquo;' : 'password'; ?> step, open
+                            &ldquo;Moving from another server? Start from a backup file&rdquo; and upload the downloaded
+                            <code>.sqlite</code> file. Only do this on a new, empty setup.
+                            <?php if (!Urls::isWordPress()): ?>
+                                You then log in there with this installation's admin password, the one in use when the backup was made.
+                            <?php endif; ?>
+                            The new server checks every wallet's balance with its payment service before it takes payments again.
                         </p>
                         <div id="seed-reveal-box" style="display: none; margin-top: 1rem; padding: 1rem; background: rgba(0,0,0,0.3); border: 1px solid var(--border); border-radius: 8px;">
                             <p style="color: var(--danger); font-size: 0.85rem; margin-bottom: 0.5rem;">
@@ -6140,6 +6208,7 @@ $isWp = Urls::isWordPress();
                 || (diag.checkoutFailures || []).length > 0
                 || (diag.undeliveredWebhooks || []).length > 0
                 || (diag.insecureMints || []).length > 0
+                || (diag.abandonedKeysets || []).length > 0
                 || (diag.pendingTransfers || []).length > 0);
             if (!hasItems) {
                 card.style.display = 'none';
@@ -6356,6 +6425,23 @@ $isWp = Urls::isWordPress();
 
             body.appendChild(list);
 
+            // A mint dropped old records during recovery: say so once, with "Got it".
+            (diag.abandonedKeysets || []).forEach(a => {
+                const host = (() => { try { return new URL(a.mint).host; } catch (e) { return a.mint; } })();
+                const p = document.createElement('p');
+                p.style.cssText = 'margin: 0.75rem 0 0;';
+                p.appendChild(document.createTextNode(`"${a.store}" (mint ${host}): Your mint has removed an old `
+                    + 'part of its records. Anything that was left there could not be checked and may be lost. '
+                    + 'Nothing else needs doing. '));
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn btn-secondary btn-sm';
+                btn.textContent = 'Got it';
+                btn.addEventListener('click', () => dismissAbandonedKeysets(a.storeId, btn));
+                p.appendChild(btn);
+                body.appendChild(p);
+            });
+
             // Shop notifications the shop never confirmed, each with "Tell the shop again".
             const undelivered = diag.undeliveredWebhooks || [];
             if (undelivered.length > 0) {
@@ -6412,6 +6498,23 @@ $isWp = Urls::isWordPress();
             card.style.display = '';
         }
 
+        async function dismissAbandonedKeysets(storeId, btn) {
+            btn.disabled = true;
+            try {
+                const response = await postWithCsrf(adminUrl, new URLSearchParams({
+                    action: 'dismiss_abandoned_keysets', store_id: storeId,
+                }));
+                if (!response.ok) {
+                    const result = await response.json().catch(() => ({}));
+                    showToast(result.error || 'Could not dismiss it', 'error');
+                }
+            } catch (e) {
+                showToast('Could not dismiss it', 'error');
+            }
+            btn.disabled = false;
+            loadDashboard();
+        }
+
         async function redeliverWebhook(deliveryId, btn) {
             btn.disabled = true;
             try {
@@ -6453,8 +6556,75 @@ $isWp = Urls::isWordPress();
                 if (!response.ok) return;
                 const data = await response.json();
                 document.getElementById('data-folder-path').textContent = data.path || '';
+                // Inside the website (or found downloadable): offer the move (UX-A10).
+                const box = document.getElementById('data-folder-move');
+                if (box && (data.insideWebsite || data.exposed)) {
+                    const text = document.getElementById('data-folder-move-text');
+                    const btn = document.getElementById('data-folder-move-btn');
+                    if (data.canMove) {
+                        text.textContent = 'This folder is inside your website. If the web server ever hands it out, '
+                            + 'anyone could take the money in it. It can be moved to ' + data.target
+                            + ', outside the website. Payments pause for a few seconds while it moves.';
+                        btn.style.display = '';
+                    } else {
+                        text.textContent = 'This folder is inside your website. ' + (data.reason || '');
+                        btn.style.display = 'none';
+                        showDataFolderHelp(document.getElementById('data-folder-move-result'), '', data.hostHelp);
+                    }
+                    box.style.display = '';
+                }
             } catch (e) {
                 // The path simply stays unknown.
+            }
+        }
+
+        /** A message, plus text to send to the hosting provider when they can fix it. */
+        function showDataFolderHelp(target, message, hostHelp) {
+            if (!target) return;
+            target.textContent = '';
+            if (message) {
+                const p = document.createElement('p');
+                p.className = 'form-help';
+                p.style.color = 'var(--danger)';
+                p.textContent = message;
+                target.appendChild(p);
+            }
+            if (hostHelp) {
+                const p = document.createElement('p');
+                p.className = 'form-help';
+                p.textContent = 'Send this to your hosting provider:';
+                const area = document.createElement('textarea');
+                area.readOnly = true;
+                area.rows = 5;
+                area.style.width = '100%';
+                area.value = hostHelp;
+                target.appendChild(p);
+                target.appendChild(area);
+            }
+        }
+
+        /** Move the data folder out of the website (UX-A10), password-confirmed. */
+        async function moveDataFolder(resultEl, button) {
+            const password = prompt(isWordPressMode
+                ? 'Enter your WordPress password to move the data folder:'
+                : 'Re-enter your admin password to move the data folder:');
+            if (!password) return;
+            if (button) button.disabled = true;
+            showDataFolderHelp(resultEl, '', null);
+            showToast('Moving your data. This can take a minute.');
+            try {
+                const response = await postWithCsrf(adminUrl, 'action=move_data_folder&password=' + encodeURIComponent(password));
+                const result = await response.json().catch(() => ({}));
+                if (response.ok && result.success) {
+                    alert('Done. Your data is now in ' + result.path + ', outside the website.');
+                    location.reload();
+                    return;
+                }
+                showDataFolderHelp(resultEl, result.error || 'Moving the data folder did not work.', result.hostHelp);
+            } catch (e) {
+                showDataFolderHelp(resultEl, 'Moving the data folder did not work. Check your connection and try again.', null);
+            } finally {
+                if (button) button.disabled = false;
             }
         }
 
@@ -7774,6 +7944,13 @@ $isWp = Urls::isWordPress();
         }
 
         function initBackupControls() {
+            for (const [buttonId, resultId] of [['data-folder-move-btn', 'data-folder-move-result'],
+                ['exposure-move-btn', 'exposure-move-result']]) {
+                const moveBtn = document.getElementById(buttonId);
+                if (moveBtn) {
+                    moveBtn.addEventListener('click', () => moveDataFolder(document.getElementById(resultId), moveBtn));
+                }
+            }
             const revealBtn = document.getElementById('reveal-seed-btn');
             const hideBtn = document.getElementById('hide-seed-btn');
             const backupBtn = document.getElementById('download-backup-btn');

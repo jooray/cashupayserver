@@ -235,7 +235,15 @@ The plugin keeps its database in a `cashupay-data` folder *outside* the plugin's
 
 ### After Upgrading
 
-Open the admin dashboard — it should load normally and show your existing balance and transaction history, with no setup wizard reappearing. If anything looks wrong, restore your backed-up data folder and open an issue; your seed phrase always lets you recover funds regardless of what happens to the files.
+Open the admin dashboard — it should load normally and show your existing balance and transaction history, with no setup wizard reappearing. If anything looks wrong, restore your backup (see below) and open an issue; your seed phrase always lets you recover funds regardless of what happens to the files.
+
+### Restoring a Backup
+
+On a fresh installation (new hosting, or after the old site was lost), the first setup screen has **Start from a backup file**: upload the `.sqlite` file you downloaded from **Settings → Wallet backup**. Your stores, invoices, shop connection and settings come back. Afterwards, log in with the admin password of the old installation. The wallets then check themselves against the mint for a few minutes before taking payments again, because ecash may have moved since the backup was made.
+
+### Moving the Data Folder
+
+If the dashboard warns that your data folder is inside the website (where it could be downloaded), it offers **Move it to a safe place**. This works even when the wallet already holds money: payments pause for a moment, the data is copied and checked, and the old copy is removed only after the new one works. If your host doesn't let CashuPayServer create the folder, the dashboard gives you a message to send to their support.
 
 ### Update Notices and Emergency Shutdown
 

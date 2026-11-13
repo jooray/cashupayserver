@@ -229,6 +229,53 @@ class Database {
     }
 
     /**
+     * Point this installation at a data folder that now holds its wallet (the dashboard's
+     * "move the data folder", includes/data_folder.php): both records, rewritten even if
+     * they name an older place, and the owner file in the new folder. True only when a
+     * fresh lookup now finds $target.
+     */
+    public static function recordMovedLocation(string $target): bool {
+        @file_put_contents($target . '/' . self::OWNER_FILE, self::appIdentity() . "\n");
+        $written = false;
+        foreach ([self::LOCATION_FILE, self::WEB_DATA_MARKER] as $record) {
+            if (!is_dir(dirname($record)) || !is_writable(dirname($record))) {
+                continue;
+            }
+            $tmp = $record . '.' . bin2hex(random_bytes(4));
+            if (@file_put_contents($tmp, $target . "\n") !== false && @rename($tmp, $record)) {
+                $written = true;
+            } else {
+                @unlink($tmp);
+            }
+        }
+        if (!$written) {
+            return false;
+        }
+        // A record that could not be rewritten and still names the old place would win.
+        $first = @file_get_contents(self::LOCATION_FILE);
+        if ($first !== false && rtrim(trim($first), '/') !== rtrim($target, '/')) {
+            return false;
+        }
+        self::forgetConnection();
+        return self::relocatedDataDir() === rtrim($target, '/');
+    }
+
+    /** The schema version this code writes (PRAGMA user_version). */
+    public static function schemaVersion(): int {
+        return self::SCHEMA_VERSION;
+    }
+
+    /**
+     * Drop the cached connection and location, so the next call opens whatever file and
+     * folder are current (after a backup was put in place or the folder moved).
+     */
+    public static function forgetConnection(): void {
+        self::$instance = null;
+        self::$dataDir = null;
+        self::$dbPath = null;
+    }
+
+    /**
      * Get the database file path
      */
     public static function getDbPath(): string {
@@ -388,7 +435,7 @@ HTACCESS;
      * re-upload the data folder on upgrade, so nothing else would ever replace it. A file
      * the operator wrote themselves (anything else) is left alone.
      */
-    private static function protectDataDirectory(string $dir): void {
+    public static function protectDataDirectory(string $dir): void {
         $htaccess = $dir . '/.htaccess';
         $current = @file_get_contents($htaccess);
         if ($current === false || trim($current) === '' || strtolower(trim($current)) === 'deny from all') {

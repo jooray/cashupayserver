@@ -172,7 +172,7 @@ function handleDeleteStore(array $auth, array $params, array $body): void {
 
     // Cascade removes api_keys, invoices, webhooks.
     try {
-        Database::delete('stores', 'id = ?', [$storeId]);
+        Config::deleteStore($storeId);
     } finally {
         cashupay_release_lock($fundsLock);
     }

@@ -10,6 +10,7 @@
  *  - Poll failures reach the payment health (FAIL after PAYMENT_PATH_FAILURES).
  *  - Poll queue order: Processing first, then the longest-waiting.
  *  - Withdrawal reconciliation keeps a cursor and skips a mint that just failed to answer.
+ *  - Reconciliation requests time out after RECONCILE_REQUEST_TIMEOUT, not the 30 s default.
  *  - A donation whose proofs never left the balance is closed, not re-posted.
  *  - Unpaid payment requests are purged a day after they expire.
  *
@@ -282,6 +283,28 @@ $r = $reconcile->invoke(null);
 Config::clearCache();
 check($r['checked'] === 1 && $r['deferred'] === 1,
     'the next run starts after the cursor (w2), defers w3 and stops back at w1: ' . json_encode($r));
+Database::query("DELETE FROM transfers");
+
+echo "A mint that accepts the connection but never answers costs one short timeout, not 30 s\n";
+$hangRouter = "$dataDir/hang.php";
+file_put_contents($hangRouter, "<?php sleep(60);");
+$hangMint = startServer($hangRouter);
+foreach (['h1', 'h2'] as $i => $id) {
+    Database::insert('transfers', [
+        'id' => "xfer_$id", 'store_id' => 's1', 'type' => Transfer::TYPE_TOKEN_EXPORT, 'amount' => 2, 'fee' => 0,
+        'unit' => 'sat', 'mint_url' => $hangMint, 'status' => Transfer::STATUS_PENDING,
+        'reference' => "hang-secret-$id", 'token' => 'cashuBnot-a-real-token',
+        'created_at' => $now - 100 + $i, 'updated_at' => $now - 100 + $i,
+    ]);
+}
+$t0 = microtime(true);
+$r = $reconcile->invoke(null);
+$took = microtime(true) - $t0;
+check($r['errors'] === 1 && $r['deferred'] === 1, 'the hanging mint fails once, its other row waits: ' . json_encode($r));
+check($took >= BackgroundRunner::RECONCILE_REQUEST_TIMEOUT - 1 && $took < BackgroundRunner::RECONCILE_REQUEST_TIMEOUT + 4,
+    sprintf('the request was cut off after the reconcile timeout (%.1f s), not the 30 s default', $took));
+check((new ReflectionProperty(\Cashu\MintClient::class, 'scopedTimeout'))->getValue() === null,
+    'the shorter timeout does not outlive reconciliation');
 Database::query("DELETE FROM transfers");
 
 echo "A donation whose proofs never left the balance is closed, not re-posted\n";

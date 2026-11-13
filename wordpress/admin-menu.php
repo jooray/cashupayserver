@@ -425,6 +425,16 @@ function cashupay_data_exposure_notice(): void {
         cashupay_data_dir(),
         implode(', ', $exposure['exposed'])
     )) . '</p>';
+    // The plugin chose this folder itself and may create its own folder next to
+    // WordPress: the dashboard moves it with one button (UX-A10, includes/data_folder.php).
+    $ownDir = function_exists('cashupay_own_data_dir') ? cashupay_own_data_dir() : null;
+    if ($canMove && defined('CASHUPAY_DATA_DIR_AUTO') && $ownDir !== null && !file_exists($ownDir)
+        && is_writable(dirname($ownDir))) {
+        echo '<p><a class="button button-primary" href="' . esc_url(Urls::admin()) . '">'
+            . esc_html__('Open the CashuPay dashboard and move it for me', 'cashupay') . '</a> '
+            . esc_html__('(press "Move the data out of the website for me" at the top; your WordPress password confirms it). Or do it by hand:', 'cashupay')
+            . '</p>';
+    }
     echo '<p>' . ($canMove
         ? esc_html__('Fix it today, in one of these two ways:', 'cashupay')
         : esc_html__('Fix it today:', 'cashupay')) . '</p><ol>';

@@ -66,6 +66,15 @@ function cashupay_data_dir_site_of(string $dir, array $hints = []): ?int {
 }
 
 /**
+ * This installation's own folder next to WordPress, outside the website. Its mere
+ * existence makes it the data folder (cashupay_resolve_data_dir()), which is how the
+ * dashboard's "move the data folder" points the plugin at it (includes/data_folder.php).
+ */
+function cashupay_own_data_dir(): string {
+    return dirname(ABSPATH) . '/cashupay-data-' . substr(hash('sha256', ABSPATH), 0, 12);
+}
+
+/**
  * The data folder of this WordPress installation, and the shared folder it did not
  * take because another site owns it (null when there is none).
  *
@@ -81,7 +90,7 @@ function cashupay_data_dir_site_of(string $dir, array $hints = []): ?int {
 function cashupay_resolve_data_dir(): array {
     $parent = dirname(ABSPATH);
     $legacy = $parent . '/cashupay-data';
-    $own = $parent . '/cashupay-data-' . substr(hash('sha256', ABSPATH), 0, 12);
+    $own = cashupay_own_data_dir();
     $content = WP_CONTENT_DIR . '/cashupay-data';
     $foreign = null;
 
@@ -145,6 +154,8 @@ $GLOBALS['cashupay_foreign_data_dir'] = null;
 // super admin where the wallet the sites used to share is).
 $GLOBALS['cashupay_network_data_dir'] = null;
 if (!defined('CASHUPAY_DATA_DIR')) {
+    // Chosen here rather than by a wp-config.php line, so the plugin may move it.
+    define('CASHUPAY_DATA_DIR_AUTO', true);
     [$cashupay_base_dir, $GLOBALS['cashupay_foreign_data_dir']] = cashupay_resolve_data_dir();
     define('CASHUPAY_DATA_DIR', cashupay_site_data_dir($cashupay_base_dir));
     if (CASHUPAY_DATA_DIR !== $cashupay_base_dir) {

@@ -729,6 +729,10 @@ class Invoice {
             foreach ($total as $key => $_) {
                 $total[$key] += (int)($result['recovered'][$key] ?? 0);
             }
+            // Recorded every step: the library forgets it when its restore session ends.
+            if (!empty($result['abandonedKeysets'])) {
+                self::recordAbandonedKeysets($storeId, $wallet->getMintUrl(), $wallet->getUnit(), $result['abandonedKeysets']);
+            }
         } while ($result['status'] === 'pending' && microtime(true) < $deadline);
 
         $store = Config::getStore($storeId);
@@ -742,6 +746,94 @@ class Invoice {
             'recovered' => $total,
             'error' => $result['status'] === 'error' ? (string)($result['error'] ?? 'recovery failed') : null,
         ];
+    }
+
+    /**
+     * Remember keysets a recovery had to give up on because the mint no longer knows
+     * them (anything left on them could not be checked). Config key
+     * abandoned_keysets_<storeId>: [walletId => {mint, unit, keysets: {id: warning},
+     * dismissed: [id], at}]. Durable, unlike the library's per-session report, until
+     * the operator dismisses it on the dashboard; a keyset seen again after dismissal
+     * stays dismissed.
+     *
+     * @param array<string, string> $abandoned keyset id => the library's warning
+     */
+    public static function recordAbandonedKeysets(string $storeId, string $mintUrl, string $unit, array $abandoned): void {
+        $store = Config::getStore($storeId);
+        if (!$store || empty($store['wallet_account_id']) || empty($abandoned)) {
+            return;
+        }
+        $key = 'abandoned_keysets_' . $storeId;
+        $all = Config::get($key);
+        $all = is_array($all) ? $all : [];
+        $walletId = WalletStorage::deriveWalletId($mintUrl, $unit, $store['wallet_account_id']);
+        $entry = is_array($all[$walletId] ?? null) ? $all[$walletId] : [];
+        $keysets = is_array($entry['keysets'] ?? null) ? $entry['keysets'] : [];
+        $changed = false;
+        foreach ($abandoned as $keysetId => $warning) {
+            if (!isset($keysets[(string)$keysetId])) {
+                $keysets[(string)$keysetId] = (string)$warning;
+                $changed = true;
+            }
+        }
+        if (!$changed) {
+            return;
+        }
+        $all[$walletId] = [
+            'mint' => $mintUrl,
+            'unit' => $unit,
+            'keysets' => $keysets,
+            'dismissed' => is_array($entry['dismissed'] ?? null) ? $entry['dismissed'] : [],
+            'at' => time(),
+        ];
+        Config::set($key, $all);
+        error_log("CashuPayServer: store {$storeId} recovery at {$mintUrl} ({$unit}) skipped keysets the mint no longer knows: "
+            . implode(', ', array_keys($abandoned)));
+    }
+
+    /**
+     * Accounts with abandoned keysets the operator has not dismissed yet.
+     *
+     * @return list<array{storeId: string, store: string, mint: string, unit: string, count: int, at: int}>
+     */
+    public static function abandonedKeysetNotices(?string $storeId = null): array {
+        $notices = [];
+        foreach (Database::fetchAll('SELECT id, name FROM stores' . ($storeId ? ' WHERE id = ?' : ''), $storeId ? [$storeId] : []) as $store) {
+            $all = Config::get('abandoned_keysets_' . $store['id']);
+            foreach (is_array($all) ? $all : [] as $entry) {
+                if (!is_array($entry) || !is_array($entry['keysets'] ?? null)) {
+                    continue;
+                }
+                $open = array_diff(array_map('strval', array_keys($entry['keysets'])), (array)($entry['dismissed'] ?? []));
+                if ($open !== []) {
+                    $notices[] = [
+                        'storeId' => (string)$store['id'],
+                        'store' => (string)$store['name'],
+                        'mint' => (string)($entry['mint'] ?? ''),
+                        'unit' => (string)($entry['unit'] ?? 'sat'),
+                        'count' => count($open),
+                        'at' => (int)($entry['at'] ?? 0),
+                    ];
+                }
+            }
+        }
+        return $notices;
+    }
+
+    /** The operator has read the abandoned-keyset notice for this store: hide what it listed. */
+    public static function dismissAbandonedKeysets(string $storeId): bool {
+        $key = 'abandoned_keysets_' . $storeId;
+        $all = Config::get($key);
+        if (!is_array($all) || $all === []) {
+            return false;
+        }
+        foreach ($all as $walletId => $entry) {
+            if (is_array($entry) && is_array($entry['keysets'] ?? null)) {
+                $all[$walletId]['dismissed'] = array_values(array_map('strval', array_keys($entry['keysets'])));
+            }
+        }
+        Config::set($key, $all);
+        return true;
     }
 
     /** advanceStoreRecovery() for the store's primary mint, as a yes/no. */

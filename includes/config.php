@@ -401,6 +401,20 @@ class Config {
         }
     }
 
+    /** Per-store config keys (<prefix><storeId>) that go when the store does. */
+    const STORE_CONFIG_PREFIXES = ['mint_history_', 'recovery_kit_', 'checkout_failures_', 'abandoned_keysets_'];
+
+    /**
+     * Delete a store (the database cascades its keys, invoices and webhooks) and the
+     * config entries kept under its id, so a later store can never inherit them.
+     */
+    public static function deleteStore(string $storeId): void {
+        Database::delete('stores', 'id = ?', [$storeId]);
+        foreach (self::STORE_CONFIG_PREFIXES as $prefix) {
+            self::delete($prefix . $storeId);
+        }
+    }
+
     /**
      * Every (mint, unit) a store has ever used, oldest first: the recovery kit's list.
      *

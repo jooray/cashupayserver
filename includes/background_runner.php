@@ -574,6 +574,9 @@ class BackgroundRunner {
     /** A mint call that failed after this long is treated as a mint that is not answering. */
     const RECONCILE_SLOW_MINT_SECONDS = 5.0;
 
+    /** Seconds per mint request while reconciling (default 30 s), wallet loading included: one dead mint must not eat the budget. */
+    const RECONCILE_REQUEST_TIMEOUT = 8;
+
     /** An expired unpaid melt quote marks a withdrawal failed only once the row is this old. */
     const WITHDRAWAL_FAIL_MIN_AGE = 600;
 
@@ -678,10 +681,12 @@ class BackgroundRunner {
             // Anything handed out as a token — an export or a donation — is resolved
             // by whoever received it. The mint, not our own retry log, is what knows
             // whether that happened.
-            if (in_array($row['type'], Transfer::TOKEN_TYPES, true)) {
-                return self::reconcileTokenTransfer($row);
-            }
-            return self::reconcileWithdrawal($row);
+            return \Cashu\MintClient::withTimeout(self::RECONCILE_REQUEST_TIMEOUT, function () use ($row) {
+                if (in_array($row['type'], Transfer::TOKEN_TYPES, true)) {
+                    return self::reconcileTokenTransfer($row);
+                }
+                return self::reconcileWithdrawal($row);
+            });
         } catch (Throwable $e) {
             $networkError = $e instanceof \Cashu\CashuException && !($e instanceof \Cashu\CashuProtocolException)
                 && str_starts_with($e->getMessage(), 'HTTP request failed');
