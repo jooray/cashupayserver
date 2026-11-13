@@ -153,7 +153,48 @@ assert_eq(
 );
 
 $custom = OnchainProviderFactory::forStore(['onchain_provider_url' => $a['base']]);
-assert_eq([$a['base']], $prop->getValue($custom), 'operator-configured URL is used exclusively');
+assert_eq([$a['base']], $prop->getValue($custom), 'operator-configured URL is used exclusively by default');
+
+$customNoFallback = OnchainProviderFactory::forStore([
+    'onchain_provider_url' => $a['base'], 'onchain_provider_fallback' => 0,
+]);
+assert_eq([$a['base']], $prop->getValue($customNoFallback), 'fallback=0 keeps the custom URL exclusive');
+
+$customFallback = OnchainProviderFactory::forStore([
+    'onchain_provider_url' => $a['base'], 'onchain_provider_fallback' => 1,
+]);
+assert_eq(
+    [$a['base'], 'https://mempool.space/api', 'https://blockstream.info/api'],
+    $prop->getValue($customFallback),
+    'fallback=1 appends the public chain after the custom URL'
+);
+
+$customFallbackSignet = OnchainProviderFactory::forStore([
+    'onchain_provider_url' => $a['base'], 'onchain_provider_fallback' => 1, 'onchain_network' => 'signet',
+]);
+assert_eq(
+    [$a['base'], 'https://mempool.space/signet/api'],
+    $prop->getValue($customFallbackSignet),
+    'fallback chain follows the store network'
+);
+
+// A trailing slash on the stored URL is tolerated and not duplicated.
+assert_eq(
+    ['https://mempool.space/api', 'https://blockstream.info/api'],
+    EsploraProvider::chainForStore(['onchain_provider_url' => 'https://mempool.space/api', 'onchain_provider_fallback' => 1]),
+    'a custom URL that IS a default is not listed twice'
+);
+assert_eq(
+    ['https://mempool.space/api', 'https://blockstream.info/api'],
+    EsploraProvider::chainForStore(['onchain_provider' => 'bitcoind-rpc', 'onchain_provider_url' => 'http://127.0.0.1:18443/wallet/w']),
+    'bitcoind-rpc stores keep the public chain for Esplora-only uses (swap claims)'
+);
+assert_eq([], EsploraProvider::chainForStore(['onchain_network' => 'regtest']), 'regtest without a custom URL has no chain');
+assert_eq(
+    ['http://127.0.0.1:9/api'],
+    EsploraProvider::chainForStore(['onchain_network' => 'regtest', 'onchain_provider_url' => 'http://127.0.0.1:9/api', 'onchain_provider_fallback' => 1]),
+    'regtest fallback adds nothing (no public explorer)'
+);
 
 assert_eq(
     ['https://mempool.space/signet/api'],

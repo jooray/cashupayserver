@@ -24,77 +24,23 @@ tests/php/test_onchain_dual_rail_cron_poll.php (the cron-throttle fix).
 """
 from __future__ import annotations
 
-import json
-import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Iterator
 
 import pytest
 import requests
 
 from conftest import ConfiguredPayserver
-from fixtures import ports
 from fixtures.api_client import AdminClient
+from fixtures.esplora_mock import MockEsplora  # noqa: F401 (re-export)
 from fixtures.strike_api import TEST_STRIKE_KEY, StrikeApiServer
 
 INVOICE_AMOUNT_SAT = 21_000
 TIP_HEIGHT = 850_000
 
 
-class MockEsplora:
-    """Minimal Esplora API: a settable tip and per-address tx lists."""
-
-    def __init__(self) -> None:
-        self.tip = TIP_HEIGHT
-        # address -> list of esplora tx dicts
-        self.txs: dict[str, list[dict]] = {}
-        outer = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):  # noqa: N802
-                parts = self.path.strip("/").split("/")
-                if self.path == "/blocks/tip/height":
-                    body = str(outer.tip).encode()
-                elif len(parts) >= 3 and parts[0] == "address" and parts[2] == "txs":
-                    # /address/{addr}/txs and /address/{addr}/txs/chain/{txid}
-                    # (the chain page is always empty — one page of history).
-                    txs = outer.txs.get(parts[1], []) if len(parts) == 3 else []
-                    body = json.dumps(txs).encode()
-                else:
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-                self.send_response(200)
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-
-            def log_message(self, *args, **kwargs):
-                pass
-
-        self.port = ports.allocate(1)[0]
-        self.server = HTTPServer(("127.0.0.1", self.port), Handler)
-        self.thread = threading.Thread(
-            target=self.server.serve_forever, daemon=True, name=f"mock-esplora-{self.port}"
-        )
-        self.thread.start()
-
-    @property
-    def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
-
-    def pay(self, address: str, amount_sat: int, txid: str, height: int) -> None:
-        self.txs.setdefault(address, []).append({
-            "txid": txid,
-            "status": {"confirmed": True, "block_height": height},
-            "vout": [{"scriptpubkey_address": address, "value": amount_sat}],
-        })
-
-    def stop(self) -> None:
-        self.server.shutdown()
-        self.server.server_close()
-        self.thread.join(timeout=5)
+# MockEsplora now lives in tests/fixtures/esplora_mock.py (re-exported here
+# because test_rail_order imports it from this module).
 
 
 @pytest.fixture(scope="module")

@@ -50,6 +50,8 @@ interface BlockchainProvider {
  * Public endpoints used:
  *   GET /address/{addr}/txs     -> list of txs paying $addr (mempool + confirmed)
  *   GET /blocks/tip/height      -> current chain tip
+ *   (SwapClaimer additionally uses GET /fee-estimates and POST /tx on the
+ *   same host chain, see chainForStore().)
  *
  * The instance is configured with one or more API base URLs (e.g.
  * https://mempool.space/api). Every request tries the hosts in order and fails
@@ -92,7 +94,202 @@ final class EsploraProvider implements BlockchainProvider {
      * @return string[]|null
      */
     public static function defaultUrlsForNetwork(string $network): ?array {
+        $override = self::publicDefaultsOverride();
+        if ($override !== null) {
+            return $override;
+        }
         return self::DEFAULTS[$network] ?? null;
+    }
+
+    /**
+     * Test / rig seam for the built-in public explorer chain: a comma-
+     * separated list of base URLs in CASHUPAY_ESPLORA_DEFAULT_URLS replaces
+     * the defaults of EVERY network. Only honoured while private endpoints
+     * are allowed (the same opt-in the e2e rigs and LAN deployments set), so
+     * a stray environment variable on a stock deployment can never redirect
+     * chain watching to an attacker-chosen host. Null = no override.
+     *
+     * @return string[]|null
+     */
+    public static function publicDefaultsOverride(): ?array {
+        $env = getenv('CASHUPAY_ESPLORA_DEFAULT_URLS');
+        if ($env === false || trim($env) === '') {
+            return null;
+        }
+        if (!\SafeHttp::privateEndpointsAllowed()) {
+            return null;
+        }
+        $urls = array_values(array_filter(array_map('trim', explode(',', $env)), fn($u) => $u !== ''));
+        return $urls === [] ? null : $urls;
+    }
+
+    /**
+     * The ordered Esplora host chain for a store, shared by the chain
+     * watcher (OnchainProviderFactory) and the swap claimer's fee-estimate /
+     * broadcast paths so every Esplora request a store causes follows the
+     * same privacy rule:
+     *
+     *   - no custom URL           -> the built-in public chain for the network
+     *                                (mempool.space, then blockstream.info);
+     *   - custom URL, fallback off -> [custom] only. Someone pointing at their
+     *                                own explorer did so deliberately (usually
+     *                                for privacy); its outage must not leak
+     *                                watched addresses to public explorers;
+     *   - custom URL, fallback on  -> [custom, ...public chain]: the operator
+     *                                opted in to keep detecting payments
+     *                                through an outage of their own instance.
+     *
+     * A bitcoind-rpc store has no Esplora URL of its own (its URL is an RPC
+     * endpoint), so it gets the public chain, as before. Returns [] when the
+     * network has no public explorer (regtest) and nothing was configured.
+     *
+     * @param array $store stores row (onchain_provider, onchain_provider_url,
+     *                     onchain_provider_fallback, onchain_network)
+     * @param ?string $network overrides the store's network (swap rows carry
+     *                         their own)
+     * @return string[]
+     */
+    public static function chainForStore(array $store, ?string $network = null): array {
+        $network = $network ?? ($store['onchain_network'] ?? 'mainnet');
+        $kind = $store['onchain_provider'] ?? 'esplora';
+        $url = trim((string)($store['onchain_provider_url'] ?? ''));
+        $public = self::defaultUrlsForNetwork($network) ?? [];
+        if ($kind === 'bitcoind' || $kind === 'bitcoind-rpc' || $url === '') {
+            return $public;
+        }
+        $fallback = (int)($store['onchain_provider_fallback'] ?? 0) === 1;
+        if (!$fallback) {
+            return [$url];
+        }
+        // Don't list the custom host twice if it IS one of the defaults.
+        return array_values(array_unique(array_merge([$url], $public)));
+    }
+
+    /** Longest a save-time probe of an operator-entered URL may take. */
+    public const PROBE_TIMEOUT_SEC = 8;
+
+    /**
+     * Static (offline) checks for an operator-entered Esplora base URL.
+     * Returns the normalised URL (trimmed, no trailing slash); throws
+     * InvalidArgumentException with an operator-readable message otherwise.
+     *
+     * Policy: http(s) only, a plain hostname or IP literal, no userinfo (a
+     * bitcoind-style user:pass@ URL is the most likely paste here and must
+     * be refused with a hint rather than failing in cron), no query string
+     * or fragment, no whitespace / control characters. Whether a private or
+     * loopback host is reachable is decided by SafeHttp at probe time (it
+     * honours the allow_private_endpoints opt-in), not here.
+     */
+    public static function normalizeCustomUrl(string $raw): string {
+        $url = trim($raw);
+        if ($url === '') {
+            throw new InvalidArgumentException('Provider URL is empty');
+        }
+        if (preg_match('/[\s\x00-\x1f\x7f]/', $url)) {
+            throw new InvalidArgumentException('Provider URL must not contain spaces or control characters');
+        }
+        $parts = parse_url($url);
+        if (!is_array($parts) || empty($parts['scheme']) || empty($parts['host'])) {
+            throw new InvalidArgumentException(
+                'Provider URL must be a full http:// or https:// address, e.g. https://mempool.space/api'
+            );
+        }
+        $scheme = strtolower((string)$parts['scheme']);
+        if ($scheme !== 'http' && $scheme !== 'https') {
+            throw new InvalidArgumentException(
+                "Provider URL must start with http:// or https:// (got {$scheme}://)"
+            );
+        }
+        if (isset($parts['user']) || isset($parts['pass'])) {
+            throw new InvalidArgumentException(
+                'Provider URL must not contain a username or password. This field takes an '
+                . 'Esplora-style HTTP API (mempool.space / blockstream.info compatible), not a '
+                . 'Bitcoin Core RPC URL.'
+            );
+        }
+        if (isset($parts['query']) || isset($parts['fragment'])) {
+            throw new InvalidArgumentException('Provider URL must not contain a query string or #fragment');
+        }
+        $host = (string)$parts['host'];
+        $hostForCheck = (strlen($host) >= 2 && $host[0] === '[' && substr($host, -1) === ']')
+            ? substr($host, 1, -1) : $host;
+        if (!\SafeHttp::isPlainHostSyntax($hostForCheck)) {
+            throw new InvalidArgumentException("Provider URL has an invalid host '{$host}'");
+        }
+        return rtrim($url, '/');
+    }
+
+    /**
+     * Live check that $url (already normalised) answers like an Esplora API:
+     * GET {url}/blocks/tip/height must return a positive integer. Returns the
+     * tip height; throws RuntimeException with an operator-readable message
+     * on any failure. Runs through SafeHttp, so a LAN / loopback host is
+     * refused unless the allow_private_endpoints opt-in is on; that refusal
+     * is explained in the message rather than surfacing as a bare "request
+     * failed" later in cron.
+     *
+     * A common paste is the explorer's web root (https://mempool.space)
+     * instead of its API base (https://mempool.space/api). When the probe
+     * fails and {url}/api answers, the message suggests the corrected URL
+     * rather than silently rewriting what the operator typed.
+     */
+    public static function probeCustomUrl(string $url, int $timeoutSec = self::PROBE_TIMEOUT_SEC): int {
+        try {
+            return (new self($url, $timeoutSec))->currentTipHeight();
+        } catch (\Throwable $e) {
+            $reason = self::describeProbeFailure($e->getMessage());
+            $hint = '';
+            if (!str_ends_with($url, '/api') && !self::isPrivateEndpointRefusal($e->getMessage())) {
+                try {
+                    (new self($url . '/api', $timeoutSec))->currentTipHeight();
+                    $hint = " Did you mean {$url}/api ?";
+                } catch (\Throwable $ignored) {
+                    // No luck with /api either; report the original failure.
+                }
+            }
+            throw new RuntimeException(
+                "Could not verify the provider URL: {$reason}. Nothing was saved." . $hint
+            );
+        }
+    }
+
+    /** normalizeCustomUrl + probeCustomUrl. Returns the normalised URL. */
+    public static function validateCustomUrl(string $raw, int $timeoutSec = self::PROBE_TIMEOUT_SEC): string {
+        $url = self::normalizeCustomUrl($raw);
+        self::probeCustomUrl($url, $timeoutSec);
+        return $url;
+    }
+
+    private static function isPrivateEndpointRefusal(string $msg): bool {
+        return str_contains($msg, 'private/reserved IP');
+    }
+
+    /**
+     * Turn fetch()'s "Esplora /path failed on all hosts: host: detail" into
+     * one operator-facing sentence.
+     */
+    private static function describeProbeFailure(string $msg): string {
+        if (self::isPrivateEndpointRefusal($msg)) {
+            return 'the host is a private / local network address, which this server refuses '
+                . 'by default. To use a LAN or localhost explorer, enable private endpoints '
+                . '(allow_private_endpoints setting or CASHUPAY_ALLOW_PRIVATE_ENDPOINTS=1) and retry';
+        }
+        if (str_contains($msg, 'DNS resolution failed')) {
+            return 'the hostname could not be resolved';
+        }
+        if (preg_match('/-> HTTP (\d{3})/', $msg, $m)) {
+            return "GET /blocks/tip/height returned HTTP {$m[1]}";
+        }
+        if (str_contains($msg, 'non-numeric body')) {
+            return 'GET /blocks/tip/height did not return a block height (is this the API base URL, '
+                . 'not the explorer web page?)';
+        }
+        if (str_contains($msg, 'request failed')) {
+            return 'the server could not be reached (connection refused, timeout, or TLS error)';
+        }
+        // Last resort: the raw detail of the first host, trimmed.
+        $detail = trim((string)preg_replace('/^Esplora \S+ failed on all hosts: /', '', $msg));
+        return substr($detail, 0, 200);
     }
 
     // Esplora returns confirmed transactions 25 per page. A page with fewer
@@ -448,16 +645,11 @@ final class OnchainProviderFactory {
             return new BitcoindRpcProvider($url);
         }
 
-        // Default: Esplora HTTP.
-        if ($url) {
-            // An operator-configured URL is used exclusively — no built-in
-            // fallback hosts. Someone pointing at their own explorer instance
-            // did so deliberately (usually for privacy); its outage must not
-            // silently leak watched addresses to public explorers.
-            return new EsploraProvider($url);
-        }
-        $urls = EsploraProvider::defaultUrlsForNetwork($network);
-        if (!$urls) {
+        // Default: Esplora HTTP. The host chain is the store's custom URL
+        // (exclusively, unless the operator opted in to the public fallback)
+        // or the built-in public chain — see EsploraProvider::chainForStore.
+        $urls = EsploraProvider::chainForStore($store, $network);
+        if ($urls === []) {
             throw new RuntimeException(
                 "No default Esplora URL for network '{$network}'. "
                 . "Set onchain_provider_url in the store config."

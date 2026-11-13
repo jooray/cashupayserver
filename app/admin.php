@@ -482,6 +482,9 @@ if (isset($_GET['api'])) {
                 'confirmTimeoutSec' => (int)($store['onchain_confirm_timeout_sec'] ?? 86400),
                 'nextIndex' => (int)($store['onchain_next_index'] ?? 0),
                 'providerUrl' => $store['onchain_provider_url'] ?? '',
+                // Opt-in: fall back to the public explorers when the custom
+                // URL above is unreachable (ignored without a custom URL).
+                'providerFallback' => (int)($store['onchain_provider_fallback'] ?? 0) === 1,
                 'needsManualConfirmation' => OnchainPayments::countNeedingManualConfirmation($storeId),
                 // Whether the on-chain rail is OFFERED to customers (per-store
                 // flag; legacy -1 rows resolve to on).
@@ -2662,9 +2665,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $type = $_POST['address_type'] ?? 'P2WPKH';
                 $minConfs = max(0, (int)($_POST['min_confs'] ?? 1));
                 $confirmTimeoutSec = max(60, (int)($_POST['confirm_timeout_sec'] ?? 86400));
-                $providerUrl = trim($_POST['provider_url'] ?? '');
+                $providerUrlRaw = trim($_POST['provider_url'] ?? '');
+                $providerFallback = in_array(
+                    strtolower((string)($_POST['provider_fallback'] ?? '')), ['1', 'true', 'on', 'yes'], true
+                ) ? 1 : 0;
 
                 require_once __DIR__ . '/includes/onchain/wallet.php';
+                require_once __DIR__ . '/includes/onchain/provider.php';
+
+                // Custom Esplora URL: static checks on every save (scheme,
+                // host, no credentials — a bitcoind-style user:pass@ URL is
+                // the likely mistake), plus a live GET /blocks/tip/height
+                // probe whenever the URL actually changes. A probe failure
+                // rejects the whole save: a URL that never answers the tip
+                // endpoint is far more often wrong than briefly down, and the
+                // alternative is a store that silently stops detecting
+                // payments in cron. An unchanged URL is not re-probed so a
+                // momentary outage of the operator's own node doesn't block
+                // edits to the confirmation policy.
+                $providerUrl = '';
+                $providerProbe = null;
+                if ($providerUrlRaw !== '') {
+                    $providerUrl = EsploraProvider::normalizeCustomUrl($providerUrlRaw);
+                    $prevRow = Database::fetchOne(
+                        "SELECT onchain_provider, onchain_provider_url FROM stores WHERE id = ?",
+                        [$storeId]
+                    );
+                    $prevUrl = rtrim(trim((string)($prevRow['onchain_provider_url'] ?? '')), '/');
+                    $prevKind = (string)($prevRow['onchain_provider'] ?? 'esplora');
+                    if ($providerUrl !== $prevUrl || $prevKind !== 'esplora') {
+                        $tip = EsploraProvider::probeCustomUrl($providerUrl);
+                        $providerProbe = ['url' => $providerUrl, 'tipHeight' => $tip];
+                    }
+                } else {
+                    // The public fallback only makes sense next to a custom URL.
+                    $providerFallback = 0;
+                }
 
                 if ($mode === 'static') {
                     $staticAddress = trim($_POST['static_address'] ?? '');
@@ -2686,10 +2722,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             'onchain_min_confs' => $minConfs,
                             'onchain_confirm_timeout_sec' => $confirmTimeoutSec,
                             'onchain_provider' => 'esplora',
-                            'onchain_provider_url' => $providerUrl ?: null,
+                            'onchain_provider_url' => $providerUrl !== '' ? $providerUrl : null,
+                            'onchain_provider_fallback' => $providerFallback,
                         ], 'id = ?', [$storeId]);
                         echo json_encode([
                             'success' => true,
+                            'providerProbe' => $providerProbe,
                             'disabled' => true,
                             'strikeOnchain' => OnchainConfig::strikeEnabledForStore($storeId),
                         ]);
@@ -2713,11 +2751,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'onchain_min_confs' => $minConfs,
                         'onchain_confirm_timeout_sec' => $confirmTimeoutSec,
                         'onchain_provider' => 'esplora',
-                        'onchain_provider_url' => $providerUrl ?: null,
+                        'onchain_provider_url' => $providerUrl !== '' ? $providerUrl : null,
+                        'onchain_provider_fallback' => $providerFallback,
                     ];
                     Database::update('stores', $update, 'id = ?', [$storeId]);
                     echo json_encode([
                         'success' => true,
+                        'providerProbe' => $providerProbe,
                         'mode' => 'static',
                         'staticAddress' => $staticAddress,
                         'tweakRange' => $tweakRange,
@@ -2742,10 +2782,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         'onchain_min_confs' => $minConfs,
                         'onchain_confirm_timeout_sec' => $confirmTimeoutSec,
                         'onchain_provider' => 'esplora',
-                        'onchain_provider_url' => $providerUrl ?: null,
+                        'onchain_provider_url' => $providerUrl !== '' ? $providerUrl : null,
+                        'onchain_provider_fallback' => $providerFallback,
                     ], 'id = ?', [$storeId]);
                     echo json_encode([
                         'success' => true,
+                        'providerProbe' => $providerProbe,
                         'disabled' => true,
                         'strikeOnchain' => OnchainConfig::strikeEnabledForStore($storeId),
                     ]);
@@ -2778,7 +2820,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'onchain_min_confs' => $minConfs,
                     'onchain_confirm_timeout_sec' => $confirmTimeoutSec,
                     'onchain_provider' => 'esplora',
-                    'onchain_provider_url' => $providerUrl ?: null,
+                    'onchain_provider_url' => $providerUrl !== '' ? $providerUrl : null,
+                    'onchain_provider_fallback' => $providerFallback,
                 ];
                 // If the xpub changed, sync the displayed counter from the
                 // per-xpub state table — re-adding a previously used xpub
@@ -2796,6 +2839,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 Database::update('stores', $update, 'id = ?', [$storeId]);
                 echo json_encode([
                     'success' => true,
+                    'providerProbe' => $providerProbe,
                     'warnings' => $check['warnings'],
                     'xpubChanged' => $xpubChanged,
                     'resumedIndex' => $resumedIndex,
@@ -7152,9 +7196,27 @@ header('Cache-Control: no-cache, must-revalidate');
                                 <input type="number" class="form-input" id="onchain-confirm-timeout" min="60" value="86400">
                             </div>
                             <div class="form-group">
-                                <label class="form-label">Provider URL (optional &mdash; leave blank for default mempool.space with automatic blockstream.info fallback; a custom URL is used exclusively)</label>
+                                <label class="form-label">Provider URL (optional &mdash; leave blank for default mempool.space with automatic blockstream.info fallback)</label>
                                 <input type="text" class="form-input" id="onchain-provider-url"
                                        placeholder="https://mempool.space/api">
+                                <p class="form-help">
+                                    The API base of your own mempool.space / Esplora instance, e.g.
+                                    <code>http://umbrel.local:3006/api</code>. It is checked when you save
+                                    (it must answer <code>/blocks/tip/height</code>). A LAN or localhost
+                                    address additionally needs private endpoints enabled on this server
+                                    (<code>CASHUPAY_ALLOW_PRIVATE_ENDPOINTS=1</code>).
+                                </p>
+                                <label style="display:block; margin-top: 0.6rem; font-size: 0.9rem;">
+                                    <input type="checkbox" id="onchain-provider-fallback">
+                                    If my explorer is unreachable, fall back to the public explorers
+                                    (mempool.space, then blockstream.info)
+                                </label>
+                                <p class="form-help" style="margin: 0.35rem 0 0 1.5rem;">
+                                    Off by default: your custom URL is then used exclusively, so the
+                                    addresses your store watches never reach a public explorer &mdash;
+                                    but payments are not detected while your instance is down. The
+                                    same rule applies to swap-claim fee estimates and broadcasts.
+                                </p>
                             </div>
                             </div><!-- /.subsection-body -->
                             </div><!-- /#onchain-advanced -->
@@ -12231,6 +12293,16 @@ header('Cache-Control: no-cache, must-revalidate');
             }
         }
 
+        // The public-fallback opt-in only means something next to a custom
+        // provider URL; keep it disabled (and visibly so) while that is blank.
+        function syncOnchainProviderFallbackState() {
+            const url = document.getElementById('onchain-provider-url').value.trim();
+            const cb = document.getElementById('onchain-provider-fallback');
+            cb.disabled = url === '';
+            cb.parentElement.style.opacity = url === '' ? '0.55' : '';
+        }
+        document.getElementById('onchain-provider-url').addEventListener('input', syncOnchainProviderFallbackState);
+
         function renderOnchainDashboard() {
             if (!dashboardData?.onchain) return;
             const oc = dashboardData.onchain;
@@ -12240,6 +12312,8 @@ header('Cache-Control: no-cache, must-revalidate');
             document.getElementById('onchain-min-confs').value = oc.minConfs ?? 1;
             document.getElementById('onchain-confirm-timeout').value = oc.confirmTimeoutSec ?? 86400;
             document.getElementById('onchain-provider-url').value = oc.providerUrl || '';
+            document.getElementById('onchain-provider-fallback').checked = !!oc.providerFallback;
+            syncOnchainProviderFallbackState();
             document.getElementById('onchain-current-index').textContent = oc.nextIndex ?? 0;
             document.getElementById('onchain-static-address').value = oc.staticAddress || '';
             document.getElementById('onchain-static-tweak-range').value = oc.staticTweakRange ?? 1000;
@@ -12549,6 +12623,7 @@ header('Cache-Control: no-cache, must-revalidate');
             const minConfs = document.getElementById('onchain-min-confs').value;
             const timeout = document.getElementById('onchain-confirm-timeout').value;
             const providerUrl = document.getElementById('onchain-provider-url').value.trim();
+            const providerFallback = (providerUrl !== '' && document.getElementById('onchain-provider-fallback').checked) ? '1' : '0';
             const prevMode = dashboardData?.onchain?.mode || 'xpub';
             const prevEnabled = !!dashboardData?.onchain?.enabled;
 
@@ -12569,7 +12644,7 @@ header('Cache-Control: no-cache, must-revalidate');
                     );
                     if (!ok) { showInline('<strong>Cancelled.</strong> No changes saved.', false); return; }
                 }
-                body = `action=save_onchain&store_id=${encodeURIComponent(currentStoreId)}&mode=static&static_address=${encodeURIComponent(staticAddress)}&static_tweak_range=${encodeURIComponent(tweakRange)}&network=${network}&min_confs=${minConfs}&confirm_timeout_sec=${timeout}&provider_url=${encodeURIComponent(providerUrl)}`;
+                body = `action=save_onchain&store_id=${encodeURIComponent(currentStoreId)}&mode=static&static_address=${encodeURIComponent(staticAddress)}&static_tweak_range=${encodeURIComponent(tweakRange)}&network=${network}&min_confs=${minConfs}&confirm_timeout_sec=${timeout}&provider_url=${encodeURIComponent(providerUrl)}&provider_fallback=${providerFallback}`;
             } else {
                 const xpub = document.getElementById('onchain-xpub').value.trim();
                 const type = document.getElementById('onchain-address-type').value;
@@ -12592,7 +12667,7 @@ header('Cache-Control: no-cache, must-revalidate');
                     );
                     if (!ok) { showInline('<strong>Cancelled.</strong> No changes saved.', false); return; }
                 }
-                body = `action=save_onchain&store_id=${encodeURIComponent(currentStoreId)}&mode=xpub&xpub=${encodeURIComponent(xpub)}&network=${network}&address_type=${type}&min_confs=${minConfs}&confirm_timeout_sec=${timeout}&provider_url=${encodeURIComponent(providerUrl)}`;
+                body = `action=save_onchain&store_id=${encodeURIComponent(currentStoreId)}&mode=xpub&xpub=${encodeURIComponent(xpub)}&network=${network}&address_type=${type}&min_confs=${minConfs}&confirm_timeout_sec=${timeout}&provider_url=${encodeURIComponent(providerUrl)}&provider_fallback=${providerFallback}`;
             }
             // Mirror the result inline next to the Save button — the global
             // toast sits above the mobile bottom-nav and is easy to miss.
@@ -12620,6 +12695,10 @@ header('Cache-Control: no-cache, must-revalidate');
                     suffix = data.resumedIndex > 0
                         ? ' — resumed at index ' + data.resumedIndex
                         : ' — new xpub starts at index 0';
+                }
+                if (data.providerProbe && data.providerProbe.tipHeight) {
+                    suffix += ' &mdash; explorer at ' + escapeHtml(data.providerProbe.url)
+                        + ' verified (block height ' + Number(data.providerProbe.tipHeight).toLocaleString() + ')';
                 }
                 showInline('<strong>&#10003; Saved' + suffix + '.</strong>', true);
                 showToast('On-chain settings saved' + (data.disabled && !data.strikeOnchain ? ' (disabled)' : ''), 'success');
