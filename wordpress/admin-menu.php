@@ -61,12 +61,18 @@ function cashupay_plain_permalinks_notice(): void {
         . esc_html__('Switch to readable web addresses', 'cashupay') . '</a></p></div>';
 }
 
+/** The address cashupay_api_reachable() checks; the admin can open it herself. */
+function cashupay_api_check_url(): string {
+    return rtrim(Urls::server(), '/') . '/api/v1/server/info';
+}
+
 /**
- * Whether CashuPay's API address reaches CashuPay (a JSON answer) rather than a
- * WordPress or web-server "Page not found". Null when the site cannot call itself.
+ * Whether CashuPay's API address reaches CashuPay (its server-info answer) rather than a
+ * WordPress or web-server "Page not found", or any other JSON. Null when the site cannot
+ * call itself (loopback blocked, timeout): then nothing is known either way (UX-A7).
  */
 function cashupay_api_reachable(): ?bool {
-    $response = wp_remote_get(rtrim(Urls::server(), '/') . '/api/v1/server/info', [
+    $response = wp_remote_get(cashupay_api_check_url(), [
         'timeout' => 10,
         'redirection' => 0,
         'sslverify' => false,
@@ -74,8 +80,8 @@ function cashupay_api_reachable(): ?bool {
     if (is_wp_error($response)) {
         return null;
     }
-    $type = (string) wp_remote_retrieve_header($response, 'content-type');
-    return stripos($type, 'json') !== false;
+    $info = json_decode((string) wp_remote_retrieve_body($response), true);
+    return is_array($info) && ($info['isCashuPayServer'] ?? null) === true;
 }
 
 /** The notice's button: readable addresses ("Post name"), then a check that they work. */
@@ -94,8 +100,16 @@ function cashupay_enable_pretty_links(): void {
     delete_option('cashupay_rewrite_rules_version');
 
     $reachable = cashupay_api_reachable();
+    $fixPageNotFound = __('Open Settings → Permalinks and click "Save Changes". If that page then shows text for a file called .htaccess, send that text to your hosting provider and ask them to add it to your site.', 'cashupay');
     if ($reachable === false) {
-        $result = ['ok' => false, 'text' => __('WordPress now uses readable web addresses, but your web server does not pass them on to WordPress yet, so CashuPay still shows "Page not found". Open Settings → Permalinks and click "Save Changes". If that page then shows text for a file called .htaccess, send that text to your hosting provider and ask them to add it to your site.', 'cashupay')];
+        $result = ['ok' => false, 'text' => __('WordPress now uses readable web addresses, but your web server does not pass them on to WordPress yet, so CashuPay still shows "Page not found".', 'cashupay')
+            . ' ' . $fixPageNotFound];
+    } elseif ($reachable === null) {
+        // The site could not call itself, which says nothing about whether the links work.
+        $result = ['ok' => false, 'text' => sprintf(
+            __('WordPress now uses readable web addresses, but CashuPay could not check automatically whether they work. Open this address in a new browser tab: %s — if you see a short text that contains "isCashuPayServer", everything is fine. If you see "Page not found" instead:', 'cashupay'),
+            cashupay_api_check_url()
+        ) . ' ' . $fixPageNotFound];
     } else {
         $result = ['ok' => true, 'text' => __('Your site now uses readable web addresses, and CashuPay can be reached. You can continue with CashuPay under Tools → CashuPay.', 'cashupay')];
     }
@@ -298,14 +312,16 @@ function cashupay_data_exposure(): ?array {
     foreach (glob(cashupay_data_dir() . '/backup-*.sqlite') ?: [] as $backupFile) {
         $names[] = basename($backupFile); // A complete copy of the wallet if one was left behind.
     }
+    $inconclusive = [];
     foreach ($names as $name) {
-        if (!is_file(cashupay_data_dir() . '/' . $name)) {
+        $local = cashupay_data_dir() . '/' . $name;
+        if (!is_file($local)) {
             continue;
         }
         $response = wp_remote_get($url . $name, [
             // A ranged GET, not HEAD: some servers answer HEAD from a rule that a real
-            // GET would not hit, and one byte is enough to prove readability.
-            'headers' => ['Range' => 'bytes=0-0'],
+            // GET would not hit. The first bytes are compared with the file's own.
+            'headers' => ['Range' => 'bytes=0-15'],
             'timeout' => 3,
             'redirection' => 0,
             'sslverify' => false,
@@ -316,8 +332,15 @@ function cashupay_data_exposure(): ?array {
         }
         $probed++;
         $code = (int) wp_remote_retrieve_response_code($response);
-        if ($code === 200 || $code === 206) {
+        if ($code !== 200 && $code !== 206) {
+            continue;
+        }
+        $verdict = cashupay_exposure_body_matches($local, (string) wp_remote_retrieve_body($response),
+            (string) wp_remote_retrieve_header($response, 'content-type'));
+        if ($verdict === true) {
             $exposed[] = $name;
+        } elseif ($verdict === null) {
+            $inconclusive[] = $name;
         }
     }
 
@@ -325,9 +348,38 @@ function cashupay_data_exposure(): ?array {
         return null; // Nothing to test yet, or the site cannot reach itself; try again later.
     }
 
-    $result = ['url' => $url, 'exposed' => $exposed];
+    $result = ['url' => $url, 'exposed' => $exposed, 'inconclusive' => $inconclusive];
     set_transient('cashupay_data_exposure', $result, HOUR_IN_SECONDS);
     return $result;
+}
+
+/**
+ * Whether a 200/206 answer for a wallet file really is that file (UX-A8): a "soft 404"
+ * or a login page answering 200 for every address must not read as an exposure.
+ * True when the bytes are the file's own (an SQLite database must start with its
+ * "SQLite format 3" header), false for an HTML page, null when it cannot be told.
+ */
+function cashupay_exposure_body_matches(string $localFile, string $body, string $contentType): ?bool {
+    $head = substr($body, 0, 16);
+    if (stripos($contentType, 'text/html') !== false
+        || preg_match('/^\s*<(!doctype|html|head|body|\?xml)/i', $head)) {
+        return false;
+    }
+    $isDatabase = (bool) preg_match('/\.sqlite$/', $localFile);
+    if ($isDatabase && strncmp($head, 'SQLite format 3', 15) !== 0) {
+        return null;
+    }
+    $own = (string) @file_get_contents($localFile, false, null, 0, 16);
+    if ($own === '') {
+        return $body === '' ? null : false;
+    }
+    // The sidecars rewrite most of their header as the wallet works; their first four
+    // bytes (format magic and version) stay fixed.
+    $compare = preg_match('/-(wal|shm)$/', $localFile) ? 4 : min(16, strlen($own));
+    if (strlen($head) < $compare) {
+        return null;
+    }
+    return strncmp($head, $own, $compare) === 0 ? true : null;
 }
 
 function cashupay_handle_exposure_recheck(): void {

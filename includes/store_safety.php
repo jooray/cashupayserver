@@ -68,12 +68,16 @@ class StoreSafety {
      * webhooks, and — for *every* wallet account of the store, backups included —
      * in-flight wallet operations and unredeemed exported tokens; plus ecash left in a
      * namespace of a previous mint that only this store's wallet account can unlock.
+     * For deletion also: spendable ecash at a backup mint in another unit (the callers'
+     * balance figure only adds up the primary unit), ecash whose state is UNKNOWN, and
+     * accounts still being recovered.
      *
      * Read-only and offline: no mint is contacted.
      *
-     * @param bool $includeStranded Also look for ecash left on previous mints. A mint
-     *                              switch does not make those worse, so that check can
-     *                              skip it; deletion must not.
+     * @param bool $includeStranded Deletion check (default). Also look for ecash left on
+     *                              previous mints and the per-account holdings above. A
+     *                              mint switch keeps every backup and does not make old
+     *                              mints worse, so it skips them; deletion must not.
      * @return string[] Empty when nothing is outstanding
      */
     public static function deletionBlockers(string $storeId, bool $includeStranded = true): array {
@@ -99,7 +103,7 @@ class StoreSafety {
         $undelivered = (int)(Database::fetchOne(
             "SELECT COUNT(*) AS cnt FROM webhook_deliveries d
              JOIN webhooks w ON w.id = d.webhook_id
-             WHERE w.store_id = ? AND d.delivered_at IS NULL",
+             WHERE w.store_id = ? AND d.delivered_at IS NULL AND d.signing_secret IS NOT NULL",
             [$storeId]
         )['cnt'] ?? 0);
         if ($undelivered > 0) {
@@ -111,6 +115,7 @@ class StoreSafety {
             return $blockers;
         }
         $account = !empty($store['wallet_account_id']) ? (string)$store['wallet_account_id'] : null;
+        $primaryUnit = strtolower((string)($store['mint_unit'] ?? 'sat'));
 
         // Every account, not just the primary: journals and exports on a backup mint are
         // just as live, and recovery visits them all.
@@ -127,6 +132,16 @@ class StoreSafety {
                 $exported = Wallet::sumProofs($storage->getProofsAsObjects(ProofState::EXPORTED));
                 if ($exported > 0) {
                     $blockers[] = "{$exported} {$acc['unit']} in exported tokens from {$label} that have not been redeemed";
+                }
+
+                if ($includeStranded) {
+                    // Deletion only. Callers word the headline balance (Invoice::getBalance,
+                    // primary unit) themselves; a backup in another unit is not in it, so
+                    // a EUR backup's money would otherwise go unmentioned (2026-11 #4).
+                    // A mint switch keeps every backup, so it skips these.
+                    foreach (self::accountHoldingReasons($storage, $acc['unit'], $label, $acc['unit'] !== $primaryUnit) as $reason) {
+                        $blockers[] = $reason;
+                    }
                 }
             } catch (Throwable $e) {
                 error_log("CashuPayServer: could not inspect wallet {$label} of store {$storeId}: " . $e->getMessage());
@@ -176,13 +191,14 @@ class StoreSafety {
         }
         $ownAccount = !empty($store['wallet_account_id']) ? (string)$store['wallet_account_id'] : null;
 
-        // Value-bearing namespaces: proofs that are or may become spendable, and journals.
+        // Value-bearing namespaces: proofs that are or may become spendable (UNKNOWN: the
+        // mint never confirmed them, so they may well be), and journals.
         $holdings = [];
         $journaled = [];
         foreach (Database::fetchAll(
             "SELECT wallet_id, COALESCE(SUM(amount), 0) AS s FROM cashu_proofs
-             WHERE state IN (?, ?, ?) GROUP BY wallet_id",
-            [ProofState::UNSPENT, ProofState::PENDING, ProofState::EXPORTED]
+             WHERE state IN (?, ?, ?, ?) GROUP BY wallet_id",
+            [ProofState::UNSPENT, ProofState::PENDING, ProofState::EXPORTED, ProofState::UNKNOWN]
         ) as $row) {
             $holdings[$row['wallet_id']] = (int)$row['s'];
         }
@@ -240,6 +256,40 @@ class StoreSafety {
         return $out;
     }
 
+    /**
+     * Value in one wallet account that a balance figure does not show: ecash whose state
+     * the mint never confirmed (UNKNOWN: may well be spendable), an account still being
+     * recovered (its balance is not known yet), and optionally its spendable balance.
+     *
+     * @return string[]
+     */
+    private static function accountHoldingReasons(WalletStorage $storage, string $unit, string $label, bool $includeUnspent): array {
+        $reasons = [];
+        if ($includeUnspent) {
+            $unspent = $storage->getBalance();
+            if ($unspent > 0) {
+                $reasons[] = "{$unspent} {$unit} of spendable ecash at {$label} (a backup mint in another currency); "
+                    . 'withdraw or export it first';
+            }
+        }
+        $unknown = Wallet::sumProofs($storage->getProofsAsObjects(ProofState::UNKNOWN));
+        if ($unknown > 0) {
+            $reasons[] = "{$unknown} {$unit} of ecash at {$label} that the mint has not confirmed yet (it may still be spendable)";
+        }
+        if (!self::accountReady($storage)) {
+            $reasons[] = "the wallet at {$label} is still being recovered, so what it holds is not known yet";
+        }
+        return $reasons;
+    }
+
+    /**
+     * False only for an account bound but not ready (restore_required, or a recovery
+     * that has not finished). An account never opened holds nothing and counts as ready.
+     */
+    private static function accountReady(WalletStorage $storage): bool {
+        return $storage->getSeedFingerprint() === null || $storage->isSeedReady();
+    }
+
     /** @return array{mint_url: string, unit: string, account: ?string}|null */
     private static function identify(string $walletId, array $mints, array $units, array $accounts): ?array {
         foreach ($mints as $mint) {
@@ -266,7 +316,7 @@ class StoreSafety {
      * @return array{reasons: string[]}|null Null when the row is unknown or unreadable
      */
     public static function backupMintHoldings(int $backupMintId): ?array {
-        $row = Database::fetchOne('SELECT store_id, mint_url, unit FROM store_mints WHERE id = ?', [$backupMintId]);
+        $row = Database::fetchOne('SELECT store_id, mint_url, unit, enabled FROM store_mints WHERE id = ?', [$backupMintId]);
         if (!$row) {
             return null;
         }
@@ -295,6 +345,21 @@ class StoreSafety {
             $journals = count($storage->getPendingOperations());
             if ($journals > 0) {
                 $reasons[] = "{$journals} transfer(s) still in progress";
+            }
+            // Removal takes the account off recovery's list, so value it has not pinned
+            // down yet would be dropped as surely as a balance (UX-F3).
+            $unknown = Wallet::sumProofs($storage->getProofsAsObjects(ProofState::UNKNOWN));
+            if ($unknown > 0) {
+                $reasons[] = "{$unknown} {$row['unit']} of ecash the mint has not confirmed yet (it may still be spendable)";
+            }
+            // Only while recovery is actually making progress: one that keeps failing (a
+            // dead or unreachable mint) would otherwise make the mint impossible to remove.
+            // Nothing is lost by removing it then: whatever recovery already found is
+            // stored as proofs and caught above, and re-adding the mint starts over.
+            // A disabled backup is not visited by recovery at all, so the same applies.
+            if (!self::accountReady($storage) && (int)$row['enabled'] === 1
+                && !Config::get('wallet_recovery_error_' . $storage->getWalletId())) {
+                $reasons[] = 'money not counted yet (this mint\'s wallet is still being recovered; try again in a few minutes)';
             }
 
             // An order whose Lightning invoice this mint issued can still be paid: the

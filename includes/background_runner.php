@@ -108,10 +108,9 @@ class BackgroundRunner {
             // Before poll_quotes: a paid invoice on an account that is not ready to
             // spend cannot be minted, so the order would never be marked paid.
             'ready_store_wallets' => fn() => Invoice::ensurePrimaryWalletsReady(),
-            'poll_quotes' => function () {
-                Invoice::pollPendingQuotes();
-                return 'success';
-            },
+            // ['polled' => n, 'errors' => k]: failureOf() sees the errors, so a mint
+            // outage shows up as a failing payment path instead of "success".
+            'poll_quotes' => fn() => Invoice::pollPendingQuotes(),
             'webhook_outbox' => function () {
                 $attempted = WebhookSender::deliverPending();
                 return $attempted > 0 ? "attempted {$attempted}" : 'none';
@@ -206,6 +205,27 @@ class BackgroundRunner {
             $health = [];
         }
 
+        // A run that died inside a task (fatal error, killed worker, time limit) left
+        // its marker behind. That task is charged a failure with backoff, so the next
+        // runs skip it for a while and every other task still gets its turn: a task
+        // that kills the process every time, always-run ones included, used to stop all
+        // background work for good. The record is saved at once, before anything here
+        // can die again.
+        $interrupted = self::leaseValue('cron_running_task');
+        if ($interrupted !== '') {
+            if (isset($tasks[$interrupted])) {
+                $previous = is_array($health[$interrupted] ?? null) ? $health[$interrupted] : [];
+                $health[$interrupted] = self::failedHealth($previous,
+                    'The last background run stopped abruptly during this task (it ran out of memory or time). '
+                    . 'It is skipped for a while so the other tasks keep running.',
+                    true, in_array($interrupted, self::ALWAYS_RUN, true));
+                $results['interrupted'] = $interrupted;
+                error_log("CashuPayServer: the previous background run died during {$interrupted}; backing it off");
+            }
+            Config::set('cron_task_health', $health);
+            Config::set('cron_running_task', '');
+        }
+
         // Everything except the payment path takes its turn.
         $rotating = array_values(array_diff(array_keys($tasks), self::ALWAYS_RUN));
         $cursor = (int)Config::get('cron_task_cursor', '0');
@@ -224,7 +244,7 @@ class BackgroundRunner {
             // Renew before every task, so a run that is legitimately slow keeps the
             // lease, and one whose lease was taken over (it overran LEASE_SECONDS)
             // stops instead of running the same tasks alongside the new owner.
-            if (!self::renewLease($lease)) {
+            if (!self::renewLease($lease, $name)) {
                 $leaseLost = true;
                 return false;
             }
@@ -242,9 +262,14 @@ class BackgroundRunner {
                 // its work, though (one mint down among several, one store among many),
                 // so it is reported but not backed off.
                 $failure = self::failureOf($result);
-                $health[$name] = $failure === null
-                    ? ['last_ok' => time()]
-                    : self::failedHealth($previous, $failure, false, in_array($name, self::ALWAYS_RUN, true));
+                if ($failure === null && self::isIdle($result) && isset($previous['last_error'])) {
+                    // Nothing was due this time, so nothing was learned: a failing poll
+                    // is not "healthy" just because a run came by between its retries.
+                } else {
+                    $health[$name] = $failure === null
+                        ? ['last_ok' => time()]
+                        : self::failedHealth($previous, $failure, false, in_array($name, self::ALWAYS_RUN, true));
+                }
             } catch (Throwable $e) {
                 $results['tasks'][$name] = 'error: ' . $e->getMessage();
                 $health[$name] = self::failedHealth($previous, $e->getMessage(), true, in_array($name, self::ALWAYS_RUN, true));
@@ -282,6 +307,7 @@ class BackgroundRunner {
             }
             Config::set('cron_task_cursor', (string)($count > 0 ? ($cursor + $visited) % $count : 0));
             Config::set('cron_task_health', $health);
+            Config::set('cron_running_task', '');
             Config::set('cron_last_run', (string)time());
             Config::set('cron_last_result', $results);
         } finally {
@@ -338,6 +364,11 @@ class BackgroundRunner {
             }
         }
         return empty($messages) ? null : mb_substr(implode(' | ', $messages), 0, 300);
+    }
+
+    /** A result that says the task found nothing to do (no evidence either way). */
+    private static function isIdle($result): bool {
+        return is_array($result) && ($result['polled'] ?? null) === 0 && empty($result['errors']);
     }
 
     /**
@@ -476,7 +507,7 @@ class BackgroundRunner {
      *
      * @return bool false when another run has taken the lease over
      */
-    private static function renewLease(string $token): bool {
+    private static function renewLease(string $token, ?string $task = null): bool {
         $pdo = Database::getInstance();
         try {
             $pdo->exec('BEGIN IMMEDIATE');
@@ -492,6 +523,11 @@ class BackgroundRunner {
                 return false;
             }
             Config::set('cron_lease_until', (string)(time() + self::LEASE_SECONDS));
+            if ($task !== null) {
+                // Same write as the lease: which task is running, read by the next run
+                // to tell that this one died inside it.
+                Config::set('cron_running_task', $task);
+            }
             $pdo->exec('COMMIT');
             return true;
         } catch (Throwable $e) {
@@ -532,42 +568,61 @@ class BackgroundRunner {
     /** Seconds reconcile_transfers may spend before leaving the rest for the next run. */
     const RECONCILE_BUDGET = 15.0;
 
+    /** Part of that budget the withdrawal pass leaves for exported tokens and donations. */
+    const RECONCILE_TOKEN_RESERVE = 5.0;
+
+    /** A mint call that failed after this long is treated as a mint that is not answering. */
+    const RECONCILE_SLOW_MINT_SECONDS = 5.0;
+
+    /** An expired unpaid melt quote marks a withdrawal failed only once the row is this old. */
+    const WITHDRAWAL_FAIL_MIN_AGE = 600;
+
+    /** A donation whose proofs never left the balance is closed after this long. */
+    const DONATION_UNRESERVED_MIN_AGE = 600;
+
     /**
      * Resolve outgoing operations that never reached a terminal state.
      *
-     * Withdrawals come first, all of them: their outcome is unknown money. Token rows
-     * (exports, donations) then follow from a persisted cursor, a page at a time within
-     * the time budget, so months of unclaimed exports cannot hide a newer one — or a
-     * withdrawal — behind a fixed window of the oldest rows.
+     * Withdrawals come first: their outcome is unknown money. Token rows (exports,
+     * donations) follow, with part of the budget kept for them. Each pass continues
+     * from its own persisted cursor, so a slow mint at the head of the list cannot hide
+     * every later row: the withdrawal pass used to restart from the oldest row on every
+     * run, and one mint timing out (30 s against a 15 s budget) meant later withdrawals
+     * and the whole token pass were never visited. Rows at a mint that just failed to
+     * answer are left for the next run instead of costing a timeout each.
      *
      * Each row is resolved at the mint it was made at (`mint_url`, `unit`), not at the
      * store's current primary.
      */
     private static function reconcileTransfers(): array {
-        $result = ['checked' => 0, 'completed' => 0, 'marked_failed' => 0, 'still_pending' => 0, 'errors' => 0];
-        $deadline = microtime(true) + self::RECONCILE_BUDGET;
+        $result = ['checked' => 0, 'completed' => 0, 'marked_failed' => 0, 'still_pending' => 0, 'errors' => 0,
+            'deferred' => 0];
+        $started = microtime(true);
+        $unreachable = [];
 
-        $after = null;
-        do {
-            $page = Transfer::getPendingPage(Transfer::WITHDRAWAL_TYPES, $after, 50);
-            foreach ($page as $row) {
-                $after = [(int)$row['created_at'], (string)$row['id']];
-                $result['checked']++;
-                $result[self::reconcileOne($row)]++;
-                if (microtime(true) > $deadline) {
-                    return $result;
-                }
-            }
-        } while (count($page) === 50);
+        self::reconcilePass(Transfer::WITHDRAWAL_TYPES, 'reconcile_withdrawal_cursor', 50,
+            $started + self::RECONCILE_BUDGET - self::RECONCILE_TOKEN_RESERVE, $result, $unreachable);
+        self::reconcilePass(Transfer::TOKEN_TYPES, 'reconcile_token_cursor', 25,
+            $started + self::RECONCILE_BUDGET, $result, $unreachable);
 
-        // Token rows: continue after where the last run stopped, wrap around to the
-        // oldest once, and stop on reaching the starting point again.
-        $cursor = Config::get('reconcile_token_cursor');
+        return $result;
+    }
+
+    /**
+     * One pass over pending rows of $types: continue after where the last run stopped,
+     * wrap around to the oldest once, and stop on reaching the starting point again or
+     * at the deadline. The position reached is saved under $cursorKey.
+     *
+     * @param array<string, true> $unreachable Mints that failed to answer in this run
+     */
+    private static function reconcilePass(array $types, string $cursorKey, int $pageSize, float $deadline,
+                                          array &$result, array &$unreachable): void {
+        $cursor = Config::get($cursorKey);
         $start = is_array($cursor) && count($cursor) === 2 ? [(int)$cursor[0], (string)$cursor[1]] : null;
         $after = $start;
         $wrapped = $start === null;
         while (microtime(true) <= $deadline) {
-            $page = Transfer::getPendingPage(Transfer::TOKEN_TYPES, $after, 25);
+            $page = Transfer::getPendingPage($types, $after, $pageSize);
             if (empty($page)) {
                 $after = null;
                 if ($wrapped) {
@@ -579,24 +634,46 @@ class BackgroundRunner {
             foreach ($page as $row) {
                 $key = [(int)$row['created_at'], (string)$row['id']];
                 if ($wrapped && $start !== null && $key >= $start) {
-                    // Back where this run began: every pending token row was visited.
+                    // Back where this run began: every pending row was visited.
                     break 2;
                 }
-                $after = $key;
-                $result['checked']++;
-                $result[self::reconcileOne($row)]++;
                 if (microtime(true) > $deadline) {
                     break 2;
                 }
+                $after = $key;
+                $mint = self::transferMintKey($row);
+                if (isset($unreachable[$mint])) {
+                    $result['deferred']++;
+                    continue;
+                }
+                $result['checked']++;
+                $t0 = microtime(true);
+                $outcome = self::reconcileOne($row, $networkError);
+                if ($outcome === 'errors'
+                    && ($networkError || microtime(true) - $t0 >= self::RECONCILE_SLOW_MINT_SECONDS)) {
+                    $unreachable[$mint] = true;
+                }
+                $result[$outcome]++;
             }
         }
-        Config::set('reconcile_token_cursor', $after);
-
-        return $result;
+        Config::set($cursorKey, $after);
     }
 
-    /** @return string One of the reconcileTransfers() result keys */
-    private static function reconcileOne(array $row): string {
+    /** Which mint a transfer row is resolved at, for skipping a mint that is not answering. */
+    private static function transferMintKey(array $row): string {
+        $mintUrl = rtrim(trim((string)($row['mint_url'] ?? '')), '/');
+        if ($mintUrl === '' && in_array($row['type'], Transfer::TOKEN_TYPES, true)) {
+            $mintUrl = rtrim((string)(self::tokenTransferAccount($row)[0] ?? ''), '/');
+        }
+        return $mintUrl !== '' ? strtolower($mintUrl) : 'primary:' . $row['store_id'];
+    }
+
+    /**
+     * @param bool $networkError Set when the mint could not be reached (no answer at all)
+     * @return string One of the reconcileTransfers() result keys
+     */
+    private static function reconcileOne(array $row, ?bool &$networkError = null): string {
+        $networkError = false;
         try {
             // Anything handed out as a token — an export or a donation — is resolved
             // by whoever received it. The mint, not our own retry log, is what knows
@@ -606,6 +683,8 @@ class BackgroundRunner {
             }
             return self::reconcileWithdrawal($row);
         } catch (Throwable $e) {
+            $networkError = $e instanceof \Cashu\CashuException && !($e instanceof \Cashu\CashuProtocolException)
+                && str_starts_with($e->getMessage(), 'HTTP request failed');
             error_log("CashuPayServer: transfer {$row['id']} reconciliation failed: " . $e->getMessage());
             return 'errors';
         }
@@ -641,7 +720,10 @@ class BackgroundRunner {
             Transfer::complete($row['id'], (int)$row['amount'], self::paidMeltFee($row, $quote, $wallet), $quote->paymentPreimage);
             return 'completed';
         }
-        if ($quote->isUnpaid() && $quote->expiry !== null && $quote->expiry < time()) {
+        // An expired UNPAID quote is final only once the withdrawal is not fresh: a mint
+        // may report UNPAID while the payment request that started it is still in flight.
+        if ($quote->isUnpaid() && $quote->expiry !== null && $quote->expiry < time()
+            && time() - (int)$row['created_at'] > self::WITHDRAWAL_FAIL_MIN_AGE) {
             Transfer::fail($row['id'], 'The payment did not go through and the money stayed in your balance.');
             return 'marked_failed';
         }
@@ -761,6 +843,16 @@ class BackgroundRunner {
         // waiting for its recipient and is not a problem to be solved.
         if ($unspent === count($secrets) && $row['type'] === Transfer::TYPE_DONATION
             && !empty($row['token'])) {
+            // Opening the row and reserving its proofs are two writes. A crash between
+            // them leaves a donation whose proofs are still in the spendable balance;
+            // posting that token would give away money the balance still counts (and
+            // may spend again). It was never sent, so close it.
+            if (time() - (int)$row['created_at'] > self::DONATION_UNRESERVED_MIN_AGE
+                && self::anyProofLocallyUnspent($secrets)) {
+                Transfer::fail($row['id'], 'This donation was never sent; the money stayed in your balance.');
+                return 'marked_failed';
+            }
+
             // ...unless nobody *can* take it. A mint that charges per input proof can make
             // a small donation cost more to redeem than it is worth, and then no amount of
             // retrying will ever deliver it. Say so once and stop, instead of retrying for
@@ -800,6 +892,21 @@ class BackgroundRunner {
         }
 
         return 'still_pending';
+    }
+
+    /** Whether any of these proofs is still spendable in our own wallet (not reserved for a transfer). */
+    private static function anyProofLocallyUnspent(array $secrets): bool {
+        foreach (array_chunk($secrets, 400) as $chunk) {
+            $row = Database::fetchOne(
+                'SELECT 1 AS hit FROM cashu_proofs WHERE state = ? AND secret IN ('
+                . implode(',', array_fill(0, count($chunk), '?')) . ') LIMIT 1',
+                array_merge([\Cashu\ProofState::UNSPENT], $chunk)
+            );
+            if ($row !== null) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -1074,11 +1181,13 @@ class BackgroundRunner {
      * Trim delivered webhook history, never unresolved work.
      *
      * The old query also removed rows with attempts >= 4, which is precisely the set an
-     * operator still needs to see and redeliver.
+     * operator still needs to see and redeliver. Cancelled rows (no signing secret, see
+     * WebhookSender::cancelPending) are history too: nothing will ever send them.
      */
     private static function cleanupWebhooks(): string {
+        $history = 'delivered_at IS NOT NULL OR signing_secret IS NULL';
         $countResult = Database::fetchOne(
-            "SELECT COUNT(*) as cnt FROM webhook_deliveries WHERE delivered_at IS NOT NULL"
+            "SELECT COUNT(*) as cnt FROM webhook_deliveries WHERE $history"
         );
         $totalCount = (int)($countResult['cnt'] ?? 0);
         if ($totalCount <= 1000) {
@@ -1090,11 +1199,11 @@ class BackgroundRunner {
             DELETE FROM webhook_deliveries
             WHERE id IN (
                 SELECT id FROM webhook_deliveries
-                WHERE delivered_at IS NOT NULL
+                WHERE $history
                 ORDER BY created_at ASC LIMIT ?
             )
         ", [$deleteCount]);
 
-        return "deleted {$deleteCount} delivered records";
+        return "deleted {$deleteCount} old records";
     }
 }

@@ -385,12 +385,17 @@ class PaymentRequest {
         return is_array($decoded) ? $decoded : null;
     }
 
-    /** Drop requests nobody paid, so the table does not grow without bound. */
-    public static function cleanup(int $olderThanSeconds = 604800): int {
+    /**
+     * Drop requests nobody paid, a day after they stopped being payable, so the table
+     * does not grow without bound. Anyone can create these rows (a QR on a public page);
+     * keeping them for a week let a flood of them pile up. Paid and receiving rows stay.
+     */
+    public static function cleanup(int $graceSeconds = 86400): int {
+        $cutoff = time() - $graceSeconds;
         return Database::delete(
             'payment_requests',
-            'status = ? AND created_at < ?',
-            [self::STATUS_PENDING, time() - $olderThanSeconds]
+            'status = ? AND (expires_at < ? OR created_at < ?)',
+            [self::STATUS_PENDING, $cutoff, $cutoff - self::TTL]
         );
     }
 }

@@ -19,13 +19,9 @@ function cashupay_is_real_btcpay_configured(): bool {
         return false;
     }
 
-    // Check if URL points to CashuPay (not a real BTCPay Server)
-    $cashupay_url = site_url('/cashupay');
-    if (strpos($url, $cashupay_url) === 0) {
-        return false; // Already ours
-    }
-
-    return true; // Real BTCPay Server is configured
+    // Ours even after a move between http and https or with a trailing slash; a
+    // look-alike such as /cashupay-copy is not (UX-A11).
+    return !cashupay_gateway_url_is_ours((string) $url);
 }
 
 /**

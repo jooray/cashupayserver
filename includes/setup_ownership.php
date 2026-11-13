@@ -173,6 +173,12 @@ class Setup {
         // claim hash, so it is locked out from its next request on.
         error_log("CashuPayServer: setup ownership taken over with the recovery code from {$ip}");
         self::assignClaim();
+        // The previous holder may have chosen a password and been logged in with it: end
+        // that admin session now, not only its wizard access. This browser is not an
+        // admin until it chooses a password itself.
+        Auth::bumpPasswordVersion();
+        unset($_SESSION['admin_logged_in'], $_SESSION['login_time'], $_SESSION['last_seen'],
+            $_SESSION['password_version']);
         return true;
     }
 

@@ -383,9 +383,104 @@ class Config {
         ];
         $updateData = array_intersect_key($data, array_flip($allowed));
 
+        $mintMoves = array_key_exists('mint_url', $updateData) || array_key_exists('mint_unit', $updateData);
+        if ($mintMoves) {
+            // Before the switch, so the outgoing mint is on record too (UX-F5).
+            self::storeMintHistory($storeId);
+        }
+
         if (!empty($updateData)) {
             Database::update('stores', $updateData, 'id = ?', [$storeId]);
         }
+        if ($mintMoves && (string)($updateData['mint_url'] ?? $store['mint_url'] ?? '') !== '') {
+            self::recordStoreMint(
+                $storeId,
+                (string)($updateData['mint_url'] ?? $store['mint_url']),
+                (string)($updateData['mint_unit'] ?? $store['mint_unit'] ?? 'sat')
+            );
+        }
+    }
+
+    /**
+     * Every (mint, unit) a store has ever used, oldest first: the recovery kit's list.
+     *
+     * Invoices are pruned after 90 days and removed backup mints leave no row, so the
+     * live tables alone forget a mint the store's seed still has money at (UX-F5). This
+     * append-only list (config key mint_history_<storeId>) remembers. Each read also
+     * folds in whatever the live tables show, which backfills an older install on first
+     * read and repairs an append lost to a concurrent write.
+     *
+     * @return list<array{mint_url: string, unit: string}>
+     */
+    public static function storeMintHistory(string $storeId): array {
+        $key = 'mint_history_' . $storeId;
+        $stored = self::get($key);
+        $history = [];
+        foreach (is_array($stored) ? $stored : [] as $entry) {
+            if (is_array($entry) && !empty($entry['mint_url'])) {
+                $history[rtrim((string)$entry['mint_url'], '/') . '|' . strtolower((string)($entry['unit'] ?? 'sat'))] = true;
+            }
+        }
+        $before = count($history);
+
+        $store = self::getStore($storeId);
+        if ($store === null) {
+            return self::mintHistoryList($history);
+        }
+        $storeUnit = strtolower((string)($store['mint_unit'] ?? 'sat'));
+        $seen = [];
+        foreach (self::getStoreWalletAccounts($storeId) as $account) {
+            $seen[] = [$account['mint_url'], $account['unit']];
+        }
+        $sources = [
+            'SELECT DISTINCT mint_url, unit FROM store_mints WHERE store_id = ?',
+            'SELECT DISTINCT mint_url, mint_unit AS unit FROM invoices WHERE store_id = ? AND mint_url IS NOT NULL',
+            'SELECT DISTINCT mint_url, unit FROM transfers WHERE store_id = ? AND mint_url IS NOT NULL',
+            'SELECT DISTINCT mint_url, unit FROM payment_requests WHERE store_id = ?',
+        ];
+        foreach ($sources as $sql) {
+            try {
+                foreach (Database::fetchAll($sql, [$storeId]) as $row) {
+                    $seen[] = [$row['mint_url'], $row['unit']];
+                }
+            } catch (Throwable $e) {
+                // A table or column an older database does not have yet.
+            }
+        }
+        foreach ($seen as [$url, $unit]) {
+            $url = rtrim(trim((string)$url), '/');
+            if ($url !== '') {
+                $history[$url . '|' . strtolower(trim((string)($unit ?: $storeUnit)))] = true;
+            }
+        }
+        if (count($history) !== $before || !is_array($stored)) {
+            self::set($key, self::mintHistoryList($history));
+        }
+        return self::mintHistoryList($history);
+    }
+
+    /** Add one (mint, unit) to a store's mint history; never removes anything. */
+    public static function recordStoreMint(string $storeId, string $mintUrl, string $unit): void {
+        $history = self::storeMintHistory($storeId);
+        $url = rtrim(trim($mintUrl), '/');
+        $unit = strtolower(trim($unit)) ?: 'sat';
+        foreach ($history as $entry) {
+            if ($entry['mint_url'] === $url && $entry['unit'] === $unit) {
+                return;
+            }
+        }
+        $history[] = ['mint_url' => $url, 'unit' => $unit];
+        self::set('mint_history_' . $storeId, $history);
+    }
+
+    /** @param array<string, true> $keys "url|unit" @return list<array{mint_url: string, unit: string}> */
+    private static function mintHistoryList(array $keys): array {
+        $out = [];
+        foreach (array_keys($keys) as $k) {
+            $pos = strrpos((string)$k, '|');
+            $out[] = ['mint_url' => substr((string)$k, 0, $pos), 'unit' => substr((string)$k, $pos + 1)];
+        }
+        return $out;
     }
 
     /**
@@ -614,7 +709,7 @@ class Config {
         $mintUrl = self::normalizeMintUrl($mintUrl, ...$known);
         $unit = self::validUnit($unit);
 
-        return (int) Database::insert('store_mints', [
+        $id = (int) Database::insert('store_mints', [
             'store_id' => $storeId,
             'mint_url' => $mintUrl,
             'unit' => $unit,
@@ -622,6 +717,9 @@ class Config {
             'enabled' => 1,
             'created_at' => Database::timestamp(),
         ]);
+        // Kept after the backup is removed, for the recovery kit (UX-F5).
+        self::recordStoreMint($storeId, $mintUrl, $unit);
+        return $id;
     }
 
     /**

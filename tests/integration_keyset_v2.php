@@ -112,7 +112,7 @@ check($wallet->getInputFeePpk('00deadbeefcafe12') === 100, 'legacy v1 keyset fee
 echo "invoice flow:\n";
 $invoice = Invoice::create($storeId, ['amount' => 21, 'currency' => 'sat']);
 check(!empty($invoice['id']) && !empty($invoice['quote_id']), 'invoice created with mint quote');
-check(str_starts_with((string)$invoice['bolt11'], 'lnbc210n1mock'), 'lightning invoice returned');
+check(str_starts_with((string)$invoice['bolt11'], 'lnbc210n1'), 'lightning invoice returned');
 
 // New-style quote (no `state` field) must read as unpaid before payment.
 Invoice::pollSingleQuote($invoice['id'], true);
@@ -335,6 +335,19 @@ foreach (Invoice::scanStrandedNamespaces() as $s) {
     if ($s['wallet_id'] === $exp['wallet_id']) { $stillListed = true; }
 }
 check($stillListed, 'an exported stranded namespace stays on the recovery screen until it is marked recovered');
+
+// Writing off is refused while the mint still holds the token's money (UX-F2).
+$notClaimed = null;
+try {
+    Invoice::markNamespaceRecovered($oldMint, 'sat', $storeAccount, $exp['secrets']);
+} catch (Exception $e) {
+    $notClaimed = $e->getCode();
+}
+check($notClaimed === Invoice::STRANDED_NOT_CLAIMED, 'mark recovered is refused while the token is unclaimed at the mint');
+$claimer = new Wallet($oldMint, 'sat', $dataDir . '/claimer-wallet.db', 'claim1');
+$claimer->loadMint();
+$claimer->initializeNewFromMnemonic(\Cashu\Mnemonic::generate());
+$claimer->receive($exp['token']);
 
 $marked = Invoice::markNamespaceRecovered($oldMint, 'sat', $storeAccount, $exp['secrets']);
 check($marked === $exp['count'], "mark recovered marks all {$exp['count']} exported proofs");

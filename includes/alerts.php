@@ -56,6 +56,11 @@ class Alerts {
             }
         }
 
+        $stale = self::staleBackground();
+        if ($stale !== null) {
+            $problems[] = $stale;
+        }
+
         try {
             require_once __DIR__ . '/background_runner.php';
             foreach (BackgroundRunner::status()['failing'] ?? [] as $task) {
@@ -76,9 +81,9 @@ class Alerts {
                 . 'Open the dashboard: it says how to fix this.'];
         }
 
-        $failed = (int)(Database::fetchOne(
-            "SELECT COUNT(*) AS cnt FROM webhook_deliveries WHERE delivered_at IS NULL AND attempts >= 5"
-        )['cnt'] ?? 0);
+        // Cancelled rows (the shop was reconnected or the webhook changed) are not owed.
+        require_once __DIR__ . '/webhook_sender.php';
+        $failed = WebhookSender::countUndelivered(null, 5);
         if ($failed > 0) {
             $problems[] = ['key' => 'webhooks:' . intdiv(time(), 86400),
                 'text' => 'Your shop has not been told about ' . $failed . ' payment(s), so those orders may still show '
@@ -86,6 +91,70 @@ class Alerts {
         }
 
         return $problems;
+    }
+
+    /** Grace after setup before "background tasks have never run" is a problem. */
+    const NEVER_RAN_GRACE = 900;
+
+    /**
+     * Background work that has stopped, or never started.
+     *
+     * Common on cheap hosts (WP-Cron disabled, loopback requests blocked), and nothing
+     * else says so: email and Nostr alerts are sent by the very runner that stopped, so
+     * this reaches the operator through the dashboard and the wp-admin notice (run()
+     * leaves it out: a running runner is the proof it is not stopped).
+     *
+     * Background work is started by traffic on most installs, so a quiet shop goes
+     * stale with nothing wrong. A stale heartbeat is reported only when work has been
+     * waiting for a run longer than the stale window: an invoice or a shop notification
+     * created after the last run that is still open.
+     *
+     * @return ?array{key: string, text: string}
+     */
+    public static function staleBackground(?int $now = null): ?array {
+        $now = $now ?? time();
+        if (!Config::isSetupComplete()) {
+            return null;
+        }
+        require_once __DIR__ . '/health.php';
+        require_once __DIR__ . '/webhook_sender.php';
+        $lastRun = (int)Config::get('cron_last_run', '0');
+        $impact = 'Until they run again, paid orders are not being marked paid, your shop is not told about '
+            . 'payments, and automatic withdrawals are paused. Open the dashboard: it says how to get them running.';
+        if ($lastRun === 0) {
+            $setupAt = self::setupCompletedAt();
+            if ($setupAt === null || $now - $setupAt <= self::NEVER_RAN_GRACE) {
+                return null;
+            }
+            return ['key' => 'stale:never:' . intdiv($now, 86400),
+                'text' => 'The background tasks of CashuPayServer have never run since setup. ' . $impact];
+        }
+        $cutoff = $now - Health::HEARTBEAT_STALE_SECONDS;
+        if ($lastRun >= $cutoff) {
+            return null;
+        }
+        $waiting = Database::fetchOne(
+            "SELECT 1 AS hit FROM invoices
+              WHERE status IN ('New', 'Processing') AND created_at > ? AND created_at < ? LIMIT 1",
+            [$lastRun, $cutoff]
+        ) ?? Database::fetchOne(
+            "SELECT 1 AS hit FROM webhook_deliveries d
+              WHERE " . WebhookSender::OWED_SQL . " AND d.created_at > ? AND d.created_at < ? LIMIT 1",
+            [$lastRun, $cutoff]
+        );
+        if ($waiting === null) {
+            return null;
+        }
+        return ['key' => 'stale:' . intdiv($now, 86400),
+            'text' => 'The background tasks of CashuPayServer have not run since ' . gmdate('Y-m-d H:i', $lastRun)
+                . ' UTC. ' . $impact];
+    }
+
+    /** When setup was finished, from the config row it wrote (null when unknown). */
+    private static function setupCompletedAt(): ?int {
+        $row = Database::fetchOne("SELECT updated_at FROM config WHERE key = 'setup_complete'");
+        $at = $row !== null ? (int)$row['updated_at'] : 0;
+        return $at > 0 ? $at : null;
     }
 
     /** Whether any channel is configured. */
@@ -103,6 +172,9 @@ class Alerts {
         $now = time();
         $new = [];
         foreach (self::problems() as $p) {
+            if (str_starts_with($p['key'], 'stale:')) {
+                continue; // this very run shows the background is running again
+            }
             if ($now - (int)($sent[$p['key']] ?? 0) >= self::REPEAT_AFTER) {
                 $new[] = $p;
             }
@@ -393,9 +465,16 @@ class Alerts {
             $key = base64_encode(random_bytes(16));
             fwrite($sock, "GET " . ($parts['path'] ?? '/') . " HTTP/1.1\r\nHost: {$host}\r\nUpgrade: websocket\r\n"
                 . "Connection: Upgrade\r\nSec-WebSocket-Key: {$key}\r\nSec-WebSocket-Version: 13\r\n\r\n");
+            // Bounded in size per line and in time overall: stream_set_timeout() applies
+            // per read, so a relay trickling bytes could otherwise hold the run forever,
+            // and fgets() without a length reads an endless line whole.
             $head = '';
+            $handshakeDeadline = microtime(true) + 15;
             while (!str_contains($head, "\r\n\r\n") && !feof($sock) && strlen($head) < 8192) {
-                $line = fgets($sock);
+                if (microtime(true) > $handshakeDeadline) {
+                    throw new RuntimeException('relay did not answer in time');
+                }
+                $line = fgets($sock, 8193 - strlen($head));
                 if ($line === false) { break; }
                 $head .= $line;
             }

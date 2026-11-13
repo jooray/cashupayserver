@@ -34,9 +34,13 @@ ignore_user_abort(true);
 // Verify authorization
 // The header is preferred (internal self-requests always use it); `?key=` stays for
 // existing external crontab entries.
-$providedKey = (string)($_SERVER['HTTP_X_CRON_KEY'] ?? '');
-if ($providedKey === '') {
-    $providedKey = (string)($_GET['key'] ?? '');
+// Only plain strings count: `?key[]=x` arrives as an array and is no key at all.
+$providedKey = $_SERVER['HTTP_X_CRON_KEY'] ?? '';
+if (!is_string($providedKey) || $providedKey === '') {
+    $providedKey = $_GET['key'] ?? '';
+}
+if (!is_string($providedKey)) {
+    $providedKey = '';
 }
 $isInternal = isset($_GET['internal']) && $_GET['internal'] === '1';
 
@@ -69,7 +73,7 @@ header('Content-Type: application/json');
 // One leased, time-budgeted runner shared with WP-Cron and the admin "Run now" action.
 // A run stops when its budget is spent and the next one continues from that point, so a
 // slow mint early in the list cannot starve webhook delivery at the end of it.
-$budget = (int)($_GET['budget'] ?? 0);
+$budget = is_string($_GET['budget'] ?? null) ? (int)$_GET['budget'] : 0;
 if ($budget < 5 || $budget > BackgroundRunner::MAX_BUDGET) {
     $budget = BackgroundRunner::DEFAULT_BUDGET;
 }

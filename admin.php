@@ -305,7 +305,7 @@ function cashupay_diagnostics(?string $storeId): array {
 
     $failedDeliveries = (int)(Database::fetchOne(
         "SELECT COUNT(*) AS cnt FROM webhook_deliveries
-         WHERE delivered_at IS NULL AND attempts > 0"
+         WHERE delivered_at IS NULL AND attempts > 0 AND signing_secret IS NOT NULL"
     )['cnt'] ?? 0);
 
     $pendingJournals = [];
@@ -323,6 +323,27 @@ function cashupay_diagnostics(?string $storeId): array {
         } catch (Throwable $e) {
             // Diagnostics must never be the thing that breaks the dashboard.
             $pendingJournals = [];
+        }
+    }
+
+    // A public mint stored as http:// (accepted by older versions) is now refused at
+    // connect time, so payments through it stop until the operator switches to https.
+    $insecureMints = [];
+    foreach (Database::fetchAll(
+        "SELECT id, name, mint_url FROM stores WHERE mint_url LIKE 'http:%'" . ($storeId ? ' AND id = ?' : ''),
+        $storeId ? [$storeId] : []
+    ) as $row) {
+        if (MintHelpers::isPublicHttpMint((string)$row['mint_url'])) {
+            $insecureMints[] = ['store' => $row['name'], 'mint' => $row['mint_url'], 'primary' => true];
+        }
+    }
+    foreach (Database::fetchAll(
+        "SELECT s.name, m.mint_url FROM store_mints m JOIN stores s ON s.id = m.store_id
+         WHERE m.mint_url LIKE 'http:%'" . ($storeId ? ' AND m.store_id = ?' : ''),
+        $storeId ? [$storeId] : []
+    ) as $row) {
+        if (MintHelpers::isPublicHttpMint((string)$row['mint_url'])) {
+            $insecureMints[] = ['store' => $row['name'], 'mint' => $row['mint_url'], 'primary' => false];
         }
     }
 
@@ -422,6 +443,15 @@ function cashupay_diagnostics(?string $storeId): array {
         'pendingWalletOperations' => $pendingJournals,
         'unreachableAccounts' => $unreachableAccounts,
         'recoveringAccounts' => $recoveringAccounts,
+        'insecureMints' => $insecureMints,
+        // Shop notifications the shop never confirmed, for "Tell the shop again" (UX-A3).
+        'undeliveredWebhooks' => (function () use ($storeId) {
+            try {
+                return WebhookSender::listUndelivered($storeId, 20);
+            } catch (Throwable $e) {
+                return [];
+            }
+        })(),
         // A missing server address only *breaks* something when nothing else is
         // driving background work. With a real cron job running every minute the
         // installation is healthy, and shouting "needs attention" at an operator
@@ -430,6 +460,7 @@ function cashupay_diagnostics(?string $storeId): array {
         // not raise an alarm on its own — it is listed so the operator can act on it.
         'needsAttention' => $stale
             || $exposureWarning !== null
+            || !empty($insecureMints)
             || !empty(array_filter($checkoutFailures, fn($f) => $f['recent']))
             || ($updatePrompt !== null && $updatePrompt['severity'] === 'security')
             || !empty(array_filter($background['failing'] ?? [], fn($t) => !empty($t['paymentPath'])))
@@ -898,6 +929,36 @@ if (isset($_GET['api'])) {
             ]);
             break;
 
+        case 'background_checks':
+            // Loaded after login: the standalone address carries the cron key.
+            require_once __DIR__ . '/includes/background_runner.php';
+            $bgStatus = BackgroundRunner::status();
+            if (Urls::isWordPress()) {
+                $site = rtrim(site_url('/'), '/');
+                echo json_encode([
+                    'mode' => 'wordpress',
+                    'secondsAgo' => $bgStatus['secondsAgo'],
+                    'hostMessage' => "Hello,\n\nmy WordPress site " . $site . " uses the CashuPay plugin, which "
+                        . "relies on WordPress's scheduled tasks (WP-Cron). Could you make sure they run at least every "
+                        . "5 minutes, for example with a server cron job that opens " . $site . "/wp-cron.php, and that "
+                        . "the site is allowed to open its own address (loopback requests are not blocked)?\n\nThank you.",
+                ]);
+                break;
+            }
+            $cronKeyValue = (string)Config::get('cron_key', '');
+            if ($cronKeyValue === '') {
+                $cronKeyValue = bin2hex(random_bytes(16));
+                Config::set('cron_key', $cronKeyValue);
+            }
+            $cronEndpoint = Urls::cron();
+            echo json_encode([
+                'mode' => 'standalone',
+                'secondsAgo' => $bgStatus['secondsAgo'],
+                'cronUrl' => $cronEndpoint . (str_contains($cronEndpoint, '?') ? '&' : '?') . 'key=' . rawurlencode($cronKeyValue),
+                'cronCommand' => 'curl -s -H "X-Cron-Key: ' . $cronKeyValue . '" "' . $cronEndpoint . '" >/dev/null 2>&1',
+            ]);
+            break;
+
         case 'data_folder':
             // Not printed into the page itself: the shell is served before login, and
             // the absolute path tells a stranger where the wallet lives on disk.
@@ -1206,18 +1267,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 echo json_encode(['error' => 'Store not found or has no wallet']);
                 break;
             }
-            RecoveryKit::markTaken((string)$kitStore['id']);
-            error_log("CashuPayServer: recovery sheet taken for store {$kitStore['id']} from " . Security::getClientIp());
-            header_remove('Content-Type');
+            // The payload first: a sheet that failed to build must not count as taken
+            // (UX-F6). A downloaded file is kept; a page only once the operator says so,
+            // with the button at its foot (recovery_kit_taken).
+            error_log("CashuPayServer: recovery sheet made for store {$kitStore['id']} from " . Security::getClientIp());
             if (($_POST['format'] ?? '') === 'text') {
+                $kitPayload = RecoveryKit::text($kitStore);
+                RecoveryKit::markTaken((string)$kitStore['id']);
+                header_remove('Content-Type');
                 header('Content-Type: text/plain; charset=utf-8');
                 header('Content-Disposition: attachment; filename="cashupay-recovery-'
                     . preg_replace('/[^A-Za-z0-9_-]+/', '-', (string)$kitStore['name']) . '.txt"');
-                echo RecoveryKit::text($kitStore);
             } else {
+                $kitPayload = RecoveryKit::html($kitStore, Auth::generateCsrfToken());
+                header_remove('Content-Type');
                 header('Content-Type: text/html; charset=utf-8');
-                echo RecoveryKit::html($kitStore);
             }
+            echo $kitPayload;
+            exit;
+
+        case 'recovery_kit_taken':
+            // "I have printed or saved this sheet", posted from the sheet itself (CSRF
+            // checked like every action). Marks the mint list the sheet showed, not
+            // today's, so a mint added since still asks for a new sheet.
+            $kitStore = Config::getStore((string)($_POST['store_id'] ?? ''));
+            $kitFingerprint = (string)($_POST['fingerprint'] ?? '');
+            header_remove('Content-Type');
+            header('Content-Type: text/html; charset=utf-8');
+            if (!$kitStore || !preg_match('/^[0-9a-f]{64}$/', $kitFingerprint)) {
+                http_response_code(400);
+                echo '<!DOCTYPE html><p style="font-family:sans-serif">This sheet could not be matched to a store. Make a new one from the dashboard.</p>';
+                exit;
+            }
+            RecoveryKit::markTaken((string)$kitStore['id'], $kitFingerprint);
+            error_log("CashuPayServer: recovery sheet confirmed kept for store {$kitStore['id']}");
+            echo '<!DOCTYPE html><meta charset="utf-8"><p style="font-family:sans-serif">Thank you. The dashboard will stop '
+                . 'reminding you until the list of mints changes. Keep the sheet somewhere safe. You can close this tab.</p>';
             exit;
 
         case 'download_backup':
@@ -1480,6 +1565,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             break;
 
+        case 'redeliver_webhook':
+            // "Tell the shop again": put one unacknowledged notification back in the
+            // outbox with a fresh retry budget, then try to send it right away.
+            $deliveryId = is_string($_POST['delivery_id'] ?? null) ? $_POST['delivery_id'] : '';
+            $owner = $deliveryId === '' ? null : Database::fetchOne(
+                'SELECT w.store_id FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id WHERE d.id = ?',
+                [$deliveryId]
+            );
+            if ($owner === null || !WebhookSender::requeueForStore($deliveryId, (string)$owner['store_id'])) {
+                http_response_code(404);
+                echo json_encode(['error' => 'This notification can no longer be sent (it was already delivered, or the shop connection was removed).']);
+                break;
+            }
+            try {
+                WebhookSender::deliverPending(1); // one send, so the click answers within seconds
+            } catch (Throwable $e) {
+                // Queued either way; background checks keep trying.
+                error_log('CashuPayServer: immediate redelivery failed: ' . $e->getMessage());
+            }
+            $after = Database::fetchOne('SELECT delivered_at FROM webhook_deliveries WHERE id = ?', [$deliveryId]);
+            echo json_encode(['success' => true, 'delivered' => !empty($after['delivered_at'])]);
+            break;
+
         case 'run_background':
             // "Run now": the same leased runner cron uses, so what an operator triggers
             // here is exactly what a scheduled tick does.
@@ -1532,6 +1640,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $options = [
                     'amount' => $priced['amount'],
                     'currency' => $priced['currency'],
+                    // The figure guarded above, not a second conversion at a newer rate.
+                    '_priced' => [
+                        'amount_in_mint_unit' => $priced['amountInMintUnit'],
+                        'mint_unit' => strtolower((string)(Config::getStore($storeId)['mint_unit'] ?? 'sat')),
+                    ],
                 ];
                 if ($memo !== '') {
                     $options['metadata'] = ['itemDesc' => $memo];
@@ -1738,85 +1851,107 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $updates['display_currency'] = $_POST['display_currency'];
                 }
 
-                // Changing the mint URL or unit points the store at a new wallet
-                // namespace (namespace = hash(mint_url, unit, account)), stranding
-                // any funds held at the current mint — they stay in the DB but
-                // become invisible/unspendable through this store. It is not
-                // refused: warn (with the balance that would be stranded) and let
-                // the operator confirm; the funds stay recoverable afterwards.
-                $mintChanged = array_key_exists('mint_url', $updates)
-                    && rtrim((string)$updates['mint_url'], '/') !== rtrim((string)($store['mint_url'] ?? ''), '/');
-                $unitChanged = array_key_exists('mint_unit', $updates)
-                    && strtolower((string)$updates['mint_unit']) !== strtolower((string)($store['mint_unit'] ?? 'sat'));
-                $confirmStranding = isset($_POST['confirm_stranding']) && $_POST['confirm_stranding'] === '1';
-                // Still true when the old mint is kept as a backup: the balance stays
-                // tracked and recoverable, but getUnspentProofs() reads the primary
-                // account only, so it does leave this store's spendable view.
-                $wouldStrand = ($mintChanged || $unitChanged) && Config::isStoreWalletInitialized($storeId);
+                // A mint/unit change is decided and saved under the store's funds lock, so
+                // an automatic withdrawal cannot start on the old account between the
+                // checks below and the switch (UX-F7). The store is read again under it.
+                $fundsLock = null;
+                if (array_key_exists('mint_url', $updates) || array_key_exists('mint_unit', $updates)) {
+                    $fundsLock = cashupay_acquire_lock('funds_' . $storeId);
+                    if (!$fundsLock) {
+                        http_response_code(409);
+                        // Plain text in 'error': the mint form shows that field as is.
+                        echo json_encode(['error' => 'A withdrawal or export for this store is running. Try again in a minute.']);
+                        break;
+                    }
+                    $store = Config::getStore($storeId);
+                    if (!$store) {
+                        cashupay_release_lock($fundsLock);
+                        throw new Exception('Store not found');
+                    }
+                }
+                try {
+                    // Changing the mint URL or unit points the store at a new wallet
+                    // namespace (namespace = hash(mint_url, unit, account)), stranding
+                    // any funds held at the current mint — they stay in the DB but
+                    // become invisible/unspendable through this store. It is not
+                    // refused: warn (with the balance that would be stranded) and let
+                    // the operator confirm; the funds stay recoverable afterwards.
+                    $mintChanged = array_key_exists('mint_url', $updates)
+                        && rtrim((string)$updates['mint_url'], '/') !== rtrim((string)($store['mint_url'] ?? ''), '/');
+                    $unitChanged = array_key_exists('mint_unit', $updates)
+                        && strtolower((string)$updates['mint_unit']) !== strtolower((string)($store['mint_unit'] ?? 'sat'));
+                    $confirmStranding = isset($_POST['confirm_stranding']) && $_POST['confirm_stranding'] === '1';
+                    // Still true when the old mint is kept as a backup: the balance stays
+                    // tracked and recoverable, but getUnspentProofs() reads the primary
+                    // account only, so it does leave this store's spendable view.
+                    $wouldStrand = ($mintChanged || $unitChanged) && Config::isStoreWalletInitialized($storeId);
 
-                // A zero balance does not mean nothing is outstanding. Recovery only
-                // visits the account a store currently points at, so switching away
-                // while a payment may still arrive, a withdrawal is in flight, or an
-                // exported token is unredeemed leaves that work with no owner. Those
-                // are blocked outright rather than offered as a choice: an operator
-                // cannot be expected to weigh "an in-flight melt journal" against a
-                // mint change.
-                // Keeping the outgoing mint as a backup changes everything: recovery
-                // enumerates a store's *configured* accounts, so an account that stays on
-                // the list is still visited, still reconciled, and nothing is orphaned.
-                // The block below exists to prevent stranding, so it should not fire when
-                // stranding is impossible.
-                $currentMint = rtrim((string)($store['mint_url'] ?? ''), '/');
-                $currentUnit = strtolower((string)($store['mint_unit'] ?? 'sat'));
-                $oldMintRetained = Config::isMintRetainedAsBackup($storeId, $currentMint, $currentUnit);
+                    // A zero balance does not mean nothing is outstanding. Recovery only
+                    // visits the account a store currently points at, so switching away
+                    // while a payment may still arrive, a withdrawal is in flight, or an
+                    // exported token is unredeemed leaves that work with no owner. Those
+                    // are blocked outright rather than offered as a choice: an operator
+                    // cannot be expected to weigh "an in-flight melt journal" against a
+                    // mint change.
+                    // Keeping the outgoing mint as a backup changes everything: recovery
+                    // enumerates a store's *configured* accounts, so an account that stays on
+                    // the list is still visited, still reconciled, and nothing is orphaned.
+                    // The block below exists to prevent stranding, so it should not fire when
+                    // stranding is impossible.
+                    $currentMint = rtrim((string)($store['mint_url'] ?? ''), '/');
+                    $currentUnit = strtolower((string)($store['mint_unit'] ?? 'sat'));
+                    $oldMintRetained = Config::isMintRetainedAsBackup($storeId, $currentMint, $currentUnit);
 
-                if (($mintChanged || $unitChanged) && !$oldMintRetained) {
-                    $blockers = StoreSafety::deletionBlockers($storeId, false);
-                    if (!empty($blockers)) {
+                    if (($mintChanged || $unitChanged) && !$oldMintRetained) {
+                        $blockers = StoreSafety::deletionBlockers($storeId, false);
+                        if (!empty($blockers)) {
+                            http_response_code(409);
+                            echo json_encode([
+                                'error' => 'mint_change_blocked',
+                                'blockers' => $blockers,
+                                'message' => 'This store still has payments or transfers in progress: '
+                                    . implode('; ', $blockers)
+                                    . '. Switching mints now would leave them with nowhere to go. '
+                                    . 'Wait until they finish, then try again.',
+                            ]);
+                            break;
+                        }
+                    }
+
+                    if ($wouldStrand && !$confirmStranding) {
+                        $strandedBalance = 0;
+                        try {
+                            $strandedBalance = Invoice::getBalance($storeId);
+                        } catch (Throwable $e) {
+                            $strandedBalance = -1; // could not verify — warn to be safe
+                        }
                         http_response_code(409);
                         echo json_encode([
-                            'error' => 'mint_change_blocked',
-                            'blockers' => $blockers,
-                            'message' => 'This store still has payments or transfers in progress: '
-                                . implode('; ', $blockers)
-                                . '. Switching mints now would leave them with nowhere to go. '
-                                . 'Wait until they finish, then try again.',
+                            'error' => 'mint_change_strands_funds',
+                            'balance' => max(0, $strandedBalance),
+                            'balanceUnknown' => $strandedBalance < 0,
+                            'currentMint' => $store['mint_url'] ?? null,
+                            'currentUnit' => $store['mint_unit'] ?? 'sat',
+                            'newMint' => array_key_exists('mint_url', $updates) ? $updates['mint_url'] : ($store['mint_url'] ?? null),
+                            'newUnit' => array_key_exists('mint_unit', $updates) ? $updates['mint_unit'] : ($store['mint_unit'] ?? 'sat'),
+                            'message' => 'Changing this store\'s mint or unit will make its current balance invisible and unspendable through this store. Export the balance first, or confirm to change anyway (the funds stay recoverable under "Recover funds from a previous mint").',
                         ]);
                         break;
                     }
-                }
 
-                if ($wouldStrand && !$confirmStranding) {
-                    $strandedBalance = 0;
-                    try {
-                        $strandedBalance = Invoice::getBalance($storeId);
-                    } catch (Throwable $e) {
-                        $strandedBalance = -1; // could not verify — warn to be safe
+                    if (($mintChanged || $unitChanged) && $oldMintRetained) {
+                        error_log(
+                            "CashuPayServer: store {$storeId} switched primary mint from {$currentMint}; "
+                            . 'the old mint is retained as a backup so its funds stay tracked'
+                        );
                     }
-                    http_response_code(409);
-                    echo json_encode([
-                        'error' => 'mint_change_strands_funds',
-                        'balance' => max(0, $strandedBalance),
-                        'balanceUnknown' => $strandedBalance < 0,
-                        'currentMint' => $store['mint_url'] ?? null,
-                        'currentUnit' => $store['mint_unit'] ?? 'sat',
-                        'newMint' => array_key_exists('mint_url', $updates) ? $updates['mint_url'] : ($store['mint_url'] ?? null),
-                        'newUnit' => array_key_exists('mint_unit', $updates) ? $updates['mint_unit'] : ($store['mint_unit'] ?? 'sat'),
-                        'message' => 'Changing this store\'s mint or unit will make its current balance invisible and unspendable through this store. Export the balance first, or confirm to change anyway (the funds stay recoverable under "Recover funds from a previous mint").',
-                    ]);
-                    break;
-                }
 
-                if (($mintChanged || $unitChanged) && $oldMintRetained) {
-                    error_log(
-                        "CashuPayServer: store {$storeId} switched primary mint from {$currentMint}; "
-                        . 'the old mint is retained as a backup so its funds stay tracked'
-                    );
+                    // Allow the mint/unit change only when the operator confirmed the
+                    // stranding warning; seed changes remain permanently blocked.
+                    Config::updateStore($storeId, $updates, $wouldStrand && $confirmStranding);
+                } finally {
+                    cashupay_release_lock($fundsLock);
                 }
-
-                // Allow the mint/unit change only when the operator confirmed the
-                // stranding warning; seed changes remain permanently blocked.
-                Config::updateStore($storeId, $updates, $wouldStrand && $confirmStranding);
 
                 // A new mint means a new wallet namespace, and an empty namespace has no
                 // seed bound to it yet. Binding it is a deliberate act the library refuses
@@ -1893,47 +2028,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Guard: deleting a store removes its seed phrase = irrecoverable funds.
             // Refuse while it still holds ecash unless the operator explicitly confirms.
             // See FABLE-CASHUPAYSERVER-AUDIT (A3).
-            $storeId = $_POST['store_id'] ?? '';
+            $storeId = (string)($_POST['store_id'] ?? '');
             $confirmLoss = isset($_POST['confirm_fund_loss']) && $_POST['confirm_fund_loss'] === '1';
-            $balance = 0;
+            // Checks and delete under the store's funds lock, so a withdrawal cannot start
+            // in between and leave a journal behind for a store that no longer exists (UX-F7).
+            $fundsLock = cashupay_acquire_lock('funds_' . $storeId);
+            if (!$fundsLock) {
+                http_response_code(409);
+                echo json_encode([
+                    'error' => 'store_busy',
+                    'message' => 'A withdrawal or export for this store is running. Try again in a minute.',
+                ]);
+                break;
+            }
             try {
-                $balance = Config::isStoreConfigured($storeId) ? Invoice::getBalance($storeId) : 0;
-            } catch (Throwable $e) {
-                http_response_code(409);
-                echo json_encode([
-                    'error' => 'balance_unavailable',
-                    'message' => 'Cannot verify this store wallet safely; refusing to delete it.'
-                ]);
-                break;
-            }
-            if ($balance > 0 && !$confirmLoss) {
-                http_response_code(409);
-                echo json_encode([
-                    'error' => 'store_has_balance',
-                    'balance' => $balance,
-                    'message' => 'This store still holds funds. Withdraw first, or confirm you have backed up the seed phrase and accept losing these funds.'
-                ]);
-                break;
-            }
+                $balance = 0;
+                try {
+                    $balance = Config::isStoreConfigured($storeId) ? Invoice::getBalance($storeId) : 0;
+                } catch (Throwable $e) {
+                    http_response_code(409);
+                    echo json_encode([
+                        'error' => 'balance_unavailable',
+                        'message' => 'Cannot verify this store wallet safely; refusing to delete it.'
+                    ]);
+                    break;
+                }
+                // Spendable balance is not the whole story. A zero-balance store can still
+                // own a paid-but-unminted quote, an in-flight melt or swap, exported tokens
+                // nobody has redeemed, money at a backup mint in another currency, or a
+                // settlement webhook that never reached the shop — and deletion cascades
+                // all of it away. Confirmable the same way as the balance.
+                $blockers = StoreSafety::deletionBlockers($storeId);
+                if ($balance > 0 && !$confirmLoss) {
+                    // The one confirmation also accepts the blockers, so list them here
+                    // too: otherwise a second currency's money is never mentioned.
+                    http_response_code(409);
+                    echo json_encode([
+                        'error' => 'store_has_balance',
+                        'balance' => $balance,
+                        'blockers' => $blockers,
+                        'message' => 'This store still holds funds. Withdraw first, or confirm you have backed up the seed phrase and accept losing these funds.'
+                    ]);
+                    break;
+                }
+                if (!empty($blockers) && !$confirmLoss) {
+                    http_response_code(409);
+                    echo json_encode([
+                        'error' => 'store_has_unresolved_state',
+                        'blockers' => $blockers,
+                        'message' => 'This store has unresolved work: ' . implode('; ', $blockers)
+                            . '. Let it settle first, or confirm you accept losing it.'
+                    ]);
+                    break;
+                }
+                if ($confirmLoss && ($balance > 0 || !empty($blockers))) {
+                    error_log("CashuPayServer: store {$storeId} deleted from the dashboard despite: balance {$balance}"
+                        . (empty($blockers) ? '' : '; ' . implode('; ', $blockers)));
+                }
 
-            // Spendable balance is not the whole story. A zero-balance store can still
-            // own a paid-but-unminted quote, an in-flight melt or swap, exported tokens
-            // nobody has redeemed, or a settlement webhook that never reached the shop —
-            // and deletion cascades all of it away.
-            $blockers = StoreSafety::deletionBlockers($storeId);
-            if (!empty($blockers) && !$confirmLoss) {
-                http_response_code(409);
-                echo json_encode([
-                    'error' => 'store_has_unresolved_state',
-                    'blockers' => $blockers,
-                    'message' => 'This store has unresolved work: ' . implode('; ', $blockers)
-                        . '. Let it settle first, or confirm you accept losing it.'
-                ]);
-                break;
+                Database::delete('stores', 'id = ?', [$storeId]);
+                echo json_encode(['success' => true]);
+            } finally {
+                cashupay_release_lock($fundsLock);
             }
-
-            Database::delete('stores', 'id = ?', [$storeId]);
-            echo json_encode(['success' => true]);
             break;
 
         case 'create_api_key':
@@ -3059,7 +3216,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception('Create the recovery token again first, then confirm it was claimed.');
                 }
                 $secrets = $entry['secrets'];
-                $n = Invoice::markNamespaceRecovered($mintUrl, $unit, $account, $secrets);
+                // The mint is asked whether the token was claimed (UX-F2). Writing off
+                // without that answer needs its own, second confirmation.
+                $confirmUnverified = ($_POST['confirm_unverified'] ?? '') === '1';
+                try {
+                    $n = Invoice::markNamespaceRecovered($mintUrl, $unit, $account, $secrets, $confirmUnverified);
+                } catch (Exception $e) {
+                    if ($e->getCode() === Invoice::STRANDED_UNVERIFIED) {
+                        http_response_code(409);
+                        echo json_encode([
+                            'error' => 'mint_unreachable',
+                            'message' => 'The mint could not be reached, so this server cannot check that the token '
+                                . 'was claimed. Only write it off if your wallet shows the money arrived: if it did not, '
+                                . 'the money is lost from this screen for good.',
+                        ]);
+                        break;
+                    }
+                    if ($e->getCode() === Invoice::STRANDED_NOT_CLAIMED) {
+                        http_response_code(409);
+                        echo json_encode(['error' => 'not_claimed', 'message' => $e->getMessage()]);
+                        break;
+                    }
+                    throw $e;
+                }
                 unset($_SESSION['stranded_export'][$exportId]);
                 echo json_encode(['success' => true, 'marked' => $n]);
             } catch (Throwable $e) {
@@ -4048,7 +4227,7 @@ $isWp = Urls::isWordPress();
                 <div class="card" id="diagnostics-card" style="display: none;">
                     <div class="card-header">
                         <div class="card-title" id="diagnostics-title">Needs attention</div>
-                        <button class="btn btn-secondary btn-sm" id="run-background-btn" type="button">Run background tasks now</button>
+                        <button class="btn btn-secondary btn-sm" id="run-background-btn" type="button">Run once now</button>
                     </div>
                     <div id="diagnostics-body"></div>
                 </div>
@@ -4454,6 +4633,98 @@ $isWp = Urls::isWordPress();
                             response.ok ? 'success' : 'error');
                     } catch (e) {
                         showToast('Could not save', 'error');
+                    }
+                }
+                </script>
+
+                <div class="card" id="background-card">
+                    <div class="card-header">
+                        <div class="card-title">Background checks</div>
+                    </div>
+                    <div class="card-body">
+                        <p class="form-help" style="margin-bottom: 0.75rem;">
+                            Background checks mark paid orders as paid, tell your shop, send your automatic payouts
+                            and finish interrupted work. <span id="background-last-run"></span>
+                        </p>
+                        <?php if ($isWp): ?>
+                        <p class="form-help" style="margin-bottom: 0.75rem;">
+                            In WordPress they run by themselves when your site has visitors (WordPress's scheduled
+                            tasks). If your host has switched those off, or your site goes hours without visitors,
+                            send this message to your hosting provider's support:
+                        </p>
+                        <textarea class="form-input" id="background-host-message" readonly rows="6" style="width: 100%; font-size: 0.85rem;"></textarea>
+                        <button class="btn btn-secondary" type="button" style="margin-top: 0.5rem;" onclick="copyBackgroundText('background-host-message')">Copy message</button>
+                        <?php else: ?>
+                        <p class="form-help" style="margin-bottom: 0.75rem;">
+                            They run by themselves whenever your shop or this dashboard is visited. If your shop
+                            sometimes goes hours without visitors, have a free web-cron service open this address
+                            every 5 minutes:
+                        </p>
+                        <code id="background-cron-url" style="display: block; background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; font-size: 0.85rem; word-break: break-all; user-select: all;">&hellip;</code>
+                        <button class="btn btn-secondary" type="button" style="margin-top: 0.5rem;" onclick="copyBackgroundText('background-cron-url')">Copy address</button>
+                        <ol class="form-help" style="margin: 0.75rem 0 0 1.1rem; line-height: 1.6;">
+                            <li>Open a web-cron service such as cron-job.org and create a free account.</li>
+                            <li>Create a new job (&ldquo;Create cronjob&rdquo;) and paste the address above as its URL.</li>
+                            <li>Choose &ldquo;every 5 minutes&rdquo; and save. The time under &ldquo;Last run&rdquo; here then stays recent.</li>
+                        </ol>
+                        <details style="margin-top: 0.75rem;">
+                            <summary class="form-help" style="cursor: pointer;">Or use your hosting control panel's Cron Jobs</summary>
+                            <p class="form-help" style="margin: 0.5rem 0;">
+                                In cPanel: Advanced &rarr; Cron Jobs, choose <strong>Once Per Minute</strong> and paste this as the command:
+                            </p>
+                            <code id="background-cron-command" style="display: block; background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 8px; font-size: 0.8rem; word-break: break-all; user-select: all;">&hellip;</code>
+                        </details>
+                        <p class="form-help" style="margin-top: 0.5rem;">
+                            The key in this address works like a password: give it only to the service that opens it.
+                        </p>
+                        <?php endif; ?>
+                        <p class="form-help" style="margin-top: 0.75rem;">
+                            The uptime monitoring address below only watches; it does not run these checks.
+                        </p>
+                        <button class="btn btn-secondary" type="button" id="btn-background-run-once" style="margin-top: 0.5rem;" onclick="runBackgroundOnce(this)">Run once now</button>
+                    </div>
+                </div>
+                <script>
+                async function loadBackgroundChecks() {
+                    try {
+                        const response = await fetch(`${adminUrl}?api=background_checks`);
+                        if (!response.ok) return;
+                        const data = await response.json();
+                        const last = document.getElementById('background-last-run');
+                        last.textContent = data.secondsAgo === null
+                            ? 'Last run: never.'
+                            : `Last run: ${data.secondsAgo < 120 ? 'just now' : Math.round(data.secondsAgo / 60) + ' minutes ago'}.`;
+                        const set = (id, text) => { const el = document.getElementById(id); if (el) { if ('value' in el && el.tagName === 'TEXTAREA') el.value = text || ''; else el.textContent = text || ''; } };
+                        set('background-host-message', data.hostMessage);
+                        set('background-cron-url', data.cronUrl);
+                        set('background-cron-command', data.cronCommand);
+                    } catch (e) {
+                        // The card stays as it is.
+                    }
+                }
+                function copyBackgroundText(id) {
+                    const el = document.getElementById(id);
+                    const text = el.tagName === 'TEXTAREA' ? el.value : el.textContent;
+                    if (navigator.clipboard && window.isSecureContext) {
+                        navigator.clipboard.writeText(text).then(() => showToast('Copied', 'success'),
+                            () => showToast('Select the text and copy it', ''));
+                    } else {
+                        showToast('Select the text and copy it', '');
+                    }
+                }
+                async function runBackgroundOnce(btn) {
+                    btn.disabled = true;
+                    const label = btn.textContent;
+                    btn.textContent = 'Running…';
+                    try {
+                        const response = await postWithCsrf(adminUrl, 'action=run_background');
+                        showToast(response.ok ? 'Background checks finished' : 'Background checks failed', response.ok ? 'success' : 'error');
+                    } catch (e) {
+                        showToast('Lost connection while running. Checking what completed…', '');
+                    } finally {
+                        btn.disabled = false;
+                        btn.textContent = label;
+                        loadBackgroundChecks();
                     }
                 }
                 </script>
@@ -5323,6 +5594,7 @@ $isWp = Urls::isWordPress();
                 loadDataFolder();
                 loadAlertSettings();
                 loadMonitoring();
+                loadBackgroundChecks();
             } else {
                 storeSelector.style.display = 'flex';
             }
@@ -5866,6 +6138,8 @@ $isWp = Urls::isWordPress();
                 || (diag.payoutReminders || []).length > 0
                 || (diag.recoveryKitReminders || []).length > 0
                 || (diag.checkoutFailures || []).length > 0
+                || (diag.undeliveredWebhooks || []).length > 0
+                || (diag.insecureMints || []).length > 0
                 || (diag.pendingTransfers || []).length > 0);
             if (!hasItems) {
                 card.style.display = 'none';
@@ -5941,7 +6215,7 @@ $isWp = Urls::isWordPress();
                     ? 'This server does not know its own web address, so it cannot run '
                       + 'background work on its own. Payments will not be marked paid, and '
                       + 'automatic withdrawals will not happen, until you set it below or '
-                      + 'add the scheduled task shown during setup.'
+                      + 'set up a timed check (Settings → Background checks).'
                     : 'This server does not know its own web address. Everything is running '
                       + '(your scheduled task is working), but setting it makes payment links '
                       + 'and background work more reliable.');
@@ -5954,9 +6228,20 @@ $isWp = Urls::isWordPress();
             }
 
             if (bg.stale) {
-                items.push(bg.secondsAgo === null
-                    ? 'Background tasks have never run. Settlement, auto-withdrawal and webhook delivery depend on them — add the cron job shown during setup.'
-                    : `Background tasks last ran ${Math.round(bg.secondsAgo / 60)} min ago.`);
+                const why = 'Until they run, paid orders are not marked paid, your shop is not told, and automatic payouts wait.';
+                const how = isWordPressMode
+                    ? 'In WordPress they run when your site has visitors; if your host has switched WordPress\'s scheduled tasks off, Settings → Background checks has a message to send to your host.'
+                    : 'They run when your shop or this dashboard is visited; for quiet shops, Settings → Background checks shows how to have a free web-cron service run them every few minutes.';
+                items.push((bg.secondsAgo === null
+                    ? 'Background checks have never run. '
+                    : `Background checks last ran ${Math.round(bg.secondsAgo / 60)} minutes ago. `) + why + ' ' + how);
+                actions.push({
+                    label: 'Open Background checks',
+                    run: () => {
+                        switchView('settings');
+                        document.getElementById('background-card')?.scrollIntoView({ behavior: 'smooth' });
+                    },
+                });
             }
             const sentence = text => {
                 const t = String(text).trim();
@@ -6007,6 +6292,17 @@ $isWp = Urls::isWordPress();
                       + 'waits. It is retried automatically; nothing is lost.');
             });
 
+            (diag.insecureMints || []).forEach(m => {
+                items.push(`${m.primary ? 'The mint' : 'The backup mint'} of "${m.store}" is saved as ${m.mint}, `
+                    + 'an address without https://, so payments through it would travel unprotected. '
+                    + 'CashuPayServer no longer uses it this way. Under Store settings, '
+                    + (m.primary ? 'change it to' : 'remove this backup mint and add it again with')
+                    + ' the https:// address of the same mint (usually just replace http:// with https://).');
+            });
+            if ((diag.insecureMints || []).length > 0) {
+                actions.push({ label: 'Go to Store settings', run: () => switchView('stores') });
+            }
+
             (diag.recoveringAccounts || []).forEach(a => {
                 const host = (() => { try { return new URL(a.mint).host; } catch (e) { return a.mint; } })();
                 const what = a.primary
@@ -6030,7 +6326,8 @@ $isWp = Urls::isWordPress();
                 }
                 items.push(text);
             });
-            if (diag.failedWebhookDeliveries > 0) {
+            // The itemised list below replaces this count when it is available.
+            if (diag.failedWebhookDeliveries > 0 && !(diag.undeliveredWebhooks || []).length) {
                 items.push(`${diag.failedWebhookDeliveries} webhook ${diag.failedWebhookDeliveries === 1 ? 'delivery has' : 'deliveries have'} not been acknowledged by the shop.`);
             }
             (diag.stuckInvoices || []).forEach(inv => {
@@ -6059,6 +6356,49 @@ $isWp = Urls::isWordPress();
 
             body.appendChild(list);
 
+            // Shop notifications the shop never confirmed, each with "Tell the shop again".
+            const undelivered = diag.undeliveredWebhooks || [];
+            if (undelivered.length > 0) {
+                const heading = document.createElement('p');
+                heading.style.cssText = 'margin: 0.75rem 0 0.25rem; font-weight: 600;';
+                heading.textContent = 'Your shop has not confirmed these updates about its orders:';
+                body.appendChild(heading);
+                const eventNames = {
+                    InvoiceSettled: 'paid', InvoicePaymentSettled: 'paid', InvoiceProcessing: 'payment arriving',
+                    InvoiceReceivedPayment: 'payment arriving', InvoiceExpired: 'expired', InvoiceInvalid: 'cancelled',
+                    InvoiceCreated: 'created',
+                };
+                const when = t => new Date(t * 1000).toLocaleString();
+                const dlist = document.createElement('ul');
+                dlist.style.cssText = 'margin: 0 0 0 1.1rem; line-height: 1.7;';
+                undelivered.forEach(d => {
+                    const li = document.createElement('li');
+                    const what = d.orderId ? `Order ${d.orderId}` : `Payment ${d.invoiceId || d.deliveryId}`;
+                    const last = d.statusCode
+                        ? `the shop answered with error ${d.statusCode}`
+                        : 'the shop could not be reached';
+                    let text = `${what}: "${eventNames[d.event] || d.event}" notice, tried ${d.attempts} `
+                        + `time${d.attempts === 1 ? '' : 's'}, ${last}. `;
+                    text += d.gaveUp
+                        ? 'Automatic retries have stopped.'
+                        : (d.nextAttemptAt ? `Next automatic try: ${when(d.nextAttemptAt)}.` : '');
+                    if (d.webhookDeleted) {
+                        text += ' The shop connection it belonged to was removed, so it cannot be sent again.';
+                    }
+                    li.appendChild(document.createTextNode(text + ' '));
+                    if (!d.webhookDeleted) {
+                        const btn = document.createElement('button');
+                        btn.type = 'button';
+                        btn.className = 'btn btn-secondary btn-sm';
+                        btn.textContent = 'Tell the shop again';
+                        btn.addEventListener('click', () => redeliverWebhook(d.deliveryId, btn));
+                        li.appendChild(btn);
+                    }
+                    dlist.appendChild(li);
+                });
+                body.appendChild(dlist);
+            }
+
             actions.forEach(action => {
                 const button = document.createElement('button');
                 button.type = 'button';
@@ -6070,6 +6410,25 @@ $isWp = Urls::isWordPress();
             });
 
             card.style.display = '';
+        }
+
+        async function redeliverWebhook(deliveryId, btn) {
+            btn.disabled = true;
+            try {
+                const response = await postWithCsrf(adminUrl, new URLSearchParams({
+                    action: 'redeliver_webhook', delivery_id: deliveryId,
+                }));
+                const result = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    showToast(result.error || 'Could not send it again', 'error');
+                } else {
+                    showToast(result.delivered ? 'The shop has been told' : 'Sending again; it keeps retrying by itself', 'success');
+                }
+            } catch (e) {
+                showToast('Could not send it again', 'error');
+            }
+            btn.disabled = false;
+            loadDashboard();
         }
 
         function renderProxySeen(seen) {
@@ -6348,6 +6707,11 @@ $isWp = Urls::isWordPress();
                 }
             } catch (e) {
                 console.error('QR render failed', e);
+                const warning = document.createElement('div');
+                warning.style.cssText = 'color: #888; text-align: center; padding: 2rem; font-size: 0.9rem;';
+                warning.textContent = 'The QR code could not be shown. Copy the token below instead.';
+                qr.innerHTML = '';
+                qr.appendChild(warning);
             }
 
             modal.classList.add('visible');
@@ -8053,7 +8417,9 @@ $isWp = Urls::isWordPress();
             // Server refuses to delete a funded store unless the operator confirms fund loss.
             if (response.status === 409 && result.error === 'store_has_balance') {
                 const bal = result.balance;
-                if (confirm(`This store still holds ${bal} (mint units) of ecash.\n\nDeleting it destroys the seed phrase and those funds are lost forever.\n\nOnly continue if you have backed up the seed phrase. Delete anyway?`)) {
+                const more = (result.blockers || []).length
+                    ? `\n\nIt also has:\n${result.blockers.map(b => `\u2022 ${b}`).join('\n')}` : '';
+                if (confirm(`This store still holds ${bal} (mint units) of ecash.${more}\n\nDeleting it destroys the seed phrase and those funds are lost forever.\n\nOnly continue if you have backed up the seed phrase. Delete anyway?`)) {
                     return deleteStore(storeId, true);
                 }
                 return;
@@ -8112,16 +8478,18 @@ $isWp = Urls::isWordPress();
                 const unit = (s.unit || '').toUpperCase();
                 const amt = s.unit ? `${s.amount} ${unit}` : `${s.amount} units`;
                 const ks = (s.keysets || []).map(escapeHtml).join(', ');
-                const canExport = !!s.mint_url;
+                const canExport = !!s.mint_url && s.exportable !== false;
+                const note = s.note ? `<div class="form-help" style="margin: 0;">${escapeHtml(s.note)}</div>` : '';
                 return `
                     <div class="store-info-item" style="flex-direction: column; align-items: stretch; gap: 0.4rem; border: 1px solid var(--border, rgba(255,255,255,0.1)); border-radius: 8px; padding: 0.75rem; margin-bottom: 0.5rem;">
                         <div><strong>${amt}</strong> &middot; ${mint}</div>
                         <div style="font-size: 0.75rem; color: var(--text-secondary); word-break: break-all;">
                             ${escapeHtml(s.count)} piece(s) of ecash &middot; key set: ${escapeHtml(ks || '-')}
                         </div>
+                        ${note}
                         ${canExport
                             ? `<button class="btn btn-secondary" data-stranded="${i}" style="align-self: flex-start; padding: 0.3rem 0.7rem; font-size: 0.8rem;">Export as token</button>`
-                            : `<div class="form-help" style="margin: 0;">Mint not in history — use "Recover from a mint I know" below with the old mint URL.</div>`}
+                            : (s.mint_url ? '' : `<div class="form-help" style="margin: 0;">Mint not in history — use "Recover from a mint I know" below with the old mint URL.</div>`)}
                         <div class="stranded-token" id="stranded-token-${i}" style="display: none;"></div>
                     </div>`;
             }).join('');
@@ -8165,15 +8533,24 @@ $isWp = Urls::isWordPress();
             }
         }
 
-        async function markStrandedRecovered(entry, index) {
-            if (!confirm('Mark these funds as recovered? Only do this after you have successfully claimed the token.')) return;
+        async function markStrandedRecovered(entry, index, unverified = false) {
+            if (!unverified && !confirm('Mark these funds as recovered? Only do this after you have successfully claimed the token.')) return;
             try {
                 let params = `action=mark_stranded_recovered&mint_url=${encodeURIComponent(entry.mint_url)}&unit=${encodeURIComponent(entry.unit || 'sat')}`;
                 params += `&account=${encodeURIComponent(entry.account == null ? '' : entry.account)}`;
                 params += `&export_id=${encodeURIComponent(entry.export_id || '')}`;
+                if (unverified) params += '&confirm_unverified=1';
                 const response = await postWithCsrf(adminUrl, params);
                 const result = await response.json().catch(() => ({}));
-                if (!response.ok) throw new Error(result.error || 'Failed');
+                // The mint could not confirm the claim: a second, differently worded
+                // question, so a write-off of unclaimed money is never one click.
+                if (response.status === 409 && result.error === 'mint_unreachable' && !unverified) {
+                    if (confirm(result.message + '\n\nDoes your wallet show this money arrived? Press OK only if it does.')) {
+                        return markStrandedRecovered(entry, index, true);
+                    }
+                    return;
+                }
+                if (!response.ok) throw new Error(result.message || result.error || 'Failed');
                 showToast('Marked as recovered', 'success');
                 scanStrandedFunds();
             } catch (e) {

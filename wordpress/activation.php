@@ -152,6 +152,7 @@ function cashupay_activate_unguarded(): void {
     require_once CASHUPAY_PLUGIN_DIR . '/includes/database.php';
     require_once CASHUPAY_PLUGIN_DIR . '/includes/config.php';
     Database::initialize();
+    cashupay_revoke_pending_keys();
 
     // Pin base_url to this site, unless the database already belongs to another site:
     // overwriting it broke that site's payment and webhook links. The same site after a
@@ -176,6 +177,28 @@ function cashupay_activate_unguarded(): void {
     flush_rewrite_rules();
     delete_transient('cashupay_rewrite_flush_retry');
     cashupay_mark_rewrite_rules_flushed();
+}
+
+/**
+ * Revoke the WooCommerce keys an uninstall could not revoke because the database could
+ * not be opened then (uninstall.php keeps their digests). The option is cleared only once
+ * the keys are gone, so a failure here is retried on the next activation.
+ */
+function cashupay_revoke_pending_keys(): void {
+    $pending = get_option('cashupay_pending_key_revocations', []);
+    if (!is_array($pending) || $pending === []) {
+        return;
+    }
+    try {
+        foreach ($pending as $hash) {
+            if (is_string($hash) && preg_match('/^[0-9a-f]{64}$/', $hash)) {
+                Database::query('DELETE FROM api_keys WHERE key_hash = ?', [$hash]);
+            }
+        }
+        delete_option('cashupay_pending_key_revocations');
+    } catch (Throwable $e) {
+        error_log('CashuPay activation: could not revoke the keys left from an uninstall: ' . $e->getMessage());
+    }
 }
 
 /**

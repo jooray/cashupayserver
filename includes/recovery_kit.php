@@ -14,8 +14,9 @@ require_once __DIR__ . '/config.php';
 
 class RecoveryKit {
     /**
-     * Every (mint, unit) the store has used: its current accounts, and any mint an
-     * invoice or a withdrawal of this store went through.
+     * Every (mint, unit) the store has used: its current accounts, any mint an
+     * invoice, withdrawal or payment request of this store went through, and the
+     * store's append-only mint history (Config::storeMintHistory).
      *
      * @return array<int, array{mint_url: string, unit: string, current: bool}>
      */
@@ -48,6 +49,16 @@ class RecoveryKit {
         ) as $row) {
             $add($row['mint_url'], $row['unit'], false);
         }
+        // Payment requests are collected at their own mint (UX-F5).
+        foreach (Database::fetchAll(
+            'SELECT DISTINCT mint_url, unit FROM payment_requests WHERE store_id = ?', [$storeId]
+        ) as $row) {
+            $add($row['mint_url'], $row['unit'], false);
+        }
+        // What the tables above have forgotten: pruned invoices, removed backup mints.
+        foreach (Config::storeMintHistory($storeId) as $row) {
+            $add($row['mint_url'], $row['unit'], false);
+        }
         ksort($found);
         return array_values($found);
     }
@@ -57,9 +68,12 @@ class RecoveryKit {
         return hash('sha256', json_encode(array_map(fn($m) => $m['mint_url'] . '|' . $m['unit'], self::mints($storeId))));
     }
 
-    /** Remember that the operator took a kit for the current list of mints. */
-    public static function markTaken(string $storeId): void {
-        Config::set('recovery_kit_' . $storeId, ['fingerprint' => self::fingerprint($storeId), 'at' => time()]);
+    /**
+     * Remember that the operator took a kit. $fingerprint is the one the kit was made
+     * for (so a mint added after it was made still asks for a new sheet); default: now.
+     */
+    public static function markTaken(string $storeId, ?string $fingerprint = null): void {
+        Config::set('recovery_kit_' . $storeId, ['fingerprint' => $fingerprint ?? self::fingerprint($storeId), 'at' => time()]);
     }
 
     /** Null when the operator has a kit for the current mints, else why a new one is needed. */
@@ -96,8 +110,23 @@ class RecoveryKit {
         return implode("\n", $lines) . "\n";
     }
 
-    public static function html(array $store): string {
+    /**
+     * @param ?string $csrfToken When given, the sheet ends with an "I have printed or saved
+     *                           it" button (action recovery_kit_taken): opening the page
+     *                           is not the same as keeping it (UX-F6).
+     */
+    public static function html(array $store, ?string $csrfToken = null): string {
         $h = fn($s) => htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8');
+        $ack = '';
+        if ($csrfToken !== null) {
+            $ack = '<form method="post" action="" class="ack" style="border-top:1px solid #999;margin-top:2rem;padding-top:1rem">'
+                . '<input type="hidden" name="action" value="recovery_kit_taken">'
+                . '<input type="hidden" name="store_id" value="' . $h($store['id']) . '">'
+                . '<input type="hidden" name="fingerprint" value="' . $h(self::fingerprint((string)$store['id'])) . '">'
+                . '<input type="hidden" name="csrf_token" value="' . $h($csrfToken) . '">'
+                . '<p>When the sheet is printed or saved somewhere safe, press this button so the dashboard stops reminding you.</p>'
+                . '<button type="submit" style="padding:.5rem 1rem">I have printed or saved this sheet</button></form>';
+        }
         $words = preg_split('/\s+/', trim((string)$store['seed_phrase']));
         $wordList = '';
         foreach ($words as $i => $word) {
@@ -114,7 +143,7 @@ class RecoveryKit {
             . '.warn{border:2px solid #111;padding:.75rem 1rem;margin:1rem 0}'
             . 'ol.words{columns:3;list-style:none;padding:0;font-size:1.15rem;line-height:2}'
             . 'ol.words span{display:inline-block;width:2rem;color:#555}code{font-size:.95rem}'
-            . '@media print{button{display:none}}</style></head><body>'
+            . '@media print{button,.ack{display:none}}</style></head><body>'
             . '<button onclick="window.print()" style="float:right;padding:.5rem 1rem">Print</button>'
             . '<h1>CashuPayServer recovery sheet</h1>'
             . '<p class="meta">Store: <strong>' . $h($store['name']) . '</strong> &middot; made ' . gmdate('Y-m-d') . '</p>'
@@ -126,6 +155,7 @@ class RecoveryKit {
             . 'the words above and the first service below, then add each other service as a backup mint in the '
             . 'dashboard, with the same unit.</p><ul>' . $mintList . '</ul>'
             . '<p class="meta">Print a new sheet whenever the dashboard asks for one: it does when this list changes.</p>'
+            . $ack
             . '</body></html>';
     }
 }

@@ -11,17 +11,8 @@ if (!defined('WP_UNINSTALL_PLUGIN')) {
     exit;
 }
 
-// Reset BTCPay plugin options only if they point to CashuPay. Compared on host and
-// path only, so a site that moved between http and https, or a URL saved with a
-// trailing slash, still matches.
-function cashupay_uninstall_normalize_url(string $url): string {
-    $parts = wp_parse_url(trim($url));
-    if (!is_array($parts) || empty($parts['host'])) {
-        return '';
-    }
-    $host = strtolower($parts['host']) . (isset($parts['port']) ? ':' . $parts['port'] : '');
-    return $host . rtrim($parts['path'] ?? '', '/');
-}
+// Data-folder ownership and gateway-address helpers (side-effect free).
+require_once __DIR__ . '/site-identity.php';
 
 /**
  * Folders this site's wallet may live in, in the same order bootstrap.php tries them.
@@ -57,12 +48,8 @@ function cashupay_uninstall_data_dirs(): array {
  * configuration. When the database cannot be opened the URL check decides, as before.
  */
 function cashupay_uninstall_cleanup_credentials(): void {
-    $urlPointsHere = (function (): bool {
-        $btcpay = cashupay_uninstall_normalize_url((string) get_option('btcpay_gf_url', ''));
-        $ours = cashupay_uninstall_normalize_url(site_url('/cashupay'));
-        return $btcpay !== '' && $ours !== ''
-            && ($btcpay === $ours || strpos($btcpay, $ours . '/') === 0);
-    })();
+    $urlPointsHere = cashupay_gateway_url_is_ours((string) get_option('btcpay_gf_url', ''), site_url('/cashupay'));
+    $blogId = function_exists('get_current_blog_id') ? max(1, (int) get_current_blog_id()) : 1;
 
     $apiKey = (string) get_option('btcpay_gf_api_key', '');
     $webhook = get_option('btcpay_gf_webhook', null);
@@ -71,9 +58,16 @@ function cashupay_uninstall_cleanup_credentials(): void {
 
     $keyFound = false;
     $webhookFound = false;
+    $revocationFailed = false;
     foreach (cashupay_uninstall_data_dirs() as $dir) {
         $dbPath = $dir . '/cashupay.sqlite';
         if (!is_file($dbPath)) {
+            continue;
+        }
+        // A staging copy can share production's folder (the legacy one next to both
+        // installs, or a CASHUPAY_DATA_DIR copied with wp-config.php): deleting the
+        // plugin there must not revoke production's key or switch off its webhook.
+        if (!cashupay_data_dir_belongs_to_site($dir, $blogId, site_url('/cashupay'))) {
             continue;
         }
         try {
@@ -100,9 +94,22 @@ function cashupay_uninstall_cleanup_credentials(): void {
             }
             $pdo = null;
         } catch (Throwable $e) {
-            // A database this user cannot open is not a reason to keep the option.
+            // A database this user cannot open is not a reason to keep the option, but
+            // the key may still be live in it: remember its digest (below).
+            $revocationFailed = true;
             error_log('CashuPayServer uninstall: could not check ' . $dbPath . ': ' . $e->getMessage());
         }
+    }
+
+    // The option is about to go, and with it the only record of which key the gateway
+    // held. Keep the digest so the next activation can revoke it (audit 2026-11).
+    if ($revocationFailed && !$keyFound && $keyHash !== '') {
+        $pending = get_option('cashupay_pending_key_revocations', []);
+        $pending = is_array($pending) ? $pending : [];
+        if (!in_array($keyHash, $pending, true)) {
+            $pending[] = $keyHash;
+        }
+        update_option('cashupay_pending_key_revocations', array_values($pending), false);
     }
 
     // Only remove the credential options we can attribute to this plugin. A merchant

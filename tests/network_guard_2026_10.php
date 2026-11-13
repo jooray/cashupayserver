@@ -180,8 +180,17 @@ Config::set('base_url', 'https://shop.example.com/cashupay');
 check(wpCron($dataDir, 'https://shop.example.com') === 'https://shop.example.com/cashupay/cron',
     'site_url() matching the pinned base_url gets the key');
 check(wpCron($dataDir, 'https://127.0.0.1:9999') === null, 'a Host-derived site_url() for another host does not');
-check(wpCron($dataDir, 'http://shop.example.com') === 'http://shop.example.com/cashupay/cron',
-    'a site that only changed scheme since activation still gets it');
+check(wpCron($dataDir, 'http://shop.example.com') === 'https://shop.example.com/cashupay/cron',
+    'a site_url() still on http sends the key over https, as pinned (audit 2026-11)');
+check(wpCron($dataDir, 'http://shop.example.com:80') === 'https://shop.example.com/cashupay/cron',
+    'also with http\'s default port spelled out');
+Config::set('base_url', 'https://shop.example.com:8443/cashupay');
+check(wpCron($dataDir, 'http://shop.example.com:8443') === 'https://shop.example.com:8443/cashupay/cron',
+    'and on a non-default port the port is kept');
+Config::set('base_url', 'http://shop.example.com/cashupay');
+check(wpCron($dataDir, 'https://shop.example.com') === 'https://shop.example.com/cashupay/cron',
+    'a site moved to https since activation still gets it');
+Config::set('base_url', 'https://shop.example.com/cashupay');
 check(wpCron($dataDir, 'https://shop.example.com:8443') === null, 'nor one on another port');
 Config::delete('base_url');
 check(wpCron($dataDir, 'https://shop.example.com') === null, 'without a pinned base_url nothing is sent');

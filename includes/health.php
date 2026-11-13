@@ -118,12 +118,16 @@ class Health {
             }
         }
 
+        // The same test the background runner uses for a store it can work on. Setup is
+        // finished here, so no ready store means no payment can be taken: a failure, not a
+        // warning (the dashboard's Settings say the same).
         $configured = (int)(Database::fetchOne(
             "SELECT COUNT(*) AS n FROM stores
-             WHERE mint_url IS NOT NULL AND mint_url != '' AND seed_phrase IS NOT NULL AND seed_phrase != ''"
+             WHERE mint_url IS NOT NULL AND mint_url != '' AND seed_phrase IS NOT NULL AND seed_phrase != ''
+               AND wallet_account_id IS NOT NULL"
         )['n'] ?? 0);
         if ($configured === 0) {
-            $add('stores', self::WARN, 'No store is ready to take payments yet.');
+            $add('stores', self::FAIL, 'No store is ready to take payments.');
         } else {
             $add('stores', self::PASS, 'At least one store is ready to take payments.');
         }

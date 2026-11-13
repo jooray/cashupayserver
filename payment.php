@@ -536,6 +536,9 @@ $baseUrl = Config::getBaseUrl();
                     </a>
                 <?php endif; ?>
             </div>
+            <p id="poll-trouble" class="hidden" style="color: var(--text-secondary); margin-top: 1rem;">
+                We can't check this payment right now. If you already paid, do not pay again &mdash; we'll keep checking.
+            </p>
             <div class="reference" id="reference">
                 <?php if ($orderId !== null): ?>
                     Order <?php echo htmlspecialchars($orderId); ?> &middot;
@@ -561,24 +564,33 @@ $baseUrl = Config::getBaseUrl();
         const redirectAuto = <?php echo json_encode($redirectAuto); ?>;
         let currentStatus = <?php echo json_encode($invoice['status']); ?>;
 
-        // Generate QR code with lightning: prefix
-        if (invoice && currentStatus === 'New') {
-            const qrData = 'lightning:' + invoice.toUpperCase();
-            if (typeof QRious !== 'undefined') {
+        // Generate QR code with lightning: prefix. Called after polling has started: an
+        // invoice too long for a QR code throws, and that must not stop the status checks.
+        function drawInvoiceQr() {
+            if (!invoice || currentStatus !== 'New') return;
+            const box = document.getElementById('qr-code');
+            const fallback = '<p style="color:#666;padding:2rem;">The QR code could not be shown. '
+                + 'Use "Copy Invoice" or "Open in Wallet" below instead.</p>';
+            if (typeof QRious === 'undefined') {
+                console.error('QRious library not loaded');
+                box.innerHTML = fallback;
+                return;
+            }
+            try {
                 const canvas = document.createElement('canvas');
-                document.getElementById('qr-code').appendChild(canvas);
+                box.appendChild(canvas);
                 new QRious({
                     element: canvas,
-                    value: qrData,
+                    value: 'lightning:' + invoice.toUpperCase(),
                     size: 220,
                     backgroundAlpha: 1,
                     foreground: '#000000',
                     background: '#ffffff',
                     level: 'M'
                 });
-            } else {
-                console.error('QRious library not loaded');
-                document.getElementById('qr-code').innerHTML = '<p style="color:#666;padding:2rem;">QR code failed to load</p>';
+            } catch (e) {
+                console.error('QR code error:', e);
+                box.innerHTML = fallback;
             }
         }
 
@@ -660,6 +672,14 @@ $baseUrl = Config::getBaseUrl();
         const pageOpened = Date.now();
         let processingSince = currentStatus === 'Processing' ? Date.now() : null;
 
+        // Only these answers change the card; anything else (an error body, a proxy's
+        // page) keeps the last good state on screen.
+        const knownStatuses = ['New', 'Processing', 'Settled', 'Expired', 'Invalid'];
+        let pollFailures = 0;
+        function setPollTrouble(on) {
+            document.getElementById('poll-trouble').classList.toggle('hidden', !on);
+        }
+
         // Poll for status. An expired or cancelled invoice is still checked, slowly, for
         // half an hour: a payment made at the last second still arrives (C1, C2).
         async function pollStatus() {
@@ -676,7 +696,15 @@ $baseUrl = Config::getBaseUrl();
                 pollUrl.searchParams.set('id', invoiceId);
                 pollUrl.searchParams.set('json', '1');
                 const response = await fetch(pollUrl.toString());
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status);
+                }
                 const data = await response.json();
+                if (!data || !knownStatuses.includes(data.status)) {
+                    throw new Error('Unexpected status answer');
+                }
+                pollFailures = 0;
+                setPollTrouble(false);
 
                 if (data.status !== currentStatus) {
                     currentStatus = data.status;
@@ -684,6 +712,10 @@ $baseUrl = Config::getBaseUrl();
                 }
             } catch (e) {
                 console.error('Poll error:', e);
+                pollFailures++;
+                if (pollFailures >= 3) {
+                    setPollTrouble(true);
+                }
             }
 
             if (currentStatus === 'Processing' && processingSince !== null
@@ -737,6 +769,7 @@ $baseUrl = Config::getBaseUrl();
                 setInterval(updateTimer, 1000);
             }
         }
+        drawInvoiceQr();
 
         // Handle settled state on load with redirect
         if (currentStatus === 'Settled' && redirectUrl && redirectAuto) {

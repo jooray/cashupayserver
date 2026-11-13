@@ -33,6 +33,16 @@ class WebhookSender {
     private const LEASE_SECONDS = 30;
 
     /**
+     * Most of a response body read before the transfer is cut off. The body was buffered
+     * whole: a shop answering with more than memory_limit killed the background run on a
+     * fatal error, before the attempt was recorded, so the same row came first again on
+     * every run and wedged the outbox for good. Shops answer webhooks with a few bytes.
+     */
+    private const MAX_RESPONSE_BYTES = 65536;
+    /** How much of a failed response's body is kept to show the operator. */
+    private const RESPONSE_PREFIX_BYTES = 200;
+
+    /**
      * Enqueue an event for durable delivery. If called inside a transaction, the
      * invoice transition and all matching webhook rows commit atomically.
      */
@@ -321,12 +331,35 @@ class WebhookSender {
             $options[CURLOPT_RESOLVE] = $resolve;
         }
 
+        // Read at most MAX_RESPONSE_BYTES, keeping only a short prefix; past the cap the
+        // transfer is aborted (the status line has arrived by then).
+        $received = 0;
+        $prefix = '';
+        $capped = false;
+        $options[CURLOPT_RETURNTRANSFER] = false;
+        $options[CURLOPT_WRITEFUNCTION] = static function ($handle, string $chunk) use (&$received, &$prefix, &$capped): int {
+            $received += strlen($chunk);
+            if (strlen($prefix) < self::RESPONSE_PREFIX_BYTES) {
+                $prefix .= substr($chunk, 0, self::RESPONSE_PREFIX_BYTES - strlen($prefix));
+            }
+            if ($received > self::MAX_RESPONSE_BYTES) {
+                $capped = true;
+                return 0;
+            }
+            return strlen($chunk);
+        };
+
         curl_setopt_array($ch, $options);
 
         curl_exec($ch);
         $statusCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $errno = curl_errno($ch);
         $error = curl_error($ch);
+        if ($capped && $errno === CURLE_WRITE_ERROR && $statusCode > 0) {
+            // Our own cut-off, not a failure of the shop: its status code stands.
+            $errno = 0;
+            $error = '';
+        }
 
         if ($errno !== 0 || $error !== '') {
             error_log('CashuPayServer: webhook delivery to ' . (string)parse_url($url, PHP_URL_HOST)
@@ -337,12 +370,37 @@ class WebhookSender {
             ];
         }
 
-        // Do not persist the response body (it could contain data fetched from an
-        // internal target if the URL check were ever bypassed), nor its size.
+        // A 2xx body is not persisted (it could contain data fetched from an internal
+        // target if the URL check were ever bypassed), nor its size. A refusal keeps a
+        // short, printable prefix so the operator can see what the shop said ("invalid
+        // signature", a plugin error) — unless private targets are opted in, where the
+        // body may come from an internal service.
+        $text = 'HTTP ' . (int)$statusCode;
+        if ($statusCode >= 200 && $statusCode < 300) {
+            $text = 'delivered (HTTP ' . (int)$statusCode . ')';
+        } elseif (!Config::get('webhook_allow_private_targets')) {
+            $said = self::printablePrefix($prefix);
+            if ($said !== '') {
+                $text .= ': ' . $said;
+            }
+        }
         return [
             'status_code' => $statusCode,
-            'response' => 'delivered (HTTP ' . (int)$statusCode . ')',
+            'response' => $text,
         ];
+    }
+
+    /** First line-ish of a response body, as plain printable text. */
+    private static function printablePrefix(string $body): string {
+        $body = strip_tags($body);
+        $body = (string)preg_replace('/[^\x20-\x7E]+/', ' ', $body);
+        $body = trim((string)preg_replace('/\s+/', ' ', $body));
+        return mb_substr($body, 0, 120);
+    }
+
+    /** Wait before attempt number $attempts + 1 (30 s doubling to MAX_BACKOFF). */
+    private static function backoffAfter(int $attempts): int {
+        return (int)min(self::MAX_BACKOFF, 30 * (2 ** min(max(0, $attempts - 1), 20)));
     }
 
     /**
@@ -363,10 +421,11 @@ class WebhookSender {
             $result = self::sendRequest($delivery['target_url'], $delivery['payload'], $signature);
             $now = time();
             $success = $result['status_code'] >= 200 && $result['status_code'] < 300;
-            $attempts = (int)$delivery['attempts'] + 1;
+            // Already counted when the row was claimed.
+            $attempts = (int)$delivery['attempts'];
             $nextAttempt = $success || $attempts >= self::MAX_ATTEMPTS
                 ? 0
-                : $now + (int)min(self::MAX_BACKOFF, 30 * (2 ** min($attempts - 1, 20)));
+                : $now + self::backoffAfter($attempts);
 
             Database::query(
                 "UPDATE webhook_deliveries
@@ -390,12 +449,21 @@ class WebhookSender {
      * fresh InvoiceSettled overtake a failed InvoiceExpired, which then arrived last and
      * could move a paid order back to "expired" (OPUS N7). Rows that are given up on
      * (out of attempts, or cancelled) no longer hold anything back.
+     *
+     * The attempt is counted, and the row's next retry scheduled, here at claim time:
+     * when the send kills the process (a fatal error, a killed worker) the outcome
+     * update never runs, and a row counted only afterwards was claimed first again on
+     * every run, forever. deliverPending() overwrites both with the real outcome.
      */
     private static function claimNextDelivery(): ?array {
         $now = time();
         $leaseToken = bin2hex(random_bytes(16));
+        // The backoff below mirrors backoffAfter(attempts + 1) in SQL: 30 s doubling,
+        // capped at MAX_BACKOFF (2^7 * 30 > 3600, so the exponent never needs more).
         Database::query(
-            "UPDATE webhook_deliveries SET leased_until = ?, lease_token = ?
+            "UPDATE webhook_deliveries SET leased_until = ?, lease_token = ?,
+                    attempts = attempts + 1,
+                    next_attempt_at = ? + MIN(?, 30 * (1 << MIN(attempts, 7)))
              WHERE id = (
                  SELECT wd.id FROM webhook_deliveries wd
                   WHERE wd.delivered_at IS NULL AND wd.attempts < ? AND wd.next_attempt_at <= ?
@@ -412,7 +480,8 @@ class WebhookSender {
                     )
                  ORDER BY wd.next_attempt_at ASC, wd.created_at ASC, wd.rowid ASC LIMIT 1
              )",
-            [$now + self::LEASE_SECONDS, $leaseToken, self::MAX_ATTEMPTS, $now, $now, self::MAX_ATTEMPTS]
+            [$now + self::LEASE_SECONDS, $leaseToken, $now, self::MAX_BACKOFF,
+             self::MAX_ATTEMPTS, $now, $now, self::MAX_ATTEMPTS]
         );
         return Database::fetchOne(
             "SELECT wd.* FROM webhook_deliveries wd WHERE wd.lease_token = ?",
@@ -431,6 +500,110 @@ class WebhookSender {
     }
 
     /**
+     * SQL condition (on alias `d`) for a row that is still owed to the shop: not
+     * delivered and not cancelled. cancelPending() leaves cancelled rows undelivered,
+     * out of attempts and without a signing secret; counting them made "your shop has
+     * not been told about N payments" permanent after the shop reconnected.
+     */
+    public const OWED_SQL = 'd.delivered_at IS NULL AND d.signing_secret IS NOT NULL AND d.target_url IS NOT NULL';
+
+    /** Rows owed to the shop that were tried at least $minAttempts times. */
+    public static function countUndelivered(?string $storeId = null, int $minAttempts = 1): int {
+        [$where, $params] = self::undeliveredWhere($storeId, $minAttempts);
+        return (int)(Database::fetchOne(
+            "SELECT COUNT(*) AS cnt FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id WHERE $where",
+            $params
+        )['cnt'] ?? 0);
+    }
+
+    /**
+     * Events the shop has not acknowledged, newest first, for the redelivery view.
+     *
+     * Cancelled rows are not listed. `nextAttemptAt` is null once the outbox has given
+     * up (`gaveUp`); `orderId` comes from the invoice's metadata (or the payload's, when
+     * the invoice was cleaned up) and may be null.
+     *
+     * @return list<array{deliveryId: string, webhookId: string, storeId: string, invoiceId: ?string,
+     *     orderId: ?string, event: string, attempts: int, statusCode: ?int, response: ?string,
+     *     createdAt: int, lastAttemptAt: ?int, nextAttemptAt: ?int, gaveUp: bool, webhookDeleted: bool}>
+     */
+    public static function listUndelivered(?string $storeId = null, int $limit = 50, int $minAttempts = 1): array {
+        [$where, $params] = self::undeliveredWhere($storeId, $minAttempts);
+        $params[] = max(1, min(500, $limit));
+        $rows = Database::fetchAll(
+            "SELECT d.id, d.webhook_id, d.invoice_id, d.event_type, d.attempts, d.status_code, d.response,
+                    d.created_at, d.last_attempt_at, d.next_attempt_at, d.payload,
+                    w.store_id, w.deleted_at AS webhook_deleted_at, i.metadata AS invoice_metadata
+               FROM webhook_deliveries d
+               JOIN webhooks w ON w.id = d.webhook_id
+               LEFT JOIN invoices i ON i.id = d.invoice_id
+              WHERE $where
+              ORDER BY d.created_at DESC, d.rowid DESC
+              LIMIT ?",
+            $params
+        );
+        $out = [];
+        foreach ($rows as $row) {
+            $gaveUp = (int)$row['attempts'] >= self::MAX_ATTEMPTS;
+            $out[] = [
+                'deliveryId' => (string)$row['id'],
+                'webhookId' => (string)$row['webhook_id'],
+                'storeId' => (string)$row['store_id'],
+                'invoiceId' => $row['invoice_id'] !== null ? (string)$row['invoice_id'] : null,
+                'orderId' => self::orderIdOf($row),
+                'event' => (string)$row['event_type'],
+                'attempts' => (int)$row['attempts'],
+                'statusCode' => $row['status_code'] !== null ? (int)$row['status_code'] : null,
+                'response' => $row['response'] !== null ? (string)$row['response'] : null,
+                'createdAt' => (int)$row['created_at'],
+                'lastAttemptAt' => $row['last_attempt_at'] !== null ? (int)$row['last_attempt_at'] : null,
+                'nextAttemptAt' => $gaveUp ? null : (int)$row['next_attempt_at'],
+                'gaveUp' => $gaveUp,
+                'webhookDeleted' => $row['webhook_deleted_at'] !== null,
+            ];
+        }
+        return $out;
+    }
+
+    /** @return array{0: string, 1: array} */
+    private static function undeliveredWhere(?string $storeId, int $minAttempts): array {
+        $where = self::OWED_SQL . ' AND d.attempts >= ?';
+        $params = [max(0, $minAttempts)];
+        if ($storeId !== null) {
+            $where .= ' AND w.store_id = ?';
+            $params[] = $storeId;
+        }
+        return [$where, $params];
+    }
+
+    private static function orderIdOf(array $row): ?string {
+        foreach ([$row['invoice_metadata'] ?? null, $row['payload'] ?? null] as $i => $json) {
+            $decoded = is_string($json) ? json_decode($json, true) : null;
+            $metadata = $i === 0 ? $decoded : ($decoded['metadata'] ?? $decoded['invoice']['metadata'] ?? null);
+            $orderId = is_array($metadata) ? ($metadata['orderId'] ?? null) : null;
+            if (is_string($orderId) || is_int($orderId)) {
+                return mb_substr((string)$orderId, 0, 100);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Requeue one delivery of one store ("Tell the shop again" in the dashboard).
+     *
+     * @return bool false when the row does not exist, belongs to another store, was
+     *              already delivered, or its webhook was deleted
+     */
+    public static function requeueForStore(string $deliveryId, string $storeId): bool {
+        $row = Database::fetchOne(
+            "SELECT d.id FROM webhook_deliveries d JOIN webhooks w ON w.id = d.webhook_id
+              WHERE d.id = ? AND w.store_id = ? AND d.delivered_at IS NULL AND w.deleted_at IS NULL",
+            [$deliveryId, $storeId]
+        );
+        return $row !== null && self::requeueDelivery($deliveryId);
+    }
+
+    /**
      * Put a delivery back in the outbox for another attempt.
      *
      * Attempts are reset so a redelivery gets the full retry budget again, and the
@@ -438,10 +611,10 @@ class WebhookSender {
      * rows stay where they are: the outbox does not look at the webhook again, so a
      * requeue would send to an endpoint the shop removed (REL-06).
      */
-    public static function requeueDelivery(string $deliveryId): void {
+    public static function requeueDelivery(string $deliveryId): bool {
         // Sent to where the webhook points now, signed with its current secret, as
         // BTCPay does: the snapshot may hold a URL and secret the shop has since replaced.
-        Database::query(
+        return Database::query(
             "UPDATE webhook_deliveries
              SET delivered_at = NULL, attempts = 0, next_attempt_at = 0,
                  leased_until = NULL, lease_token = NULL,
@@ -451,7 +624,7 @@ class WebhookSender {
                AND EXISTS (SELECT 1 FROM webhooks w
                             WHERE w.id = webhook_deliveries.webhook_id AND w.deleted_at IS NULL)",
             [$deliveryId]
-        );
+        )->rowCount() > 0;
     }
 
     /**

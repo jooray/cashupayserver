@@ -109,6 +109,10 @@ function receivePublicMessage(Throwable $e, string $generic): string {
 /** Most proofs one public receive may carry; each costs EC work and a mint round trip (C1). */
 const RECEIVE_MAX_PROOFS = 100;
 
+/** Per-store ceilings per minute, across all visitors (receive POSTs, new payment requests). */
+const RECEIVE_STORE_LIMIT = 120;
+const RECEIVE_REQUEST_STORE_LIMIT = 120;
+
 // Last line of defence for a public endpoint: anything uncaught becomes a plain error
 // answer, never PHP's fatal-error page (which, with display_errors on, prints the
 // absolute server path and a stack trace to a stranger).
@@ -256,6 +260,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    // A per-store ceiling on top of the per-network one: an attacker with many
+    // addresses (or IPv6 /64s) still cannot keep a store's PHP workers busy with
+    // mint round trips. Counted after the store check so unknown ids add no rows.
+    if (!Security::checkRateLimit('receive_store', $storeId, RECEIVE_STORE_LIMIT)) {
+        http_response_code(429);
+        header('Retry-After: 60');
+        echo json_encode(['error' => 'This shop is receiving many payments right now. Please wait a minute and send the same token again.']);
+        exit;
+    }
+
     // Validate the token's shape before any network work: this endpoint is public, and
     // contacting the mint first let a stream of malformed tokens tie up the PHP pool.
     if (!is_string($tokenString) || strlen($tokenString) > \Cashu\TokenSerializer::MAX_TOKEN_LENGTH) {
@@ -300,7 +314,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // request paid while the store is credited once (S1, 2026-10-28). Receives are short
     // and rare; later ones wait instead of being refused. The lock is released when the
     // request ends, including on exit.
-    $receiveLock = cashupay_acquire_lock_wait('receive_' . $storeId, 25.0);
+    // Waiting holds a PHP worker, so the wait stays short (a receive takes a few
+    // seconds); the sender is told to retry instead.
+    $receiveLock = cashupay_acquire_lock_wait('receive_' . $storeId, 10.0);
     if (!$receiveLock) {
         http_response_code(503);
         header('Retry-After: 10');
@@ -834,6 +850,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         }
         exit;
     }
+    if (!Security::checkRateLimit('receive_request_store', $storeId, RECEIVE_REQUEST_STORE_LIMIT)) {
+        http_response_code(429);
+        header('Retry-After: 60');
+        if ($format === 'json') {
+            header('Content-Type: application/json');
+            echo json_encode(['error' => 'Too many payment requests for this shop. Please wait a minute.']);
+        } else {
+            echo 'Too many payment requests for this shop right now. Please wait a minute and try again.';
+        }
+        exit;
+    }
 
     try {
         // Initialize wallet with store's configuration
@@ -841,15 +868,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         // Persist the request before publishing it. The row fixes the store, amount and
         // unit the QR code promised, so the receiving endpoint can check a payment
         // against what was actually asked for rather than accepting whatever arrives.
+        // The mint is reached first: a mint that is down (or a flood of requests while
+        // it is) must not leave rows behind for requests nobody can pay.
+        $wallet = new Wallet($mintUrl, $unit);
+        $wallet->loadMint();
+
         $stored = PaymentRequest::create($storeId, $amount, $unit, $mintUrl, $memo);
 
         // The sender POSTs straight to this URL, so it has to carry the request id.
         $receiveUrl = Urls::receive()
             . (str_contains(Urls::receive(), '?') ? '&' : '?')
             . 'request_id=' . urlencode($stored['id']);
-
-        $wallet = new Wallet($mintUrl, $unit);
-        $wallet->loadMint();
 
         $pr = $wallet->createHttpPaymentRequest($amount, $receiveUrl, $memo);
         // Publish our own request id rather than the library's random one, so the id in
@@ -978,20 +1007,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
                 box.innerHTML = '<p style="color:#666;padding:2rem;">QR code failed to load</p>';
                 return;
             }
-            const canvas = document.createElement('canvas');
-            box.appendChild(canvas);
-            new QRious({
-                element: canvas,
-                value: requests[shown],
-                size: 200,
-                backgroundAlpha: 1,
-                foreground: '#000000',
-                background: '#ffffff',
-                level: 'L'
-            });
             document.getElementById('request-string').textContent = requests[shown];
+            // A request too long for a QR code throws; the text and Copy button still work.
+            try {
+                const canvas = document.createElement('canvas');
+                box.appendChild(canvas);
+                new QRious({
+                    element: canvas,
+                    value: requests[shown],
+                    size: 200,
+                    backgroundAlpha: 1,
+                    foreground: '#000000',
+                    background: '#ffffff',
+                    level: 'L'
+                });
+            } catch (e) {
+                box.innerHTML = '<p style="color:#666;padding:2rem;">This request is too long for a QR code. Use "Copy Request" and paste it into the wallet instead.</p>';
+            }
         }
-        drawQr();
 
         // creqA is what every NUT-18 wallet reads; creqB (NUT-26) is shorter and some
         // newer wallets prefer it. Both describe the same request.
@@ -1066,7 +1099,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
             }
             setTimeout(pollStatus, 3000);
         }
+        // Start watching for the payment before drawing, so a drawing failure cannot stop it.
         setTimeout(pollStatus, 3000);
+        drawQr();
     </script>
 </body>
 </html>

@@ -27,6 +27,7 @@ class Security {
      * Check rate limit for an action
      */
     public static function checkRateLimit(string $action, string $identifier, int $maxAttempts = 60): bool {
+        $identifier = self::rateLimitIdentifier($identifier);
         $key = "rate_{$action}_{$identifier}";
 
         // Read, increment and write under one write transaction: separate read/write
@@ -144,12 +145,21 @@ class Security {
      * /64, so one address per guess would give them billions of fresh budgets.
      */
     private static function lockoutKey(string $identifier): string {
+        return 'login_attempts_' . self::rateLimitIdentifier($identifier);
+    }
+
+    /**
+     * The bucket a limiter counts an identifier in. IPv6 clients usually hold a whole
+     * /64, so an IPv6 address is reduced to its /64 prefix; anything else (an IPv4
+     * address, a store id) is its own bucket.
+     */
+    public static function rateLimitIdentifier(string $identifier): string {
         $ip = self::normalizeIp($identifier);
         if ($ip !== null && str_contains($ip, ':')) {
             $prefix = substr((string)inet_pton($ip), 0, 8) . str_repeat("\0", 8);
-            $identifier = inet_ntop($prefix) . '/64';
+            return inet_ntop($prefix) . '/64';
         }
-        return "login_attempts_{$identifier}";
+        return $identifier;
     }
 
     /**

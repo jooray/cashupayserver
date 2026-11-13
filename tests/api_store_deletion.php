@@ -107,6 +107,40 @@ check(blockersMention(StoreSafety::deletionBlockers('store_a'), 'could not be ma
     'unidentifiable old ecash blocks too: it may be this store\'s, and deletion is the last chance to know');
 Database::query("DELETE FROM cashu_proofs");
 
+echo "Value the headline balance does not show (2026-11 #4, UX-F3)\n";
+$eurId = (int)Database::insert('store_mints', [
+    'store_id' => 'store_a', 'mint_url' => 'https://euro.example', 'unit' => 'eur',
+    'priority' => 110, 'enabled' => 1, 'created_at' => $now,
+]);
+$eurWallet = WalletStorage::deriveWalletId('https://euro.example', 'eur', 'wa_a');
+proof($eurWallet, 1250, 'UNSPENT');
+check(Invoice::getBalance('store_a') === 0, 'a EUR backup is not in the sat balance');
+$blockers = StoreSafety::deletionBlockers('store_a');
+check(blockersMention($blockers, '1250 eur of spendable ecash at euro.example'), 'but its money blocks deletion, with its unit');
+check(StoreSafety::deletionBlockers('store_a', false) === [], 'a mint switch keeps backups, so it is not blocked by it');
+Database::query("DELETE FROM cashu_proofs");
+proof(WalletStorage::deriveWalletId('https://mint-now.example', 'sat', 'wa_a'), 40, 'UNKNOWN');
+check(blockersMention(StoreSafety::deletionBlockers('store_a'), '40 sat of ecash at mint-now.example that the mint has not confirmed'),
+    'ecash in an unknown state blocks');
+Database::query("DELETE FROM cashu_proofs");
+Database::query(
+    "INSERT INTO cashu_wallet_metadata (wallet_id, seed_fingerprint, ready, created_at) VALUES (?, 'fp', 0, ?)",
+    [$eurWallet, time()]
+);
+check(blockersMention(StoreSafety::deletionBlockers('store_a'), 'the wallet at euro.example is still being recovered'),
+    'an account still being recovered blocks: what it holds is not known');
+Database::query("DELETE FROM cashu_wallet_metadata");
+Database::delete('store_mints', 'id = ?', [$eurId]);
+check(StoreSafety::deletionBlockers('store_a') === [], 'and with all that gone the store is clean again');
+
+echo "DELETE /stores/{id} waits for a running withdrawal (UX-F7)\n";
+require_once dirname(__DIR__) . '/includes/locks.php';
+$held = cashupay_acquire_lock('funds_store_a');
+[$status, $body] = callApi('handleDeleteStore', $ownerKey, ['storeId' => 'store_a'], ['confirmFundLoss' => true]);
+cashupay_release_lock($held);
+check($status === 409 && ($body['code'] ?? null) === 'store-busy' && Config::getStore('store_a') !== null,
+    'while the funds lock is held: 409, nothing deleted');
+
 echo "DELETE /stores/{id}\n";
 Database::insert('invoices', [
     'id' => 'inv_open', 'store_id' => 'store_a', 'amount' => '1', 'currency' => 'SAT', 'status' => 'New',

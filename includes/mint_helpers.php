@@ -52,7 +52,55 @@ class MintHelpers {
             }
         }
 
+        if (!self::plainHttpAllowed($canonical, $target['ips'])) {
+            throw new \InvalidArgumentException(self::HTTP_MINT_MESSAGE);
+        }
+
         return $canonical;
+    }
+
+    public const HTTP_MINT_MESSAGE = 'This mint address starts with http://, so payments to it would travel unprotected. '
+        . 'Use the https:// address of the mint.';
+
+    /**
+     * Whether a URL may be used over plain http.
+     *
+     * Ecash sent to or from a mint is a bearer secret: over http anyone on the path can
+     * read and spend it. Plain http is only accepted for a mint on the operator's own
+     * machine or network (every address private or loopback), and only when private
+     * mints are allowed at all, e.g. a local test mint or a Docker/Umbrel service name.
+     *
+     * @param string[] $ips addresses the host resolved to
+     */
+    public static function plainHttpAllowed(string $url, array $ips): bool {
+        if (strtolower((string)parse_url($url, PHP_URL_SCHEME)) !== 'http') {
+            return true;
+        }
+        if ($ips === [] || !self::privateMintsAllowed()) {
+            return false;
+        }
+        foreach ($ips as $ip) {
+            if (Security::isPublicIp($ip)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether a stored mint URL is a public mint reached over plain http, for the
+     * dashboard warning. Does not resolve DNS for https URLs; for http ones a failed
+     * lookup is not reported (the connection would be refused anyway).
+     */
+    public static function isPublicHttpMint(string $mintUrl): bool {
+        if (strtolower((string)parse_url($mintUrl, PHP_URL_SCHEME)) !== 'http') {
+            return false;
+        }
+        $target = Security::resolveTarget($mintUrl);
+        if ($target === null) {
+            return false;
+        }
+        return !self::plainHttpAllowed($mintUrl, $target['ips']);
     }
 
     /**
@@ -81,6 +129,10 @@ class MintHelpers {
             : Security::resolvePublicTarget($url);
         if ($target === null) {
             throw new \RuntimeException('the mint\'s address is private, local or could not be found');
+        }
+        // Mint URLs stored before the http rule existed are refused here too.
+        if (!self::plainHttpAllowed($url, $target['ips'])) {
+            throw new \RuntimeException(self::HTTP_MINT_MESSAGE);
         }
         return $target['resolve'];
     }

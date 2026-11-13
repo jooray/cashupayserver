@@ -40,8 +40,19 @@ $pdo->exec("CREATE TABLE config (key TEXT PRIMARY KEY, value TEXT NOT NULL, crea
 $pdo->exec("CREATE TABLE stores (id TEXT PRIMARY KEY, name TEXT NOT NULL, mint_url TEXT, mint_unit TEXT NOT NULL DEFAULT 'sat', seed_phrase TEXT, wallet_account_id TEXT, internal_api_key TEXT, auto_melt_enabled INTEGER DEFAULT 0, auto_melt_address TEXT, auto_melt_threshold INTEGER DEFAULT 2000, price_provider_primary TEXT, price_provider_secondary TEXT, exchange_fee_percent TEXT, created_at INTEGER NOT NULL)");
 $pdo->exec("CREATE TABLE store_mints (id INTEGER PRIMARY KEY AUTOINCREMENT, store_id TEXT NOT NULL, mint_url TEXT NOT NULL, unit TEXT NOT NULL DEFAULT 'sat', priority INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL, UNIQUE(store_id, mint_url))");
 $pdo->exec("CREATE TABLE invoices (id TEXT PRIMARY KEY, store_id TEXT, status TEXT, additional_status TEXT, quote_id TEXT, mint_url TEXT, amount TEXT, currency TEXT, amount_sats INTEGER, exchange_rate TEXT, bolt11 TEXT, metadata TEXT, checkout_config TEXT, expiration_time INTEGER, created_at INTEGER, last_polled_at INTEGER, processing_since INTEGER)");
-$pdo->exec("CREATE TABLE webhooks (id TEXT PRIMARY KEY, store_id TEXT, url TEXT, secret TEXT, events TEXT, enabled INTEGER DEFAULT 1, deleted_at INTEGER, created_at INTEGER)");
-$pdo->exec("CREATE TABLE webhook_deliveries (id TEXT PRIMARY KEY, webhook_id TEXT, payload TEXT, status_code INTEGER, response TEXT, attempts INTEGER DEFAULT 0, next_attempt_at INTEGER DEFAULT 0, leased_until INTEGER, lease_token TEXT, last_attempt_at INTEGER, delivered_at INTEGER, idempotency_key TEXT, target_url TEXT, signing_secret TEXT, created_at INTEGER)");
+// webhooks and webhook_deliveries exactly as v0.4.1-alpha created them
+// (git show v0.4.1-alpha:includes/database.php). A hand-trimmed copy without
+// invoice_id/event_type once made an audit believe v6 databases lacked them (UX-A1).
+$pdo->exec("CREATE TABLE webhooks (
+    id TEXT PRIMARY KEY, store_id TEXT NOT NULL, url TEXT NOT NULL, secret TEXT NOT NULL, events TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1, deleted_at INTEGER, created_at INTEGER NOT NULL,
+    FOREIGN KEY (store_id) REFERENCES stores(id) ON DELETE CASCADE)");
+$pdo->exec("CREATE TABLE webhook_deliveries (
+    id TEXT PRIMARY KEY, webhook_id TEXT NOT NULL, invoice_id TEXT, event_type TEXT NOT NULL, payload TEXT NOT NULL,
+    status_code INTEGER, response TEXT, created_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+    next_attempt_at INTEGER NOT NULL DEFAULT 0, leased_until INTEGER, lease_token TEXT, last_attempt_at INTEGER,
+    delivered_at INTEGER, idempotency_key TEXT, target_url TEXT, signing_secret TEXT,
+    FOREIGN KEY (webhook_id) REFERENCES webhooks(id) ON DELETE CASCADE)");
 $pdo->exec("CREATE TABLE api_keys (id TEXT PRIMARY KEY, key_hash TEXT, store_id TEXT, label TEXT, permissions TEXT, application_identifier TEXT, redirect_host TEXT, created_at INTEGER)");
 $pdo->exec("CREATE TABLE transfers (id TEXT PRIMARY KEY, store_id TEXT NOT NULL, type TEXT NOT NULL, amount INTEGER NOT NULL, fee INTEGER NOT NULL DEFAULT 0, unit TEXT NOT NULL DEFAULT 'sat', destination TEXT, status TEXT NOT NULL DEFAULT 'completed', detail TEXT, created_at INTEGER NOT NULL)");
 WalletStorage::initializeSchema($pdo);
@@ -96,6 +107,13 @@ check(password_verify('shop-secret', Config::getAdminPasswordHash()), 'the admin
 check(Database::fetchOne("SELECT name FROM stores WHERE id='store_1'")['name'] === "Juraj's Shop", 'the store survives');
 check(Database::fetchOne("SELECT status FROM invoices WHERE id='inv_settled'")['status'] === 'Settled', 'settled invoices survive');
 check(Database::fetchOne("SELECT secret FROM webhooks WHERE id='wh_1'")['secret'] === 'sekret', 'webhook secrets survive');
+
+// The shop is still told about payments after the upgrade.
+require_once dirname(__DIR__) . '/includes/webhook_sender.php';
+WebhookSender::fireEvent('store_1', 'InvoiceSettled', Database::fetchOne("SELECT * FROM invoices WHERE id='inv_settled'"));
+$queued = Database::fetchOne("SELECT * FROM webhook_deliveries WHERE invoice_id = 'inv_settled'");
+check($queued !== null && $queued['event_type'] === 'InvoiceSettled' && $queued['signing_secret'] === 'sekret'
+    && $queued['delivered_at'] === null, 'a new event is queued for the shop on the upgraded database');
 
 // The PENDING reclassification must distinguish an old export from a live reservation.
 $states = [];

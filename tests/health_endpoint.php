@@ -65,8 +65,19 @@ check($r['status'] === Health::UNAVAILABLE && checkStatuses($r)['setup'] === Hea
 echo "States after setup\n";
 Config::set('setup_complete', true);
 $r = Health::report();
-check($r['status'] === Health::DEGRADED && checkStatuses($r)['stores'] === Health::WARN, 'no store ready: degraded');
+check($r['status'] === Health::UNAVAILABLE && checkStatuses($r)['stores'] === Health::FAIL,
+    'no store ready after setup: unavailable (no payment can be taken)');
 check(checkStatuses($r)['background'] === Health::WARN, 'background never ran: a warning');
+
+// A store without a wallet account is skipped by the background runner: not ready.
+Database::insert('stores', [
+    'id' => 'store_0', 'name' => 'Half done', 'wallet_account_id' => null,
+    'mint_url' => 'https://mint.secret-example.com', 'mint_unit' => 'sat',
+    'seed_phrase' => 'abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about',
+    'created_at' => Database::timestamp(),
+]);
+check(checkStatuses(Health::report())['stores'] === Health::FAIL, 'a store without a wallet account is not ready');
+Database::query("DELETE FROM stores WHERE id = 'store_0'");
 
 Database::insert('stores', [
     'id' => 'store_1', 'name' => 'Yarn Shop', 'wallet_account_id' => Database::generateWalletAccountId(),

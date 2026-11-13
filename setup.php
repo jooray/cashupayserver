@@ -47,6 +47,9 @@ function cashupay_enclosing_install(string $dir): ?string {
 function cashupay_complete_setup(): void {
     Config::set('setup_complete', true);
     Setup::clearOwnershipToken();
+    // Only the browser finishing setup stays logged in: any other wizard holder's admin
+    // session (e.g. a stranger who claimed first) ends here at the latest.
+    Auth::retireOtherSessions();
     // Generate a cron key so background processing can be scheduled and the
     // cron endpoint isn't left open. See FABLE-CASHUPAYSERVER-AUDIT (C-CRON-1).
     if (!Config::get('cron_key')) {
@@ -329,7 +332,8 @@ if ($isPost) {
                     throw new Exception('Passwords do not match');
                 }
 
-                Auth::setAdminPassword($password);
+                // Ends any admin session an earlier holder of the wizard got here.
+                Auth::setInitialAdminPassword($password);
                 // The browser that chose the password is the admin: log it in, so the
                 // dashboard and pairing links at the end of setup do not ask for the
                 // password just typed (ARGON UX-04). Same code path as a normal login
@@ -2152,7 +2156,10 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         // Same code path as the wp-admin notice's "Connect" button:
                         // a dedicated key, the gateway settings and the webhook.
                         $configResult = cashupay_connect_woocommerce_store($storeId);
-                        $wooConfigured = $configResult['success'] ?? false;
+                        // Configured only with the webhook too: without it no order is
+                        // ever marked paid, and nothing else would say so (UX-A2).
+                        $wooConfigured = ($configResult['success'] ?? false)
+                            && ($configResult['webhook']['success'] ?? false);
                     }
                 }
                 ?>
@@ -2177,6 +2184,21 @@ define('CASHUPAY_DATA_DIR', '/home/youruser/cashupay-data');</pre>
                         <div class="success">
                             WooCommerce has been configured to use CashuPay for payments.
                         </div>
+                    <?php elseif (isset($configResult) && ($configResult['success'] ?? false)): ?>
+                        <div class="warning">
+                            <strong>Not finished:</strong>
+                            <?php echo htmlspecialchars(cashupay_webhook_failure_message((string)($configResult['webhook']['error'] ?? ''))); ?>
+                        </div>
+                        <p style="color: #a0aec0; font-size: 0.9rem; margin-top: 0.75rem;">
+                            When your hosting provider has fixed it, click the button below again. Until then your
+                            WordPress dashboard shows a <strong>Connect my shop to CashuPay</strong> button that does the same.
+                        </p>
+                        <form method="post">
+                            <input type="hidden" name="step" value="7">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken); ?>">
+                            <input type="hidden" name="configure_woocommerce" value="1">
+                            <button type="submit" class="btn" style="width: 100%;">Try again</button>
+                        </form>
                     <?php elseif (isset($configResult) && !$configResult['success']): ?>
                         <div class="warning">
                             <strong>Cannot auto-configure:</strong>

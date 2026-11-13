@@ -121,6 +121,7 @@ function apiKeyIsUnscoped(array $auth): bool {
  */
 function handleDeleteStore(array $auth, array $params, array $body): void {
     require_once __DIR__ . '/../store_safety.php';
+    require_once __DIR__ . '/../locks.php';
 
     $storeId = requireStore($auth, $params);
     requirePermission($auth, 'btcpay.store.canmodifystoresettings');
@@ -131,6 +132,16 @@ function handleDeleteStore(array $auth, array $params, array $body): void {
     }
 
     $confirmFundLoss = ($body['confirmFundLoss'] ?? false) === true;
+
+    // Checks and delete under the store's funds lock, so a withdrawal cannot start in
+    // between (UX-F7). jsonResponse() exits, so the lock is released explicitly.
+    $fundsLock = cashupay_acquire_lock('funds_' . $storeId);
+    if (!$fundsLock) {
+        jsonResponse([
+            'code' => 'store-busy',
+            'message' => 'A withdrawal or export for this store is running. Try again in a minute.',
+        ], 409);
+    }
 
     $blockers = [];
     try {
@@ -146,6 +157,7 @@ function handleDeleteStore(array $auth, array $params, array $body): void {
     }
 
     if (!empty($blockers) && !$confirmFundLoss) {
+        cashupay_release_lock($fundsLock);
         jsonResponse([
             'code' => 'conflict',
             'message' => 'This store still has funds or unfinished payments, which deleting it would lose: '
@@ -159,7 +171,11 @@ function handleDeleteStore(array $auth, array $params, array $body): void {
     }
 
     // Cascade removes api_keys, invoices, webhooks.
-    Database::delete('stores', 'id = ?', [$storeId]);
+    try {
+        Database::delete('stores', 'id = ?', [$storeId]);
+    } finally {
+        cashupay_release_lock($fundsLock);
+    }
 
     http_response_code(200);
     exit;

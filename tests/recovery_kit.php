@@ -62,4 +62,36 @@ check(RecoveryKit::reminder('s1') === null, 'not after one was taken');
 Config::addStoreBackupMint('s1', 'https://another.example', 'sat');
 check(RecoveryKit::reminder('s1') === 'mints_changed', 'again once a new mint is added');
 
+echo "Mints the live tables forget stay on the sheet (UX-F5)\n";
+Database::insert('payment_requests', ['id' => 'pr1', 'store_id' => 's1', 'amount' => 5, 'unit' => 'sat',
+    'mint_url' => 'https://request.example', 'status' => 'pending', 'expires_at' => time() + 600,
+    'created_at' => Database::timestamp()]);
+$urls = fn() => array_column(RecoveryKit::mints('s1'), 'mint_url');
+check(in_array('https://request.example', $urls(), true), 'a mint a payment request went through');
+// Pruned invoices and a removed backup mint: only the history remembers them.
+Database::query('DELETE FROM invoices');
+$anotherId = (int)Database::fetchOne("SELECT id FROM store_mints WHERE mint_url = 'https://another.example'")['id'];
+Config::removeStoreBackupMint($anotherId);
+check(in_array('https://old.example', $urls(), true), 'the old invoice mint, after invoices were pruned');
+check(in_array('https://another.example', $urls(), true), 'a removed backup mint');
+// A mint switch records both sides, even on a database that never wrote the history.
+Database::insert('stores', ['id' => 's2', 'name' => 'B', 'wallet_account_id' => Database::generateWalletAccountId(),
+    'mint_url' => 'https://first.example', 'mint_unit' => 'sat', 'created_at' => Database::timestamp()]);
+Config::updateStore('s2', ['mint_url' => 'https://second.example', 'mint_unit' => 'usd']);
+$h = array_map(fn($m) => $m['mint_url'] . '|' . $m['unit'], Config::storeMintHistory('s2'));
+check($h === ['https://first.example|sat', 'https://second.example|usd'], 'a mint and unit change keeps the old one: ' . json_encode($h));
+check(Config::get('mint_history_s2') !== null, 'and the history is stored, not just computed');
+
+echo "The sheet counts as kept only once it was made, and a page once confirmed (UX-F6)\n";
+Config::delete('recovery_kit_s1');
+$fpShown = RecoveryKit::fingerprint('s1');
+$html = RecoveryKit::html(Config::getStore('s1'), 'tok123');
+check(str_contains($html, 'name="action" value="recovery_kit_taken"') && str_contains($html, 'value="tok123"')
+    && str_contains($html, 'value="' . $fpShown . '"'), 'the page ends with an "I have printed or saved it" form');
+check(!str_contains(RecoveryKit::html(Config::getStore('s1')), 'recovery_kit_taken'), 'only when a token is given');
+check(RecoveryKit::reminder('s1') === 'never', 'showing the page alone does not count as taken');
+Config::addStoreBackupMint('s1', 'https://later.example', 'sat');
+RecoveryKit::markTaken('s1', $fpShown);
+check(RecoveryKit::reminder('s1') === 'mints_changed', 'confirming an older sheet still asks for one with the newer mint');
+
 echo "recovery_kit: OK\n";

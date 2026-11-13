@@ -275,7 +275,9 @@ if ($uri === '/v1/mint/quote/bolt11' && $method === 'POST') {
         'quote' => $quoteId,
         // A BOLT11-shaped request whose amount matches (10 nano-BTC = 1 sat): the
         // wallet refuses quotes whose invoice amount differs from the request.
-        'request' => 'lnbc' . (max(1, (int)($body['amount'] ?? 0)) * 10) . 'n1mock' . $quoteId,
+        // The data part stays in the bech32 charset (the wallet checks the shape).
+        'request' => 'lnbc' . (max(1, (int)($body['amount'] ?? 0)) * 10) . 'n1'
+            . strtr($quoteId, '0123456789abcdef', 'qpzry9x8gf2tvdw0'),
         'amount' => (int)($body['amount'] ?? 0),
         'unit' => MOCK_UNIT,
         'expiry' => time() + 900,

@@ -66,4 +66,29 @@ check(StoreSafety::backupMintHoldings($backupId)['reasons'] === [], 'an order in
 Database::update('invoices', ['mint_unit' => null], 'id = ?', ['inv_1']);
 check(count(StoreSafety::backupMintHoldings($backupId)['reasons']) === 1, 'an order from before units were recorded does, to be safe');
 
+echo "Value not pinned down yet blocks removal too (UX-F3)\n";
+Database::query('DELETE FROM invoices');
+$acct = Config::getStore('store_a')['wallet_account_id'];
+$backupWallet = \Cashu\WalletStorage::deriveWalletId('https://old.example', 'sat', $acct);
+Database::query(
+    "INSERT INTO cashu_proofs (wallet_id, keyset_id, amount, secret, C, state, created_at) VALUES (?, '00ab', 9, 'unk1', '02c', 'UNKNOWN', ?)",
+    [$backupWallet, time()]
+);
+$reasons = StoreSafety::backupMintHoldings($backupId)['reasons'];
+check(count($reasons) === 1 && str_contains($reasons[0], '9 sat of ecash the mint has not confirmed'), 'ecash in an unknown state');
+Database::query('DELETE FROM cashu_proofs');
+Database::query(
+    "INSERT INTO cashu_wallet_metadata (wallet_id, seed_fingerprint, ready, created_at) VALUES (?, 'fp', 0, ?)",
+    [$backupWallet, time()]
+);
+$reasons = StoreSafety::backupMintHoldings($backupId)['reasons'];
+check(count($reasons) === 1 && str_contains($reasons[0], 'still being recovered'), 'an account recovery is still working on');
+Config::set('wallet_recovery_error_' . $backupWallet, ['at' => time(), 'n' => 3]);
+check(StoreSafety::backupMintHoldings($backupId)['reasons'] === [],
+    'but not one whose recovery keeps failing: a dead mint must stay removable');
+Config::delete('wallet_recovery_error_' . $backupWallet);
+Config::updateStoreBackupMint($backupId, ['enabled' => 0]);
+check(StoreSafety::backupMintHoldings($backupId)['reasons'] === [], 'nor a disabled one, which recovery does not visit');
+Database::query('DELETE FROM cashu_wallet_metadata');
+
 echo "backup_mint_removal: OK\n";

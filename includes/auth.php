@@ -224,6 +224,32 @@ class Auth {
         Config::set('admin_password_hash', $hash);
     }
 
+    /**
+     * Set the admin password in the setup wizard and retire every admin session issued
+     * before it. Before setup completes, more than one browser can have been the wizard's
+     * holder (a stranger who claimed first, then the owner with the recovery code): a
+     * session the stranger got from choosing a password must not survive the owner's
+     * password (audit 2026-11 #1). The caller logs the current browser in afterwards.
+     */
+    public static function setInitialAdminPassword(string $password): void {
+        self::setAdminPassword($password);
+        self::bumpPasswordVersion();
+    }
+
+    /**
+     * Retire every admin session except this browser's, if this browser holds a current
+     * one (it is re-stamped with the new generation). Used when setup completes.
+     */
+    public static function retireOtherSessions(): void {
+        $keep = session_status() === PHP_SESSION_ACTIVE
+            && ($_SESSION['admin_logged_in'] ?? false) === true
+            && hash_equals(self::passwordVersion(), (string)($_SESSION['password_version'] ?? ''));
+        $version = self::bumpPasswordVersion();
+        if ($keep) {
+            $_SESSION['password_version'] = $version;
+        }
+    }
+
     /** Same rule as the setup wizard. */
     public const MIN_PASSWORD_LENGTH = 8;
 
@@ -279,7 +305,8 @@ class Auth {
         return is_string($version) ? $version : '';
     }
 
-    private static function bumpPasswordVersion(): string {
+    /** Start a new session generation: every admin session issued so far stops working. */
+    public static function bumpPasswordVersion(): string {
         // Random rather than a counter: two concurrent bumps can never agree on a value.
         // The prefix keeps Config's JSON decoding from reading it as a number.
         $version = 'pv_' . bin2hex(random_bytes(12));

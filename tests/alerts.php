@@ -62,6 +62,34 @@ echo "An exposed database is reported\n";
 Config::set('data_exposure_check', ['at' => time(), 'warning' => 'downloadable']);
 check(str_contains(Alerts::problems()[0]['text'] ?? '', 'can be downloaded'), 'the exposure is found');
 
+echo "Background tasks that stopped, or never started, are reported\n";
+Config::delete('data_exposure_check');
+$stale = fn() => array_values(array_filter(Alerts::problems(), fn($p) => str_starts_with($p['key'], 'stale:')));
+check($stale() === [], 'before setup is finished: nothing');
+Database::query("INSERT INTO config (key, value, created_at, updated_at) VALUES ('setup_complete', 'true', ?, ?)",
+    [time() - 60, time() - 60]);
+Config::clearCache();
+check($stale() === [], 'never ran, but setup was finished a minute ago: not yet');
+Database::query("UPDATE config SET updated_at = ? WHERE key = 'setup_complete'", [time() - Alerts::NEVER_RAN_GRACE - 60]);
+$p = $stale();
+check(count($p) === 1 && str_contains($p[0]['text'], 'never run') && str_contains($p[0]['text'], 'not being marked paid'),
+    'never ran 15+ minutes after setup: reported in business terms');
+check(!str_contains(Alerts::run(), 'sent') || !str_contains(end($sentMessages), 'never run'),
+    'but not sent by the background run (it is running)');
+
+Config::set('cron_last_run', (string)(time() - 7200));
+check($stale() === [], 'stale heartbeat on a quiet shop with nothing waiting: not reported');
+Database::insert('invoices', ['id' => 'inv_wait', 'store_id' => 's1', 'status' => 'New', 'quote_id' => 'q',
+    'amount' => '1', 'currency' => 'SAT', 'expiration_time' => time() + 600, 'created_at' => time() - 3600]);
+$p = $stale();
+check(count($p) === 1 && str_contains($p[0]['text'], 'have not run since') && str_contains($p[0]['text'], 'withdrawals are paused'),
+    'an order waiting longer than that: reported');
+Config::set('cron_last_run', (string)time());
+check($stale() === [], 'ran just now: fine');
+Database::query("DELETE FROM invoices");
+Database::query("DELETE FROM config WHERE key = 'setup_complete'");
+Config::clearCache();
+
 echo "Nostr: NIP-44 v2 matches the specification's test vector\n";
 $conversationKey = hex2bin('c41c775356fd92eadc63ff5a0dc1da211b268cbea22316767095b2871ea1412d');
 check(Alerts::nip44EncryptWithNonce($conversationKey, 'a', hex2bin(str_repeat('0', 63) . '1'))

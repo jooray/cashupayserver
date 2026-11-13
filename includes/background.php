@@ -129,7 +129,18 @@ class Background {
      */
     private static function selfCronUrl(): ?string {
         if (Urls::isWordPress()) {
-            return self::sameOrigin(Urls::cron(), (string)Config::get('base_url')) ? Urls::cron() : null;
+            $base = (string)Config::get('base_url');
+            $cron = Urls::cron();
+            if (!self::sameOrigin($cron, $base) && !self::sameOrigin(self::httpsOf($cron), $base)) {
+                return null;
+            }
+            // The site answers over https (that is what was pinned): never send the key
+            // in cleartext because site_url() still says http (audit 2026-11).
+            if (strtolower((string)parse_url($base, PHP_URL_SCHEME)) === 'https') {
+                $cron = self::httpsOf($cron);
+                return self::effectiveOrigin($cron) === self::effectiveOrigin($base) ? $cron : null;
+            }
+            return $cron;
         }
         if (!Config::get('base_url')) {
             return null;
@@ -152,6 +163,25 @@ class Background {
         };
         $originA = $origin($a);
         return $originA !== null && $originA === $origin($b);
+    }
+
+    /** The same URL over https; an explicit :80 (http's default port) is dropped. */
+    private static function httpsOf(string $url): string {
+        if (strtolower((string)parse_url($url, PHP_URL_SCHEME)) !== 'http') {
+            return $url;
+        }
+        $url = 'https://' . substr($url, strlen('http://'));
+        return (string)preg_replace('#^(https://[^/]*?):80(?=/|$)#', '$1', $url);
+    }
+
+    /** host:port with the scheme's default port filled in, or null without a host. */
+    private static function effectiveOrigin(string $url): ?string {
+        $parts = parse_url($url);
+        if (!$parts || empty($parts['host']) || empty($parts['scheme'])) {
+            return null;
+        }
+        $port = $parts['port'] ?? (strtolower($parts['scheme']) === 'https' ? 443 : 80);
+        return strtolower($parts['host']) . ':' . $port;
     }
 
     private static function isLoopbackUrl(string $url): bool {
