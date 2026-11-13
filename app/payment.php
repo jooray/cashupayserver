@@ -1472,7 +1472,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                         <?= htmlspecialchars(substr($invoice['bolt11'], 0, 40) . '...' . substr($invoice['bolt11'], -10)) ?>
                     </div>
                     <div class="btn-row">
-                        <a href="lightning:<?= htmlspecialchars($invoice['bolt11']) ?>" class="btn">
+                        <a href="<?= htmlspecialchars(Urls::lightningUri($invoice['bolt11'])) ?>" class="btn">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"></polygon>
                             </svg>
@@ -1603,7 +1603,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     $wb = WalletTabs::BRANDS[$walletKey];
                     $wIsLn = $walletSource === 'lightning';
                     $wPayload = $wIsLn ? (string)$invoice['bolt11'] : $bip21;
-                    $wUri = $wIsLn ? 'lightning:' . $invoice['bolt11'] : $bip21;
+                    $wUri = $wIsLn ? Urls::lightningUri($invoice['bolt11']) : $bip21;
                     $wLogoClass = 'wallet-note-logo' . ($wb['class'] !== '' ? ' ' . $wb['class'] : '');
                 ?>
                 <div class="method-block hidden" data-method-block="<?= htmlspecialchars($walletKey) ?>" data-source="<?= htmlspecialchars($walletSource) ?>">
@@ -1690,7 +1690,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                     ['name' => 'Venmo',    'file' => 'venmo.svg',    'class' => 'pm-card', 'noLightning' => true, 'tab' => WalletTabs::VENMO],
                     ['name' => 'PayPal',   'file' => 'paypal.svg',   'class' => 'pm-card', 'noLightning' => true, 'tab' => WalletTabs::PAYPAL],
                 ];
-                $lightningUri = $hasLightning ? 'lightning:' . $invoice['bolt11'] : '';
+                $lightningUri = $hasLightning ? Urls::lightningUri($invoice['bolt11']) : '';
                 $pmLinks = [
                     'lightning' => $lightningUri,
                     'onchain'   => $hasOnchain ? $bip21 : '',
@@ -1878,10 +1878,21 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         // status is Processing.
         let currentOnchainPending = <?= json_encode($onchainPendingInitial) ?>;
 
+        // The lightning: URI for a bolt11 — the PHP side's Urls::lightningUri.
+        // Upper-case, so a tapped button hands the wallet exactly the string
+        // the QR encodes (Cash App declined the lower-case link while paying
+        // the same invoice from the QR).
+        function lightningUri(bolt11) {
+            return 'lightning:' + String(bolt11).toUpperCase();
+        }
+
         function renderQR(targetId, data) {
             const target = document.getElementById(targetId);
             if (!target) return;
             target.innerHTML = '';
+            // What this QR encodes, for tests that compare it with the
+            // open-in-wallet button; the canvas itself can't be read back.
+            target.dataset.qrValue = data;
             if (typeof QRious === 'undefined') {
                 target.innerHTML = '<p style="color:#666;padding:2rem;">QR code failed to load</p>';
                 return;
@@ -1909,7 +1920,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                 if (method === 'lightning' || method === 'onchain' || method === 'cashu') return;
                 if (source && block.dataset.source !== source) return;
                 if (block.dataset.source === 'lightning' && invoice) {
-                    renderQR('qr-' + method, 'lightning:' + invoice.toUpperCase());
+                    renderQR('qr-' + method, lightningUri(invoice));
                 } else if (block.dataset.source === 'onchain' && onchainBip21) {
                     renderQR('qr-' + method, onchainBip21);
                 }
@@ -1917,7 +1928,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
         }
 
         if (currentStatus === 'New') {
-            if (invoice) renderQR('qr-lightning', 'lightning:' + invoice.toUpperCase());
+            if (invoice) renderQR('qr-lightning', lightningUri(invoice));
             if (onchainBip21) renderQR('qr-onchain', onchainBip21);
             if (cashuRequest) renderQR('qr-cashu', cashuRequest);
             renderWalletQRs(null);
@@ -2157,7 +2168,7 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
             if (data.lnExpiresAt) lnExpiresAt = data.lnExpiresAt;
             if (data.lnRefreshedAt) lnRefreshedAt = data.lnRefreshedAt;
             if (changed) {
-                renderQR('qr-lightning', 'lightning:' + invoice.toUpperCase());
+                renderQR('qr-lightning', lightningUri(invoice));
                 renderWalletQRs('lightning');
                 // The native Lightning block and every wallet tab that
                 // repeats it (data-source="lightning") swap payloads together.
@@ -2168,13 +2179,13 @@ if (PaymentPathDebug::enabled() && $pathDebugMayBeAdmin) {
                         input.textContent = invoice.slice(0, 40) + '...' + invoice.slice(-10);
                     }
                     const open = block.querySelector('a.btn[href^="lightning:"]');
-                    if (open) open.href = 'lightning:' + invoice;
+                    if (open) open.href = lightningUri(invoice);
                     block.querySelectorAll('button[data-copy]').forEach(b => { b.dataset.copy = invoice; });
                 });
                 const pm = document.getElementById('payment-methods');
                 if (pm) {
-                    pm.dataset.hrefLightning = 'lightning:' + invoice;
-                    pm.dataset.hrefCashu = 'lightning:' + invoice;
+                    pm.dataset.hrefLightning = lightningUri(invoice);
+                    pm.dataset.hrefCashu = lightningUri(invoice);
                     applyPaymentMethodLinks(pm.dataset.method);
                 }
                 nofferSub = data.nofferSub || null;

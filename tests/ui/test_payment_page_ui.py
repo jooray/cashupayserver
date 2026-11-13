@@ -160,8 +160,9 @@ def test_payment_page_provider_logos_open_wallet_and_label(
         link = page.locator(f"#payment-methods a.pm-item:has(.pm-name:text-is('{name}'))")
         assert link.count() == 1, f"expected one logo for {name}"
         # Same target as the "Pay with BTC wallet" button: the invoice's
-        # lightning: URI, opened in this tab (no provider-site new-tab link).
-        assert link.get_attribute("href") == f"lightning:{bolt11}"
+        # lightning: URI (upper-case, exactly what the QR encodes), opened in
+        # this tab (no provider-site new-tab link).
+        assert link.get_attribute("href") == f"lightning:{bolt11.upper()}"
         assert link.get_attribute("target") is None
         assert link.locator("img.pm-logo").get_attribute("alt") == name
         assert "Pay with BTC wallet" in (link.get_attribute("aria-label") or "")
@@ -208,7 +209,7 @@ def test_payment_page_provider_logos_follow_active_method(
 
     expected = {
         "onchain": f"bitcoin:{addr}?amount=0.00001",
-        "lightning": f"lightning:{bolt11}",
+        "lightning": f"lightning:{bolt11.upper()}",
     }
     for _ in range(2):
         for method in ("onchain", "lightning"):
@@ -216,9 +217,13 @@ def test_payment_page_provider_logos_follow_active_method(
             assert page.get_attribute("#payment-methods", "data-method") == method
             hrefs = _logo_hrefs(page)
             assert hrefs and all(h == expected[method] for h in hrefs), (method, hrefs)
-            # The logos match the method's own "Pay with BTC wallet" button.
+            # The logos match the method's own "Pay with BTC wallet" button,
+            # and the button carries exactly the string the QR encodes (Cash
+            # App declined the button's lower-case bolt11 while paying the
+            # same invoice from the QR).
             btn = page.get_attribute(f'[data-method-block="{method}"] a.btn', "href")
             assert btn == expected[method]
+            assert page.get_attribute(f"#qr-{method}", "data-qr-value") == btn
 
 
 def test_payment_page_provider_logos_on_cashu_view(
@@ -245,7 +250,7 @@ def test_payment_page_provider_logos_on_cashu_view(
         page.click('.method-tab[data-method="cashu"]')
         assert page.get_attribute("#payment-methods", "data-method") == "cashu"
         hrefs = _logo_hrefs(page)
-        assert hrefs and all(h == f"lightning:{bolt11}" for h in hrefs), hrefs
+        assert hrefs and all(h == f"lightning:{bolt11.upper()}" for h in hrefs), hrefs
 
         # Strip the Lightning leg: Cashu is the only method, nothing to open.
         with configured.handle.db() as conn:

@@ -126,6 +126,26 @@ class Urls {
     }
 
     /**
+     * The lightning: URI a wallet link or QR carries for a bolt11.
+     *
+     * The invoice is upper-cased. Bech32 is case-insensitive, so any wallet
+     * accepts either form, but the payment page's QR codes have always
+     * encoded the upper-case invoice while the open-in-wallet buttons sent
+     * it lower-case — and Cash App users reported "transaction declined"
+     * from the tapped link while paying the very same invoice fine from
+     * the QR. Every href and QR goes through here so a
+     * tap hands the wallet byte-for-byte what a scan does. The copyable
+     * invoice text and the API's paymentLink keep the invoice as issued.
+     */
+    public static function lightningUri(string $bolt11): string {
+        $bolt11 = trim($bolt11);
+        if (stripos($bolt11, 'lightning:') === 0) {
+            $bolt11 = substr($bolt11, 10);
+        }
+        return 'lightning:' . strtoupper($bolt11);
+    }
+
+    /**
      * Should the payment page offer a "Share" button for the invoice URL?
      *
      * A share link only makes sense when the copied URL could open on someone

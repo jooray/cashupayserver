@@ -153,7 +153,9 @@ def test_wallet_tabs_render_switch_and_fit_on_desktop_and_phone(
             assert block.locator(".wallet-note").inner_text().strip() == CASHAPP_NOTE
             open_link = block.locator("a.btn")
             assert open_link.inner_text().strip() == "Pay with Cash App"
-            assert open_link.get_attribute("href").startswith("lightning:lnbc")
+            assert open_link.get_attribute("href").startswith("lightning:LNBC")
+            # The button hands Cash App exactly the string its scanner reads.
+            assert open_link.get_attribute("href") == page.get_attribute("#qr-cashapp", "data-qr-value")
             assert block.locator("button.btn", has_text="Copy Invoice").count() == 1
             assert page.get_attribute("#payment-methods", "data-method") == "lightning"
             assert page.locator('.pm-item[data-tab="venmo"]').is_visible(), "Venmo logo stays on the Lightning-keyed view"
